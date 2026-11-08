@@ -1,0 +1,100 @@
+name: action
+on:
+  # Branches only: tag pushes (v*, test-db, the v1 move) are checked by the release workflow.
+  push:
+    branches: ['**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  vulnerable-project-is-blocked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shearbolt
+        id: gate
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: testdata/projects/npm-vulnerable
+          artifact-name: evidence-vulnerable
+      - name: Expect a block
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+          CODE: ${{ steps.gate.outputs.exit-code }}
+          EVIDENCE: ${{ steps.gate.outputs.evidence-dir }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test "$CODE" = "1"
+          grep -q '"verdict": "block"' "$EVIDENCE/run.json"
+      # A second step in the same job: it must not collide with the first one's artifact.
+      - name: shearbolt with a missing config
+        id: broken
+        uses: ./
+        continue-on-error: true
+        with:
+          config: missing.yaml
+          working-directory: testdata/projects/npm-vulnerable
+      - name: Expect an error
+        env:
+          OUTCOME: ${{ steps.broken.outcome }}
+          CODE: ${{ steps.broken.outputs.exit-code }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test "$CODE" = "2"
+  clean-project-passes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shearbolt
+        uses: ./
+        with:
+          working-directory: testdata/projects/npm-clean
+          artifact-name: evidence-clean
+  targets-input:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shearbolt with a known target
+        uses: ./
+        with:
+          working-directory: testdata/projects/npm-clean
+          artifact-name: evidence-targets-repo
+          targets: repo
+      # An unknown target is an error (exit 2), not a pass.
+      - name: shearbolt with an unknown target
+        id: unknown
+        uses: ./
+        continue-on-error: true
+        with:
+          working-directory: testdata/projects/npm-clean
+          artifact-name: evidence-targets-nope
+          targets: nope
+      - name: Expect an error
+        env:
+          OUTCOME: ${{ steps.unknown.outcome }}
+          CODE: ${{ steps.unknown.outputs.exit-code }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test "$CODE" = "2"
+  # An unknown SHEARBOLT_ACTION_MODE must stop the Action before any scan.
+  bad-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: shearbolt with a bogus mode
+        id: gate
+        uses: ./
+        continue-on-error: true
+        env:
+          SHEARBOLT_ACTION_MODE: bogus
+        with:
+          working-directory: testdata/projects/npm-clean
+          artifact-name: evidence-bad-mode
+      - name: Expect a failure before any scan
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+          CODE: ${{ steps.gate.outputs.exit-code }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test -z "$CODE"

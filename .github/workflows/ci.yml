@@ -1,0 +1,54 @@
+name: ci
+on:
+  # Branches only: tag pushes (v*, test-db, the v1 move) are checked by the release workflow.
+  push:
+    branches: ['**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: shellcheck
+        run: shellcheck -s sh install.sh scripts/*.sh
+      - run: go vet ./...
+      - run: go test ./...
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Cache the pinned vulnerability database snapshot
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/shearbolt-db-snapshot
+          key: db-snapshot-${{ hashFiles('testdata/db-snapshot.sha256') }}
+      - name: Fetch the pinned vulnerability database snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive=$(scripts/db-snapshot.sh fetch ~/.cache/shearbolt-db-snapshot)
+          echo "SHEARBOLT_TEST_DB_ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Date for the live database cache
+        id: date
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Cache the live database and the snapshot run's Grype
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/shearbolt-integration/live
+            ~/.cache/shearbolt-integration/snapshot/grype
+          key: shearbolt-integration-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.date.outputs.today }}
+          restore-keys: shearbolt-integration-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: Disk space before the tests
+        run: df -h
+      - run: SHEARBOLT_CACHE_DIR="$HOME/.cache/shearbolt-integration" go test -tags integration -count=1 ./internal/integration/ -v -timeout 30m

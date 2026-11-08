@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "shearboltVersion": "1.2.3",
+  "projects": [
+    {
+      "ecosystem": "npm",
+      "dir": "apps/api",
+      "name": "api",
+      "lockfiles": [
+        "yarn.lock"
+      ]
+    },
+    {
+      "ecosystem": "npm",
+      "dir": "apps/web",
+      "name": "web",
+      "lockfiles": [
+        "package-lock.json"
+      ],
+      "framework": "nextjs"
+    },
+    {
+      "ecosystem": "rust",
+      "dir": "crates/cli",
+      "name": "cli",
+      "lockfiles": [
+        "Cargo.lock"
+      ]
+    }
+  ],
+  "ci": [
+    {
+      "system": "github",
+      "file": ".github/workflows/ci.yml"
+    }
+  ],
+  "questions": [
+    {
+      "id": "projects",
+      "prompt": "Which projects should Shearbolt protect?",
+      "kind": "multi",
+      "options": [
+        {
+          "value": "apps/api",
+          "label": "apps/api (npm)"
+        },
+        {
+          "value": "apps/web",
+          "label": "apps/web (npm, Next.js)"
+        },
+        {
+          "value": "crates/cli",
+          "label": "crates/cli (rust)"
+        }
+      ],
+      "default": "apps/api,apps/web,crates/cli"
+    },
+    {
+      "id": "gate-job:apps/api",
+      "prompt": "No build step was found for apps/api. Which job should check its lockfiles?",
+      "kind": "choice",
+      "options": [
+        {
+          "value": ".github/workflows/ci.yml#test",
+          "label": "ci.yml: test"
+        },
+        {
+          "value": ".github/workflows/ci.yml#web",
+          "label": "ci.yml: web"
+        },
+        {
+          "value": ".github/workflows/ci.yml#cli",
+          "label": "ci.yml: cli"
+        }
+      ],
+      "default": ".github/workflows/ci.yml#test",
+      "project": "apps/api"
+    }
+  ],
+  "complete": false,
+  "changes": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "action": "modify",
+      "diff": "--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -5,6 +5,10 @@\n     runs-on: ubuntu-latest\n     steps:\n       - uses: actions/checkout@v5\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: apps/api\n       - run: npm ci && npm test\n         working-directory: apps/api\n   web:\n@@ -12,7 +16,16 @@\n     steps:\n       - uses: actions/checkout@v5\n       - name: Build web image\n-        run: docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} apps/web\n+        id: shearbolt-build\n+        run: |\n+          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n+          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        env:\n+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n+        with:\n+          working-directory: apps/web\n       - name: Push web image\n         run: docker push ghcr.io/acme/web:${{ github.sha }}\n   cli:\n@@ -22,4 +35,12 @@\n         working-directory: crates/cli\n     steps:\n       - uses: actions/checkout@v5\n-      - run: cargo build --release --locked\n+      - name: Install cargo-auditable\n+        uses: taiki-e/install-action@v2\n+        with:\n+          tool: cargo-auditable\n+      - run: cargo auditable build --release --locked\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: crates/cli\n",
+      "content": "name: ci\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: apps/api\n      - run: npm ci && npm test\n        working-directory: apps/api\n  web:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: Build web image\n        id: shearbolt-build\n        run: |\n          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        env:\n          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n        with:\n          working-directory: apps/web\n      - name: Push web image\n        run: docker push ghcr.io/acme/web:${{ github.sha }}\n  cli:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        working-directory: crates/cli\n    steps:\n      - uses: actions/checkout@v5\n      - name: Install cargo-auditable\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-auditable\n      - run: cargo auditable build --release --locked\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: crates/cli\n"
+    },
+    {
+      "path": ".gitignore",
+      "action": "modify",
+      "diff": "--- a/.gitignore\n+++ b/.gitignore\n@@ -1,2 +1,3 @@\n node_modules/\n target/\n+.shearbolt/\n",
+      "content": "node_modules/\ntarget/\n.shearbolt/\n"
+    },
+    {
+      "path": "apps/api/shearbolt.yaml",
+      "action": "create",
+      "diff": "--- /dev/null\n+++ b/apps/api/shearbolt.yaml\n@@ -0,0 +1,6 @@\n+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\n+version: 1\n+project: api\n+targets:\n+  - name: source\n+    source: .\n",
+      "content": "# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\nversion: 1\nproject: api\ntargets:\n  - name: source\n    source: .\n"
+    },
+    {
+      "path": "apps/web/.dockerignore",
+      "action": "create",
+      "diff": "--- /dev/null\n+++ b/apps/web/.dockerignore\n@@ -0,0 +1 @@\n+.shearbolt/\n",
+      "content": ".shearbolt/\n"
+    },
+    {
+      "path": "apps/web/shearbolt.yaml",
+      "action": "create",
+      "diff": "--- /dev/null\n+++ b/apps/web/shearbolt.yaml\n@@ -0,0 +1,8 @@\n+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\n+version: 1\n+project: web\n+targets:\n+  - name: web\n+    image: ${SHEARBOLT_IMAGE:-web:local}\n+  - name: source\n+    source: .\n",
+      "content": "# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\nversion: 1\nproject: web\ntargets:\n  - name: web\n    image: ${SHEARBOLT_IMAGE:-web:local}\n  - name: source\n    source: .\n"
+    },
+    {
+      "path": "crates/cli/shearbolt.yaml",
+      "action": "create",
+      "diff": "--- /dev/null\n+++ b/crates/cli/shearbolt.yaml\n@@ -0,0 +1,9 @@\n+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\n+version: 1\n+project: cli\n+targets:\n+  - name: cli\n+    file: target/release/cli\n+    lockfileFallback: Cargo.lock\n+  - name: source\n+    source: .\n",
+      "content": "# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\nversion: 1\nproject: cli\ntargets:\n  - name: cli\n    file: target/release/cli\n    lockfileFallback: Cargo.lock\n  - name: source\n    source: .\n"
+    }
+  ],
+  "notes": [
+    {
+      "code": "NO_BUILD_FOUND",
+      "message": "No build step was found for apps/api, so the gate in ci.yml: test checks its lockfiles.",
+      "file": ".github/workflows/ci.yml"
+    },
+    {
+      "code": "TAG_ADDED",
+      "message": "setup adds the local tag ghcr.io/acme/web:shearbolt-${{ github.sha }} to the gated image builds and the gate scans it; it is never pushed, so a scan that falls back to the registry fails instead of reading an older image",
+      "file": ".github/workflows/ci.yml"
+    }
+  ]
+}

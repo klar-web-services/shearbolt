@@ -1,0 +1,5 @@
+/shearbolt
+/dist/
+.shearbolt/
+testdata/rust/demo/target/
+/build/

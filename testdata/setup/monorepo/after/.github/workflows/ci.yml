@@ -1,0 +1,46 @@
+name: ci
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        with:
+          working-directory: apps/api
+      - run: npm ci && npm test
+        working-directory: apps/api
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build web image
+        id: shearbolt-build
+        run: |
+          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web
+          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> "$GITHUB_OUTPUT"
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        env:
+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}
+        with:
+          working-directory: apps/web
+      - name: Push web image
+        run: docker push ghcr.io/acme/web:${{ github.sha }}
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/cli
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cargo-auditable
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-auditable
+      - run: cargo auditable build --release --locked
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        with:
+          working-directory: crates/cli

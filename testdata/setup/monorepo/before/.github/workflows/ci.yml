@@ -1,0 +1,25 @@
+name: ci
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: npm ci && npm test
+        working-directory: apps/api
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build web image
+        run: docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} apps/web
+      - name: Push web image
+        run: docker push ghcr.io/acme/web:${{ github.sha }}
+  cli:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/cli
+    steps:
+      - uses: actions/checkout@v5
+      - run: cargo build --release --locked

@@ -1,0 +1,156 @@
+name: shearbolt
+description: Block deployments that contain vulnerabilities that are exploited, likely to be exploited, or already fixed.
+branding:
+  icon: shield
+  color: red
+inputs:
+  config:
+    description: Path to shearbolt.yaml, relative to working-directory.
+    default: shearbolt.yaml
+  working-directory:
+    description: Directory to run in, relative to the repository root (for monorepos). Job-level defaults.run.working-directory does not apply to this Action.
+    default: .
+  artifact-name:
+    description: "Name of the uploaded evidence artifact (default: unique per step)."
+    default: ''
+  targets:
+    description: "Space-separated target names to scan (default: every target in the config)."
+    default: ''
+outputs:
+  exit-code:
+    description: 0 passed, 1 blocked by policy, 2 error or incomplete scan.
+    value: ${{ steps.scan.outputs.exit-code }}
+  artifact-name:
+    description: Name of the uploaded evidence artifact.
+    value: ${{ steps.scan.outputs.artifact-name }}
+  evidence-dir:
+    description: Folder with run.json, summary.md and the raw Grype output.
+    value: ${{ steps.scan.outputs.evidence-dir }}
+runs:
+  using: composite
+  steps:
+    # Remote use runs the released, checksum-verified binary named in VERSION (installed by install.sh).
+    # Local use (uses: ./) and VERSION=dev build from source. SHEARBOLT_ACTION_MODE=source|release
+    # overrides this for Shearbolt's own self-tests.
+    - name: Choose the Shearbolt binary
+      id: mode
+      shell: bash
+      run: |
+        version="$(tr -d '[:space:]' < "$GITHUB_ACTION_PATH/VERSION")"
+        mode="${SHEARBOLT_ACTION_MODE:-}"
+        if [ -z "$mode" ]; then
+          case "$GITHUB_ACTION_PATH/" in
+            "$GITHUB_WORKSPACE"/*) mode=source ;;
+            *) if [ "$version" = dev ]; then mode=source; else mode=release; fi ;;
+          esac
+        fi
+        case "$mode" in
+          source) ;;
+          release) [ "$version" != dev ] || { echo "::error::VERSION is dev, so there is no released Shearbolt to download."; exit 2; } ;;
+          *) echo "::error::SHEARBOLT_ACTION_MODE must be source or release, not '$mode'."; exit 2 ;;
+        esac
+        echo "mode=$mode" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+    # Source mode: cache: false keeps this from touching the user's own Go caches. Note that
+    # setup-go also leaves Go on PATH and sets GOTOOLCHAIN for later steps in the job.
+    - uses: actions/setup-go@v7
+      if: steps.mode.outputs.mode == 'source'
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache: false
+    - name: Build Shearbolt
+      if: steps.mode.outputs.mode == 'source'
+      shell: bash
+      env:
+        GOOS: ""
+        GOARCH: ""
+        GOFLAGS: ""
+        GOWORK: "off"
+        CGO_ENABLED: "0"
+      run: |
+        cd "$GITHUB_ACTION_PATH"
+        go build -trimpath -o "$RUNNER_TEMP/shearbolt-bin/shearbolt" ./cmd/shearbolt
+    # Release mode: the empty SHEARBOLT_BASE_URL makes install.sh use its default
+    # (https://tools.klar.ws/shearbolt), so a job-level value cannot redirect the download.
+    # Its stdout (PATH and setup hints) is dropped; errors go to stderr and still show.
+    - name: Install Shearbolt
+      if: steps.mode.outputs.mode == 'release'
+      shell: bash
+      env:
+        SHEARBOLT_VERSION: ${{ steps.mode.outputs.version }}
+        SHEARBOLT_INSTALL_DIR: ${{ runner.temp }}/shearbolt-bin
+        SHEARBOLT_BASE_URL: ''
+      run: sh "$GITHUB_ACTION_PATH/install.sh" >/dev/null
+    - name: Check the Shearbolt binary
+      id: bin
+      shell: bash
+      env:
+        MODE: ${{ steps.mode.outputs.mode }}
+        VERSION: ${{ steps.mode.outputs.version }}
+      run: |
+        out="$("$RUNNER_TEMP/shearbolt-bin/shearbolt" version)" || { echo "::error::The Shearbolt binary does not run."; exit 2; }
+        first="$(printf '%s\n' "$out" | sed -n 1p)"
+        if [ "$MODE" = release ] && [ "$first" != "shearbolt $VERSION" ]; then
+          echo "::error::Expected shearbolt $VERSION, but the installed binary reports '$first'."
+          exit 2
+        fi
+        echo "Using $first ($MODE mode)"
+        grype="$(printf '%s\n' "$out" | awk 'NR == 2 && $1 == "grype" {print $2}')"
+        [ -n "$grype" ] || { echo "::error::shearbolt version does not report its Grype version."; exit 2; }
+        echo "grype=$grype" >> "$GITHUB_OUTPUT"
+    - name: Date for the vulnerability database cache
+      id: date
+      shell: bash
+      run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+    - name: Restore the vulnerability database cache
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/shearbolt-cache
+        key: shearbolt-${{ runner.os }}-${{ runner.arch }}-grype${{ steps.bin.outputs.grype }}-${{ steps.date.outputs.today }}
+        restore-keys: shearbolt-${{ runner.os }}-${{ runner.arch }}-grype${{ steps.bin.outputs.grype }}-
+    - name: Scan
+      id: scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SHEARBOLT_CACHE_DIR: ${{ runner.temp }}/shearbolt-cache
+        SHEARBOLT_CONFIG: ${{ inputs.config }}
+        SHEARBOLT_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        SHEARBOLT_TARGETS: ${{ inputs.targets }}
+      run: |
+        # A fresh folder per step, so several shearbolt steps can run in one job (monorepos).
+        evidence="$(mktemp -d "$RUNNER_TEMP/shearbolt-evidence-XXXXXX")"
+        echo "evidence-dir=$evidence" >> "$GITHUB_OUTPUT"
+        name="${SHEARBOLT_ARTIFACT_NAME:-shearbolt-evidence-${GITHUB_JOB}-${evidence##*-}}"
+        echo "artifact-name=$name" >> "$GITHUB_OUTPUT"
+        # One --target per name in the targets input; none scans every target in the config.
+        # set -f: a name is never a file pattern.
+        set -f; set --; for t in $SHEARBOLT_TARGETS; do set -- "$@" --target "$t"; done; set +f
+        set +e
+        "$RUNNER_TEMP/shearbolt-bin/shearbolt" scan --ci --config "$SHEARBOLT_CONFIG" --output-dir "$evidence" "$@"
+        echo "exit-code=$?" >> "$GITHUB_OUTPUT"
+    - name: Upload evidence
+      if: always() && steps.scan.outputs.evidence-dir != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ steps.scan.outputs.artifact-name }}
+        path: ${{ steps.scan.outputs.evidence-dir }}
+        if-no-files-found: warn
+    # Saved when the scan passed or blocked (a complete database), not after an error; Enforce below decides the job result.
+    - name: Save the vulnerability database cache
+      if: always() && steps.cache.outputs.cache-hit != 'true' && (steps.scan.outputs.exit-code == '0' || steps.scan.outputs.exit-code == '1')
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/shearbolt-cache
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+    - name: Enforce the result
+      shell: bash
+      env:
+        CODE: ${{ steps.scan.outputs.exit-code }}
+      run: |
+        case "$CODE" in
+          0) echo "Shearbolt passed." ;;
+          1) echo "::error::Shearbolt blocked this build. The job summary lists what to fix."; exit 1 ;;
+          *) echo "::error::Shearbolt could not complete the scan (exit ${CODE:-unknown}). See the job summary and the Scan step log."; exit 2 ;;
+        esac

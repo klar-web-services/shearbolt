@@ -1,0 +1,493 @@
+name: release
+# Shearbolt's own releases (spec section 14; plan 3, D4):
+#
+#   tag vX.Y.Z ─▶ build ─┬─▶ gate ──────┐
+#                        ├─▶ behaviour ─┼─▶ publish ─┬─▶ verify ────────┬─▶ major-tag
+#                        └─▶ install ───┘            └─▶ verify-action ─┘
+#
+# Candidate code (the built binaries, repository scripts, go test) runs only in jobs with
+# contents: read. publish (S3 secrets, contents: write) and major-tag (contents: write) run no
+# candidate binary and no repository script: they only copy files and run gh, git and the
+# tools.klar.ws publish action.
+#
+# Release procedure (from main only; every version must be higher than every published one,
+# backports are unsupported in v1):
+#
+#   printf '1.2.3\n' > VERSION && git commit -m "release: v1.2.3" VERSION
+#   git tag -a v1.2.3 -m "Shearbolt v1.2.3" && git push --atomic origin main v1.2.3
+#   # after the run: set GATE_VERSION/GATE_SHA256 below to the values in the run summary; commit
+#
+# The tag must point at a commit on main (build checks it). Push one release tag at a time and
+# wait for its run to finish: the concurrency group keeps one run going and one pending, and a
+# third queued run cancels the pending one.
+#
+# A job failed (a missing secret, a flaky verify or network step): re-run the failed jobs of the
+# same run, `gh run rerun <id> --failed` (possible for 30 days). Re-runs reuse that run's
+# artifacts, so both hosts receive the same bytes, and publishing what is already published is a
+# no-op.
+#
+# Blocked before publishing (gate, behaviour or install failed): never retry the same version, and
+# never start a fresh run for its tag (a rebuild gives different bytes, which both hosts refuse).
+# Delete the tag (`git push origin :refs/tags/vX.Y.Z`), then right away either commit the fix and
+# cut the next patch release (`release: vX.Y.(Z+1)`), or commit VERSION back to the last published
+# version (`chore: VERSION back to <last> after blocked vX.Y.Z`; `dev` if nothing was ever
+# published), so that main never names an unpublished version.
+#
+# Dry run: `gh workflow run release.yml --ref main`. It builds 0.0.0-dryrun.<run number> and runs
+# build, gate, behaviour and install; publish, verify, verify-action and major-tag are skipped.
+#
+# Rollback: the tools.klar.ws "Manage a tool" workflow, command set-latest (owner), and
+# `git push -f origin <previous release commit>:refs/tags/v1`.
+# Emergency (compromised release): retire, purge, then restart the tools service (tools-klar-ws skill).
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
+  workflow_dispatch: # dry run: everything except publish, verify, verify-action and major-tag
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.event_name }} # a dry run never cancels a queued tag run
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash # bash -eo pipefail
+env:
+  GATE_VERSION: '' # previous release that gates candidates; empty = bootstrap with the pinned Grype
+  GATE_SHA256: '' # SHA-256 of its shearbolt-x86_64-unknown-linux-gnu.tar.gz
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # fetch-depth: 0 also fetches every branch as origin/<branch>, for the main check below.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Releases are cut from main only (backports are unsupported in v1). Dry runs are exempt.
+      - name: The tag is on main
+        if: github.event_name == 'push'
+        run: |
+          git rev-parse --verify -q refs/remotes/origin/main >/dev/null || { echo "::error::the checkout has no origin/main"; exit 1; }
+          rc=0; git merge-base --is-ancestor "$GITHUB_SHA^{commit}" refs/remotes/origin/main || rc=$?
+          case $rc in
+            0) ;;
+            1) echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main. Release tags must point at a commit on main."; exit 1 ;;
+            *) echo "::error::could not check whether $GITHUB_REF_NAME is on main"; exit 1 ;;
+          esac
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            version="$(tr -d '[:space:]' < VERSION)"
+            if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::VERSION says $version but the tag is $GITHUB_REF_NAME"
+              exit 1
+            fi
+          else
+            version="0.0.0-dryrun.$GITHUB_RUN_NUMBER"
+          fi
+          # The tag filter allows any text after the dash; the installer and ldflags need less.
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?'; then
+            echo "::error::$version is not a version of the form X.Y.Z or X.Y.Z-pre (letters, digits, '.', '-')"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Check
+        run: test -z "$(gofmt -l .)" && go vet ./... && go test ./...
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          for t in linux/amd64/x86_64-unknown-linux-gnu linux/arm64/aarch64-unknown-linux-gnu \
+                   darwin/amd64/x86_64-apple-darwin darwin/arm64/aarch64-apple-darwin; do
+            goos=${t%%/*}; rest=${t#*/}; goarch=${rest%%/*}; triple=${rest#*/}
+            mkdir -p "build/$triple"
+            CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath \
+              -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" \
+              -o "build/$triple/shearbolt" ./cmd/shearbolt
+            tar -czf "dist/shearbolt-$triple.tar.gz" -C "build/$triple" shearbolt
+          done
+          (cd dist && sha256sum -- *.tar.gz > checksums.txt && cat checksums.txt)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: candidate
+          path: dist/
+          if-no-files-found: error
+
+  gate:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate
+          path: ${{ runner.temp }}/dist
+      - name: Unpack the candidates
+        run: |
+          (cd "$RUNNER_TEMP/dist" && sha256sum -c checksums.txt)
+          for triple in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+            mkdir -p "$RUNNER_TEMP/candidate/$triple"
+            tar -xzf "$RUNNER_TEMP/dist/shearbolt-$triple.tar.gz" -C "$RUNNER_TEMP/candidate/$triple" shearbolt
+          done
+          n="$(find "$RUNNER_TEMP/candidate" -type f | wc -l | tr -d ' ')"
+          if [ "$n" != 4 ]; then
+            echo "::error::expected exactly 4 candidate binaries, found $n"
+            exit 1
+          fi
+      # The workflow pin, not the host, is the trust anchor for the previous release.
+      - name: Gate with the previous release
+        if: env.GATE_VERSION != ''
+        env:
+          CANDIDATE_DIR: ${{ runner.temp }}/candidate
+          SHEARBOLT_CACHE_DIR: ${{ runner.temp }}/shearbolt-cache
+        run: |
+          [ -n "$GATE_SHA256" ] || { echo "::error::GATE_VERSION is set but GATE_SHA256 is empty"; exit 1; }
+          a=shearbolt-x86_64-unknown-linux-gnu.tar.gz
+          curl -fsSL "https://tools.klar.ws/shearbolt/v$GATE_VERSION/$a" -o "$RUNNER_TEMP/$a"
+          echo "$GATE_SHA256  $RUNNER_TEMP/$a" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/gate"
+          tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/gate" shearbolt
+          "$RUNNER_TEMP/gate/shearbolt" scan --ci --config .github/release-gate.yaml --output-dir "$RUNNER_TEMP/gate-evidence"
+      # First release only: the Grype release pinned in this commit's pins.go, verified by its
+      # linux_amd64 archive checksum. Every target is scanned before the step fails, so the
+      # evidence is complete.
+      - name: Gate with the pinned Grype (bootstrap)
+        if: env.GATE_VERSION == ''
+        run: |
+          v=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/grype/pins.go)
+          sum=$(awk '/^var Checksums/{f=1} f && /"linux_amd64"/{gsub(/[",]/, "", $2); print $2; exit}' internal/grype/pins.go)
+          if ! printf '%s\n' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || ! printf '%s\n' "$sum" | grep -Eqx '[0-9a-f]{64}'; then
+            echo "::error::could not read the pinned Grype version and linux_amd64 checksum from internal/grype/pins.go"
+            exit 1
+          fi
+          a="grype_${v}_linux_amd64.tar.gz"
+          curl -fsSL "https://github.com/anchore/grype/releases/download/v$v/$a" -o "$RUNNER_TEMP/$a"
+          echo "$sum  $RUNNER_TEMP/$a" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/grype" "$RUNNER_TEMP/gate-evidence" && tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/grype" grype
+          cfg="$RUNNER_TEMP/grype.yaml"; printf 'check-for-app-update: false\ndb:\n  cache-dir: %s\n' "$RUNNER_TEMP/grype-db" > "$cfg"
+          ws="$GITHUB_WORKSPACE"; cd "$RUNNER_TEMP"; export XDG_CONFIG_HOME="$RUNNER_TEMP/xdg" # no project .grype.yaml applies
+          g() { out=$1; shift; "$RUNNER_TEMP/grype/grype" "$@" -c "$cfg" --only-fixed --fail-on low -o table -o "json=$RUNNER_TEMP/gate-evidence/$out.json"; }
+          rc=0
+          g repo "dir:$ws" --exclude './testdata/**' --exclude './.git/**' || rc=1
+          for b in "$RUNNER_TEMP"/candidate/*/shearbolt; do t=${b%/shearbolt}; g "${t##*/}" "file:$b" || rc=1; done
+          if [ "$rc" != 0 ]; then
+            echo "::error::the bootstrap gate found fixed vulnerabilities (or could not scan); see the tables above and the gate-evidence artifact"
+          fi
+          exit "$rc"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: gate-evidence
+          path: ${{ runner.temp }}/gate-evidence
+          if-no-files-found: warn
+
+  behaviour:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate
+          path: ${{ runner.temp }}/dist
+      - name: Unpack the linux-amd64 candidate
+        run: |
+          (cd "$RUNNER_TEMP/dist" && sha256sum -c checksums.txt)
+          mkdir -p "$RUNNER_TEMP/candidate"
+          tar -xzf "$RUNNER_TEMP/dist/shearbolt-x86_64-unknown-linux-gnu.tar.gz" -C "$RUNNER_TEMP/candidate" shearbolt
+      # Only the download is cached. The Shearbolt cache (~/.cache/shearbolt-behaviour) starts
+      # empty, so the candidate's own Grype install and database import run.
+      - name: Cache the pinned vulnerability database snapshot
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/shearbolt-db-snapshot
+          key: db-snapshot-${{ hashFiles('testdata/db-snapshot.sha256') }}
+      # Assigning to a variable first means a failed fetch fails the step.
+      - name: Fetch the pinned vulnerability database snapshot
+        id: db
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          archive=$(scripts/db-snapshot.sh fetch ~/.cache/shearbolt-db-snapshot)
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - name: Behaviour tests on the candidate
+        env:
+          ARCHIVE: ${{ steps.db.outputs.archive }}
+          SHEARBOLT_CANDIDATE_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          SHEARBOLT_CANDIDATE="$RUNNER_TEMP/candidate/shearbolt" SHEARBOLT_TEST_DB_ARCHIVE="$ARCHIVE" \
+            go test -tags behaviour -count=1 -timeout 30m -v ./internal/behaviour/
+      # AC-17: the cases themselves must reject a binary that always exits 0. Only TestCandidate
+      # runs, without SHEARBOLT_CANDIDATE_VERSION.
+      - name: Negative control (an always-0 binary must fail)
+        env:
+          ARCHIVE: ${{ steps.db.outputs.archive }}
+        run: |
+          stub="$RUNNER_TEMP/always0"; printf '#!/bin/sh\nexit 0\n' > "$stub"; chmod +x "$stub"
+          log="$RUNNER_TEMP/control.log"
+          if SHEARBOLT_CANDIDATE="$stub" SHEARBOLT_TEST_DB_ARCHIVE="$ARCHIVE" \
+               go test -tags behaviour -count=1 -timeout 30m -run 'TestCandidate$' -v ./internal/behaviour/ > "$log" 2>&1; then
+            cat "$log"; echo "::error::the behaviour tests passed an always-0 binary"; exit 1
+          fi
+          cat "$log"
+          for c in vulnerable broken-config kev expired-exception; do
+            grep -q -- "--- FAIL: TestCandidate/$c " "$log" || { echo "::error::negative control: case $c did not fail"; exit 1; }
+          done
+
+  install:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20 # macOS minutes bill 10x on private repositories
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate
+          path: dist
+      - name: Lay out the candidate as a release
+        run: |
+          mkdir -p "site/v$VERSION"
+          printf '%s\n' "$VERSION" > site/latest
+          cp dist/* "site/v$VERSION/"
+          ls -l site "site/v$VERSION"
+      - name: Install with curl
+        run: |
+          SHEARBOLT_BASE_URL="file://$PWD/site" SHEARBOLT_INSTALL_DIR="$RUNNER_TEMP/bin" sh install.sh
+          got="$("$RUNNER_TEMP/bin/shearbolt" version | sed -n 1p)"
+          if [ "$got" != "shearbolt $VERSION" ]; then
+            echo "::error::expected shearbolt $VERSION, but the installed binary reports '$got'"
+            exit 1
+          fi
+      # One Alpine amd64 run: BusyBox wget (no curl) and musl, over loopback HTTP.
+      - name: Install with BusyBox wget in Alpine
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 -m http.server 8000 --bind 127.0.0.1 --directory site & srv=$!
+          trap 'kill "$srv" 2>/dev/null || true' EXIT # a failing trap command would change the step's status
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/latest >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8000/latest >/dev/null # fail the step if the server never came up
+          docker run --rm --network host -e WANT="shearbolt $VERSION" -v "$PWD/install.sh:/install.sh:ro" alpine:3.22 \
+            sh -c 'SHEARBOLT_BASE_URL=http://127.0.0.1:8000 sh /install.sh && test "$("$HOME/.local/bin/shearbolt" version | head -n1)" = "$WANT"'
+
+  publish:
+    needs: [build, gate, behaviour, install]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      # Before anything is published anywhere.
+      - name: Check the publishing secrets
+        env:
+          TOOLS_S3_BUCKET: ${{ secrets.TOOLS_S3_BUCKET }}
+          TOOLS_S3_ACCESS_KEY: ${{ secrets.TOOLS_S3_ACCESS_KEY }}
+          TOOLS_S3_SECRET_KEY: ${{ secrets.TOOLS_S3_SECRET_KEY }}
+        run: |
+          missing=
+          [ -n "$TOOLS_S3_BUCKET" ] || missing="${missing:+$missing, }TOOLS_S3_BUCKET"
+          [ -n "$TOOLS_S3_ACCESS_KEY" ] || missing="${missing:+$missing, }TOOLS_S3_ACCESS_KEY"
+          [ -n "$TOOLS_S3_SECRET_KEY" ] || missing="${missing:+$missing, }TOOLS_S3_SECRET_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Repository secrets missing: $missing. Add them under Settings → Secrets and variables → Actions (repository secrets while the repository is private). Nothing was published. Re-run this job after adding them."
+            exit 1
+          fi
+      # No git push here, so the write token is not stored in .git/config; gh uses GH_TOKEN.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: candidate
+          path: dist
+      - name: Verify the candidate
+        run: (cd dist && sha256sum -c checksums.txt)
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          pre=()
+          case "$VERSION" in *-*) pre=(--prerelease) ;; esac
+          if info="$(gh release view "$tag" --json isDraft,assets --jq '.isDraft, .assets[].name' 2>/dev/null)"; then
+            # A re-run of the same build: the release must be published and hold exactly these
+            # five files, byte for byte.
+            draft="$(printf '%s\n' "$info" | sed -n 1p)"
+            have="$(printf '%s\n' "$info" | sed 1d | LC_ALL=C sort | tr '\n' ' ')"
+            want="$(cd dist && printf '%s\n' * | LC_ALL=C sort | tr '\n' ' ')"
+            if [ "$draft" != false ]; then
+              echo "::error::The GitHub release $tag is a draft, probably left by a failed upload. Delete it (gh release delete $tag --yes; the tag stays), then re-run this job."
+              exit 1
+            fi
+            if [ "$have" != "$want" ]; then
+              echo "::error::The GitHub release $tag holds [ ${have}] instead of [ ${want}]. If a failed upload left it incomplete, delete it (gh release delete $tag --yes; the tag stays) and re-run this job; otherwise bump the version, because versions are immutable."
+              exit 1
+            fi
+            sums="$PWD/dist/checksums.txt"
+            mkdir -p "$RUNNER_TEMP/existing"
+            gh release download "$tag" --dir "$RUNNER_TEMP/existing"
+            if ! cmp -s "$RUNNER_TEMP/existing/checksums.txt" "$sums" || ! (cd "$RUNNER_TEMP/existing" && sha256sum -c "$sums"); then
+              echo "::error::The GitHub release $tag already exists with different files. Versions are immutable: bump the version instead."
+              exit 1
+            fi
+            echo "The GitHub release $tag already holds these files."
+          else
+            gh release create "$tag" dist/*.tar.gz dist/checksums.txt \
+              --verify-tag --title "Shearbolt $tag" --generate-notes "${pre[@]}"
+          fi
+      # scripts: publishes our own install.sh (with its wget fallback) and the static landing page;
+      # no install.ps1 and no generated page.
+      - name: Stage the install script and landing page
+        run: mkdir site && cp install.sh .github/tools-klar-ws/index.html site/
+      - name: Publish to tools.klar.ws
+        # v1: the commit behind its annotated tag (tag object 90aa915b13610cab9cbe2e37c23e883f91659c6a).
+        uses: klar-web-services/tools.klar.ws/publish@6d0c0851802c426f7307013acf9ed6cf992c64e4 # v1
+        with:
+          tool: shearbolt
+          version: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          scripts: site
+          bucket: ${{ secrets.TOOLS_S3_BUCKET }}
+          access-key-id: ${{ secrets.TOOLS_S3_ACCESS_KEY }}
+          secret-access-key: ${{ secrets.TOOLS_S3_SECRET_KEY }}
+      # Only a stable release becomes the next gate; a pre-release gets no pin suggestion.
+      - name: Next gate pin
+        if: "!contains(needs.build.outputs.version, '-')"
+        run: |
+          sum="$(awk '$2 == "shearbolt-x86_64-unknown-linux-gnu.tar.gz" {print $1}' dist/checksums.txt)"
+          {
+            echo "### Next release gate"
+            echo
+            echo "Set these in \`env:\` of \`.github/workflows/release.yml\` and commit:"
+            echo
+            echo '```yaml'
+            echo "  GATE_VERSION: '$VERSION'"
+            echo "  GATE_SHA256: '$sum'"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Live install with curl
+        run: |
+          tmp="$(mktemp -d)"
+          curl -fsSL https://tools.klar.ws/shearbolt/install.sh | SHEARBOLT_VERSION="$VERSION" SHEARBOLT_INSTALL_DIR="$tmp" sh
+          got="$("$tmp/shearbolt" version | sed -n 1p)"
+          if [ "$got" != "shearbolt $VERSION" ]; then
+            echo "::error::expected shearbolt $VERSION, but the installed binary reports '$got'"
+            exit 1
+          fi
+      - name: install.sh is served as text/plain
+        run: |
+          curl -fsSI https://tools.klar.ws/shearbolt/install.sh | grep -i '^content-type: text/plain'
+      # The proxy re-checks objects every minute.
+      - name: latest names this version
+        if: "!contains(needs.build.outputs.version, '-')"
+        run: |
+          for _ in $(seq 1 12); do
+            got="$(curl -fsS https://tools.klar.ws/shearbolt/latest | tr -d '[:space:]')" || got=
+            [ "$got" != "$VERSION" ] || exit 0
+            sleep 10
+          done
+          echo "::error::https://tools.klar.ws/shearbolt/latest says '$got', not $VERSION"
+          exit 1
+      # Spec section 10's exact Bitbucket/GitLab install line, in an image with wget only.
+      - name: Bitbucket/GitLab install line in Alpine
+        run: |
+          docker run --rm -e V="$VERSION" alpine:3.22 sh -c \
+            '(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION="$V" sh && test "$("$HOME/.local/bin/shearbolt" version | head -n1)" = "shearbolt $V"'
+
+  # The Action from the tag in release mode: install.sh from tools.klar.ws, checksum-verified.
+  verify-action:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: shearbolt (release mode)
+        id: gate
+        uses: ./
+        continue-on-error: true
+        env:
+          SHEARBOLT_ACTION_MODE: release
+        with:
+          working-directory: testdata/projects/npm-vulnerable
+          artifact-name: evidence-release-mode
+      - name: Expect a block by the released binary
+        env:
+          OUTCOME: ${{ steps.gate.outcome }}
+          CODE: ${{ steps.gate.outputs.exit-code }}
+          EVIDENCE: ${{ steps.gate.outputs.evidence-dir }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          test "$OUTCOME" = "failure"
+          test "$CODE" = "1"
+          grep -qF "\"shearboltVersion\": \"$VERSION\"" "$EVIDENCE/run.json"
+
+  major-tag:
+    needs: [build, verify, verify-action]
+    if: github.event_name == 'push' && !contains(needs.build.outputs.version, '-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # A tag pushed with GITHUB_TOKEN starts no workflow, and v1 matches no release pattern anyway.
+      - name: Move the major tag
+        run: |
+          major=${GITHUB_REF_NAME%%.*}
+          # The full ref name: --heads origin v1 would also match wip/v1.
+          rc=0; git ls-remote --exit-code origin "refs/heads/$major" >/dev/null || rc=$?
+          case $rc in
+            0) echo "::error::origin has a branch named $major, so a $major tag would be ambiguous. Delete the branch, then re-run this job."; exit 1 ;;
+            2) ;;
+            *) echo "::error::could not list the branches on origin"; exit 1 ;;
+          esac
+          # Only a guard: backports are unsupported in v1.
+          newest=$(git tag -l "$major.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          if [ "$newest" != "$GITHUB_REF_NAME" ]; then
+            echo "::notice::$GITHUB_REF_NAME is not the newest $major.*.* release ($newest), so $major stays where it is."
+            exit 0
+          fi
+          commit=$(git rev-parse "$GITHUB_SHA^{commit}")
+          git tag -f "$major" "$commit"
+          git push -f origin "refs/tags/$major"

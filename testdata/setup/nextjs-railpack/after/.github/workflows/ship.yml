@@ -1,0 +1,32 @@
+name: ship
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install railpack
+        run: curl -sSL https://railpack.com/install.sh | sh
+      - name: Start BuildKit
+        run: docker run --rm --privileged -d --name buildkit moby/buildkit
+      - name: Build and push
+        id: shearbolt-build
+        env:
+          BUILDKIT_HOST: docker-container://buildkit
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # railpack detects Next.js and runs `npm run build`
+          railpack build . --name ghcr.io/acme/blog:latest
+          docker tag ghcr.io/acme/blog:latest ghcr.io/acme/blog:shearbolt-${{ github.sha }}
+          echo shearbolt-image=ghcr.io/acme/blog:shearbolt-${{ github.sha }} >> "$GITHUB_OUTPUT"
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        env:
+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}
+      - name: Build and push (continued)
+        env:
+          BUILDKIT_HOST: docker-container://buildkit
+        run: |
+          docker push ghcr.io/acme/blog:latest

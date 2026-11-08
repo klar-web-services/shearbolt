@@ -1,0 +1,9 @@
+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme
+version: 1
+project: cli
+targets:
+  - name: cli
+    file: target/release/cli
+    lockfileFallback: Cargo.lock
+  - name: source
+    source: .

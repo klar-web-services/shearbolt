@@ -1,0 +1,9 @@
+# Inert: GitHub only runs workflows from the repository root. It exists so Grype finds a
+# package (the `uses:` line) next to a broken lockfile.
+name: ci
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4

@@ -1,0 +1,42 @@
+{
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "GHSA-qhr7-859c-m2p7", "severity": "High", "dataSource": "https://github.com/advisories/GHSA-qhr7-859c-m2p7",
+        "urls": ["https://github.com/advisories/GHSA-qhr7-859c-m2p7"], "description": "brace-expansion ReDoS",
+        "fix": {"versions": ["2.1.6"], "state": "fixed"},
+        "epss": [{"cve": "CVE-2026-102278", "epss": 0.00491, "percentile": 0.6}],
+        "cvss": [{"source": "github", "version": "3.1", "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H", "metrics": {"baseScore": 7.5}}]
+      },
+      "relatedVulnerabilities": [{"id": "CVE-2026-102278", "severity": "High", "fix": {"versions": [], "state": ""}}],
+      "artifact": {"name": "brace-expansion", "version": "2.0.2", "type": "npm", "purl": "pkg:npm/brace-expansion@2.0.2", "locations": [{"path": "/usr/local/lib/node_modules/npm/node_modules/brace-expansion/package.json"}]}
+    },
+    {
+      "vulnerability": {"id": "GHSA-kkkk-kkkk-kkkk", "severity": "Medium", "urls": [], "fix": {"versions": [], "state": "not-fixed"}},
+      "relatedVulnerabilities": [
+        {"id": "CVE-2026-111497", "severity": "Medium", "fix": {"versions": [], "state": ""},
+         "knownExploited": [{"cve": "CVE-2026-111497", "vendorProject": "Google", "product": "Brotli"}],
+         "epss": [{"cve": "CVE-2026-111497", "epss": 0.82641, "percentile": 0.99}]}
+      ],
+      "artifact": {"name": "node", "version": "22.23.0", "type": "binary", "purl": "pkg:generic/node@22.23.0", "locations": [{"path": "/usr/local/bin/node"}]}
+    },
+    {
+      "vulnerability": {"id": "CVE-2026-14456", "severity": "Weird", "urls": ["https://security.alpinelinux.org/vuln/CVE-2026-14456"], "fix": {"versions": ["3.5.8-r0"], "state": "fixed"}},
+      "relatedVulnerabilities": [],
+      "artifact": {"name": "libcrypto3", "version": "3.5.7-r0", "type": "apk", "purl": "pkg:apk/alpine/libcrypto3@3.5.7-r0", "locations": [{"path": "/lib/apk/db/installed"}]}
+    },
+    {
+      "vulnerability": {"id": "CVE-2026-14456", "severity": "Weird", "urls": [], "fix": {"versions": ["3.5.8-r0"], "state": "fixed"}},
+      "relatedVulnerabilities": [],
+      "artifact": {"name": "libcrypto3", "version": "3.5.7-r0", "type": "apk", "purl": "pkg:apk/alpine/libcrypto3@3.5.7-r0", "locations": [{"path": "/lib/apk/db/installed"}]}
+    }
+  ],
+  "source": {
+    "type": "image",
+    "target": {"userInput": "node:22-alpine", "imageID": "sha256:0fc147b22c03cedcc1fe31b873b416dcd1a3f5b71e6e8afc73be1cbe5c5e64a1", "manifestDigest": "sha256:2f41790747d893c2a74b2c976544d35528c5d2c0f8aff4289bac324e56d2bfb6", "repoDigests": ["node@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd"]}
+  },
+  "descriptor": {
+    "name": "grype", "version": "0.121.2",
+    "db": {"status": {"schemaVersion": "v6.1.10", "from": "https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.10_2026-11-07T00:20:09Z.tar.zst", "built": "2026-11-07T06:18:48Z", "valid": true}}
+  }
+}

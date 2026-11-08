@@ -1,0 +1,42 @@
+# CI for the ledger service
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+
+test:
+  stage: test
+  image: node:22
+  script:
+    - npm ci
+    - npm test
+
+build-image:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    SHEARBOLT_CACHE_DIR: $CI_PROJECT_DIR/.shearbolt/cache
+  cache:
+    - key: shearbolt
+      paths:
+        - .shearbolt/cache
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    # one line keeps the push next to the build it belongs to
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" -t "$CI_REGISTRY_IMAGE:shearbolt-$CI_COMMIT_SHA" .
+    - (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
+    - SHEARBOLT_IMAGE="$CI_REGISTRY_IMAGE:shearbolt-$CI_COMMIT_SHA" "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+deploy:
+  stage: deploy
+  image: alpine:3.20
+  script:
+    - ./deploy.sh "$CI_COMMIT_SHA"
+  environment: production

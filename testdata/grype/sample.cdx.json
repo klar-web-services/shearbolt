@@ -1,0 +1,14 @@
+{
+  "bomFormat": "CycloneDX", "specVersion": "1.6",
+  "components": [
+    {"type": "library", "name": "brace-expansion", "version": "2.0.2", "purl": "pkg:npm/brace-expansion@2.0.2",
+     "properties": [{"name": "syft:package:type", "value": "npm"}, {"name": "syft:location:0:path", "value": "/package-lock.json"}]},
+    {"type": "library", "name": "smallvec", "version": "1.6.0", "purl": "pkg:cargo/smallvec@1.6.0",
+     "properties": [{"name": "syft:location:0:path", "value": "/web/Cargo.lock"}]},
+    {"type": "library", "name": "libc", "version": "0.2.150", "purl": "pkg:cargo/libc@0.2.150",
+     "properties": [{"name": "syft:location:0:path", "value": "/web/Cargo.lock"}, {"name": "syft:location:1:path", "value": "/Cargo.lock"}]},
+    {"type": "operating-system", "name": "alpine", "version": "3.24.1"},
+    {"type": "file", "name": "/lib/apk/db/installed",
+     "properties": [{"name": "syft:location:0:path", "value": "/ignored-file"}]}
+  ]
+}

@@ -1,0 +1,8 @@
+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme
+version: 1
+project: storefront
+targets:
+  - name: storefront
+    image: ${SHEARBOLT_IMAGE:-storefront:local}
+  - name: source
+    source: .

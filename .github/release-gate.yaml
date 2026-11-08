@@ -1,0 +1,18 @@
+# Gate for Shearbolt's own release candidates (spec section 14), run by the previous release.
+# Written by hand: setup reports NO_PROJECT on a Go repository. internal/config/releasegate_test.go
+# keeps it loadable. CANDIDATE_DIR holds <triple>/shearbolt for each build; unset, it is a config
+# error (exit 2), so the gate fails closed. Paths are relative to this file.
+version: 1
+project: shearbolt-release
+targets:
+  - name: linux-amd64
+    file: ${CANDIDATE_DIR}/x86_64-unknown-linux-gnu/shearbolt
+  - name: linux-arm64
+    file: ${CANDIDATE_DIR}/aarch64-unknown-linux-gnu/shearbolt
+  - name: darwin-amd64
+    file: ${CANDIDATE_DIR}/x86_64-apple-darwin/shearbolt
+  - name: darwin-arm64
+    file: ${CANDIDATE_DIR}/aarch64-apple-darwin/shearbolt
+  - name: repo
+    source: ..
+    exclude: [testdata/]
