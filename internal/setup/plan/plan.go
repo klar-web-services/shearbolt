@@ -91,11 +91,12 @@ type Classified struct {
 
 // Project is one protectable project (R1).
 type Project struct {
-	Ecosystem string   `json:"ecosystem"` // "npm" | "rust"
+	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "compose"
 	Dir       string   `json:"dir"`       // "." for the root; also the project's ID
 	Name      string   `json:"name"`
 	Lockfiles []string `json:"lockfiles"`           // relative to Dir
 	Framework string   `json:"framework,omitempty"` // "nextjs"
+	Compose   []string `json:"compose,omitempty"`   // compose files to gate, relative to Dir
 	Binaries  []string `json:"-"`
 	Excludes  []string `json:"-"` // R1 source excludes (nested projects, skipped dirs with lockfiles)
 }

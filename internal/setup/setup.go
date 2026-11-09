@@ -115,7 +115,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 
 	// 3. Errors.
 	if len(projects) == 0 {
-		msg := "No npm or Rust project with a lockfile was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root."
+		msg := "No npm or Rust project with a lockfile, and no Docker Compose file that pulls images, was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root."
 		for _, n := range findNotes {
 			msg += "\n" + n.Message
 		}
@@ -366,12 +366,18 @@ func findProjects(r plan.Repo, ecos []plan.Ecosystem) ([]plan.Project, []plan.No
 		}
 	}
 	slices.SortStableFunc(projects, func(a, b plan.Project) int { return strings.Compare(a.Dir, b.Dir) })
+	files, cn, err := findCompose(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	notes = append(notes, cn...)
+	projects = attachCompose(projects, files, r.Root)
 	if len(projects) == 0 {
 		return nil, notes, nil
 	}
 
 	var skipped []string
-	err := r.Walk(func(string, []string) {}, func(dir string) {
+	err = r.Walk(func(string, []string) {}, func(dir string) {
 		if slices.Contains(alreadyExcluded, path.Base(dir)) {
 			return
 		}
