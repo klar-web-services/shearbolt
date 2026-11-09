@@ -207,8 +207,13 @@ Cargo change. The report's "Re-pin" line gives the same pin.
    variable is set, such as a CI variable or an env file. Say so and ask the user to
    change it there. Do not edit the compose line.
 2. Propose a candidate, in this order:
-   1. the newest build of the same tag. For a tag, a fresh pull gets it. For a digest pin,
-      get the tag's current digest with `docker buildx imagetools inspect <repo:tag>`;
+   1. the newest build of the same tag:
+      - a tag without a digest has no pin to change. In a local scan, run
+        `docker pull <ref>` and scan again, because the local Docker may hold an old copy.
+        If the finding still blocks, or the block came from CI, the newest build of the tag
+        has it, so go to the next candidate;
+      - a digest pin: get the tag's current digest with
+        `docker buildx imagetools inspect <repo:tag>` and propose `tag@sha256:<new digest>`;
    2. the newest patch tag of the same release line (`1.30.5` to `1.30.6`).
 
    Moving to another release line (nginx 1.30, the stable line, to 1.31, the mainline) or
