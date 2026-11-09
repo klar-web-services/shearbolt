@@ -2,14 +2,34 @@
 
 These fixtures feed the integration tests in `internal/integration` (real Grype). `setup/` holds the `shearbolt setup` fixtures; see "Setup fixtures" at the end.
 
-Almost all of those tests scan with the pinned vulnerability database snapshot, `db-snapshot.sha256` (`<sha256>  <asset>`, an unmodified Grype database archive stored on the `test-db` pre-release), so their results do not change from day to day. Only `TestLiveDatabaseSmoke` uses today's database. Fetch the snapshot and run them from the repository root:
+Almost all of those tests scan with the pinned vulnerability database snapshot, so their results do not change from day to day. Only `TestLiveDatabaseSmoke` uses today's database.
+- `db-snapshot.sha256` pins the snapshot (`<sha256>  <asset>`).
+- The snapshot is a Grype database archive stored on the `test-db` pre-release.
+
+Fetch the snapshot and run the tests from the repository root:
 
 ```bash
 export SHEARBOLT_TEST_DB_ARCHIVE=$(scripts/db-snapshot.sh fetch ~/.cache/shearbolt-db-snapshot)
 go test -tags integration -count=1 ./internal/integration/ -v -timeout 30m
 ```
 
-`scripts/db-snapshot.sh refresh` (maintainers only) publishes a newer upstream archive and rewrites the pin; refresh only when the pinned Grype changes or a fixture needs newer data, then update the expectations.
+### Refreshing the snapshot
+
+Refresh only when the pinned Grype changes or a fixture needs newer data.
+
+**What the snapshot contains.** The snapshot holds data from four sources only: the GitHub Advisory Database, NVD, CISA KEV and FIRST EPSS. That is everything npm and Rust matching needs. All four allow redistribution with attribution, which `db-snapshot-NOTICE.txt` gives (each archive's `.NOTICE.txt` on the release adds the exact provider data it was built from). Anchore's full daily database cannot be stored instead: some of its sources (Wolfi, Chainguard) forbid sharing derived copies, and others (Alpine, Ubuntu) are share-alike.
+
+To refresh:
+1. Build and store a new snapshot (maintainers):
+   ```bash
+   gh workflow run test-db.yml --ref main            # or: -f date=YY-MM-DD for an earlier day's data
+   ```
+   The workflow builds the database with grype-db from Anchore's published provider data for that day and uploads it to the `test-db` release. It never replaces an existing asset, because old commits may pin it.
+2. Copy the pin line from the run summary into `db-snapshot.sha256`.
+3. Run the integration tests and the behaviour suite on the new snapshot, update any expectations that changed, and regenerate the README excerpt (below).
+4. Commit.
+
+When `internal/grype/pins.go` moves to a new Grype, also move `GRYPE_DB_VERSION`/`GRYPE_DB_SHA256` in `.github/workflows/test-db.yml` to the grype-db release built against that Grype.
 
 The lockfiles and Rust binaries are **deliberately vulnerable test fixtures** (lodash 4.17.20, smallvec 1.6.0, jquery 3.4.1 in `npm-kev`, a CISA KEV case; the yarn-workspace lockfile also pulls in vulnerable express, qs and body-parser), so their security alerts should be dismissed too.
 Dismiss security alerts (Dependabot and similar) for them, and do not "fix" their versions: the tests expect these exact findings.
@@ -145,4 +165,4 @@ awk '/^<!-- generated: see testdata\/README.md "README excerpt" -->$/ { on = 1; 
   diff - "$tmp/excerpt.md" && echo "README excerpt is current"
 ```
 
-If the diff shows changes (a new snapshot, or a report format change), replace the quote in `README.md` with `$tmp/excerpt.md`, and update the text around it if the numbers changed. The first run imports the snapshot into `~/.cache/shearbolt-readme` (about 3.4 GB, about 70 seconds); later runs reuse it. On the 2026-11-08 snapshot the scan blocks on four lodash 4.17.20 findings, and one upgrade, to 4.18.0, clears them all.
+If the diff shows changes (a new snapshot, or a report format change), replace the quote in `README.md` with `$tmp/excerpt.md`, and update the text around it if the numbers changed. The first run imports the snapshot into `~/.cache/shearbolt-readme` (about 1 GB); later runs reuse it. On the 2026-11-09 snapshot the scan blocks on four lodash 4.17.20 findings, and one upgrade, to 4.18.0, clears them all.

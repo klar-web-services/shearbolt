@@ -211,9 +211,9 @@ func TestFetchRejectsAMalformedPin(t *testing.T) {
 
 func TestUsage(t *testing.T) {
 	f := newFixture(t, goodPin(), good)
-	for _, args := range [][]string{nil, {"bogus"}, {"fetch"}, {"fetch", ""}, {"fetch", "a", "b"}, {"refresh", "extra"}} {
+	for _, args := range [][]string{nil, {"bogus"}, {"fetch"}, {"fetch", ""}, {"fetch", "a", "b"}, {"refresh"}} {
 		r := f.run(t, t.TempDir(), args...)
-		if r.code != 2 || !strings.Contains(r.stderr, "usage: scripts/db-snapshot.sh fetch DIR | refresh") {
+		if r.code != 2 || !strings.Contains(r.stderr, "usage: scripts/db-snapshot.sh fetch DIR\n") {
 			t.Errorf("args %q: exit %d, stderr:\n%s", args, r.code, r.stderr)
 		}
 		if len(r.gh) > 0 {

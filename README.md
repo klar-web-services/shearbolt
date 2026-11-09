@@ -58,7 +58,7 @@ In GitHub Actions this report is the job summary. On every CI and on your machin
 <!-- generated: see testdata/README.md "README excerpt" -->
 > ### ❌ Blocked: 4 vulnerabilities must be fixed before deploying
 >
-> Project `my-app` · 1 target · vulnerability data built 2026-11-08 06:19 UTC
+> Project `my-app` · 1 target · vulnerability data built 2026-11-09 04:47 UTC
 >
 > #### Must fix before deploying
 >

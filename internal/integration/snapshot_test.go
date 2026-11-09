@@ -16,7 +16,7 @@ import (
 
 // Deterministic tests on the pinned database snapshot. Fixtures are grouped into one config per
 // test, because every scan re-imports the snapshot. Expectations are spec section 13's
-// "supported" matrix and, for advisories, Grype 0.121.2 on the 2026-11-08 snapshot.
+// "supported" matrix and, for advisories, Grype 0.121.2 on the pinned snapshot (2026-11-09).
 
 func TestVulnerableLockfilesBlock(t *testing.T) {
 	lockfiles := map[string]string{

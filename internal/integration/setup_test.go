@@ -83,7 +83,7 @@ func setupScan(t *testing.T) (int, model.Run) {
 }
 
 // The Next.js config scans the real lockfile (next 15.0.0). The image storefront:local is neither
-// in the local Docker nor pullable, so its target is skipped. On the 2026-11-08 snapshot the
+// in the local Docker nor pullable, so its target is skipped. On the 2026-11-09 snapshot the
 // verdict is block: next 15.0.0, postcss 8.4.31 and sharp 0.33.5 have fixed advisories, among
 // them GHSA-f82v-jwr5-mffw (CVE-2025-29927, the middleware bypass; EPSS 99.2%).
 func TestSetupNextJSConfigScans(t *testing.T) {
