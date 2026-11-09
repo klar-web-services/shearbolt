@@ -364,7 +364,7 @@ func TestConfigReadBackSafetyNet(t *testing.T) {
 	loadConfig(t, ch.Content)
 }
 
-const composeNote = "setup gates the images of %s in shearbolt.yaml. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service]."
+const composeNote = "setup gates the images of %s in shearbolt.yaml. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service]. After editing the targets, run shearbolt setup again, so every gate scans them (or stops naming a removed one)."
 
 func TestConfigNewFileCompose(t *testing.T) {
 	r := repo(t, nil)
@@ -433,7 +433,7 @@ func TestConfigExistingComposeNotGated(t *testing.T) {
 	if got := targetNames(merged); !slices.Equal(got, []string{"source"}) || names["source"] != "source" {
 		t.Fatalf("merged %v, names %v", got, names)
 	}
-	want := "docker-compose.yml is not gated: shearbolt.yaml has no compose target for it. If its images ship, add this to targets:\n" +
+	want := "docker-compose.yml is not gated: shearbolt.yaml has no compose target for it. If its images ship, add this to targets, then run shearbolt setup again, so every gate scans it:\n" +
 		"  - name: docker-compose\n    compose: docker-compose.yml\n    exclude: [db]"
 	if len(notes) != 1 || notes[0].Code != "COMPOSE_NOT_GATED" || notes[0].File != "shearbolt.yaml" || notes[0].Message != want {
 		t.Fatalf("notes: %+v", notes)
@@ -488,8 +488,11 @@ func TestConfigExistingUnsupportedOmitsCompose(t *testing.T) {
 	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
 	planned := []config.Target{{Name: "web", Image: "${SHEARBOLT_IMAGE:-web:local}"}, {Name: "docker-compose", Compose: "docker-compose.yml"}, {Name: "source", Source: "."}}
 	ch, merged, _, _, notes := configChange(r, p, planned)
-	if ch != nil || merged != nil || !slices.Equal(codes(notes), []string{"UNSUPPORTED_EDIT"}) {
+	if ch != nil || merged != nil || !slices.Equal(codes(notes), []string{"UNSUPPORTED_EDIT", "COMPOSE_NOT_GATED"}) {
 		t.Fatalf("change %v, merged %v, notes %+v", ch, merged, notes)
+	}
+	if m := notes[1].Message; !strings.Contains(m, "docker-compose.yml is not gated") || !strings.Contains(m, "compose: docker-compose.yml") || !strings.Contains(m, "shearbolt setup") {
+		t.Fatalf("compose note: %q", m)
 	}
 	if m := notes[0].Message; strings.Contains(m, "compose") || !strings.Contains(m, "image: ${SHEARBOLT_IMAGE:-web:local}") {
 		t.Fatalf("message: %q", m)

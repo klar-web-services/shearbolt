@@ -204,7 +204,7 @@ Cargo change. The report's "Re-pin" line gives the same pin.
    (relative to the folder of the `shearbolt.yaml` you scanned with), and the line is
    `line` of the entry in `targets[].images[]` with that `ref`. Name the file and line.
    If the reference there is a variable (`${API_IMAGE}`), the pin is wherever that
-   variable is set, such as a CI variable or an env file. Say so and ask the user to
+   variable is set, such as a CI variable or the environment of the job that runs the gate. Say so and ask the user to
    change it there. Do not edit the compose line.
 2. Propose a candidate, in this order:
    1. the newest build of the same tag:

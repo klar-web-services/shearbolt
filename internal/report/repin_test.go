@@ -62,6 +62,18 @@ func TestRepinsGroupsPerTargetAndImage(t *testing.T) {
 	}
 }
 
+func TestRepinsMergesServicesOfSharedRef(t *testing.T) {
+	r := composeRun(cf("stack", "busybox:1", "A", ""))
+	r.Targets[0].Images = []model.ImageResult{
+		{Ref: "busybox:1", Services: []string{"a", "b"}, Line: 9, Status: "scanned"},
+		{Ref: "busybox:1", Services: []string{"b", "c"}, Line: 12, Status: "scanned"},
+	}
+	got := Repins(r, r.Findings)
+	if len(got) != 1 || got[0].Line != 9 || strings.Join(got[0].Services, ",") != "a,b,c" {
+		t.Errorf("got %+v", got)
+	}
+}
+
 func TestRepinSentences(t *testing.T) {
 	cases := []struct {
 		count, unfixed int

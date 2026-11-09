@@ -70,12 +70,19 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 			names[t.Name] = t.Name
 		}
 		addVars(vars, planned)
-		return nil, nil, names, vars, []plan.Note{{
+		notes := []plan.Note{{
 			Code: "UNSUPPORTED_EDIT",
 			Message: fmt.Sprintf("%s could not be written automatically (%s); add these targets to its targets list by hand:\n%s",
 				file, reason, strings.Join(targetItems(listed, "  "), "\n")),
 			File: file,
 		}}
+		// Compose targets left out of the snippet get their own note each.
+		for _, t := range planned {
+			if t.Kind() == "compose" && !slices.ContainsFunc(listed, func(l config.Target) bool { return l.Name == t.Name }) {
+				notes = append(notes, composeNotGated(t, file))
+			}
+		}
+		return nil, nil, names, vars, notes
 	}
 	src, err := r.Read(file)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -97,7 +104,7 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 		if len(files) > 0 {
 			notes = append(notes, plan.Note{
 				Code: "COMPOSE_ADDED",
-				Message: fmt.Sprintf("setup gates the images of %s in %s. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service].",
+				Message: fmt.Sprintf("setup gates the images of %s in %s. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service]. After editing the targets, run shearbolt setup again, so every gate scans them (or stops naming a removed one).",
 					strings.Join(files, ", "), file),
 				File: file,
 			})
@@ -144,12 +151,7 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 				names[t.Name] = existing[i].Name
 				continue
 			}
-			notes = append(notes, plan.Note{
-				Code: "COMPOSE_NOT_GATED",
-				Message: fmt.Sprintf("%s is not gated: %s has no compose target for it. If its images ship, add this to targets:\n%s",
-					t.Compose, file, strings.Join(targetItems([]config.Target{t}, "  "), "\n")),
-				File: file,
-			})
+			notes = append(notes, composeNotGated(t, file))
 			continue
 		}
 		if i := slices.IndexFunc(existing, func(e config.Target) bool { return sameValue(e, t) && e.Name == t.Name }); i >= 0 {
@@ -409,4 +411,14 @@ func sanitizeName(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// composeNotGated is the COMPOSE_NOT_GATED note for compose target t, which file has no target for.
+func composeNotGated(t config.Target, file string) plan.Note {
+	return plan.Note{
+		Code: "COMPOSE_NOT_GATED",
+		Message: fmt.Sprintf("%s is not gated: %s has no compose target for it. If its images ship, add this to targets, then run shearbolt setup again, so every gate scans it:\n%s",
+			t.Compose, file, strings.Join(targetItems([]config.Target{t}, "  "), "\n")),
+		File: file,
+	}
 }

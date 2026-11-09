@@ -236,7 +236,8 @@ targets:
 - Set `platform:` on a service when production runs another architecture than CI. Without it, the image for the machine that runs the scan is checked.
 - `extends`, `include` and a second YAML document in one file are not supported yet: the scan fails (`COMPOSE_UNSUPPORTED`) instead of skipping what it cannot read. Exclude an `extends` service to scan the rest. Profiles are ignored, so every service is read.
 - A blocked image gets a "Re-pin" line in the report with the file, line and services. Move the pin to a newer build of the tag, or a newer tag, then scan again. A digest pin stays a digest pin.
-- Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests.
+- Setup finds compose files named `compose.yaml`, `compose.yml`, `docker-compose.yaml` and `docker-compose.yml`, and variants such as `docker-compose.prod.yml`, `docker-compose-prod.yml` and `compose-dev.yaml`. A compose file under any other name must be added as a target by hand.
+- Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests. After you add or remove a compose target by hand, run `shearbolt setup` again, so every gate scans it (or stops naming it).
 - Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`, and, in a repository with only compose files, at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
 
 ### CLI

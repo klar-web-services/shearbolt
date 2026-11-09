@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/klar-web-services/shearbolt/internal/model"
@@ -37,10 +38,20 @@ func Repins(r *model.Run, blocked []model.Finding) []Repin {
 					continue
 				}
 				p.File = t.Ref
+				// One ref may appear under several platforms: the line is the first entry's,
+				// the services come from all of them.
+				found := false
 				for _, im := range t.Images {
-					if im.Ref == f.Image {
-						p.Line, p.Services = im.Line, im.Services
-						break
+					if im.Ref != f.Image {
+						continue
+					}
+					if !found {
+						p.Line, found = im.Line, true
+					}
+					for _, sv := range im.Services {
+						if !slices.Contains(p.Services, sv) {
+							p.Services = append(p.Services, sv)
+						}
 					}
 				}
 				break

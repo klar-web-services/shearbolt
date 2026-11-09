@@ -52,7 +52,7 @@ type File struct {
 func (f *File) Pulls() bool { return f.Fatal == nil && (len(f.Images) > 0 || len(f.Missing) > 0) }
 
 var (
-	fileName = regexp.MustCompile(`^(docker-)?compose(\.[^/]+)?\.ya?ml$`)
+	fileName = regexp.MustCompile(`^(docker-)?compose([.-][^/]+)?\.ya?ml$`)
 	// imagePattern is config's rule for image references, so a reference cannot carry
 	// whitespace or shell metacharacters into a command line, or start an option.
 	imagePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
@@ -61,7 +61,8 @@ var (
 )
 
 // FileName reports whether name is a compose file name setup looks for: compose.yaml,
-// docker-compose.yml and their .<variant>. forms such as docker-compose.prod.yml.
+// docker-compose.yml and their .<variant> or -<variant> forms such as docker-compose.prod.yml
+// and compose-dev.yaml.
 func FileName(name string) bool { return fileName.MatchString(name) }
 
 // Read reads the compose file at path. The error is set only when the file cannot be read.

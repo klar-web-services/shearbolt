@@ -57,7 +57,7 @@ The questions come in this order:
    project; otherwise every project is selected.
 2. `build-project:<file>:<line>` (`choice`), sorted by file and line. When two such builds
    share a line, the ID ends in `:<line>:<n>`. A build in CI that setup cannot attribute
-   to a project by its directory. The options are every project `dir` plus `none` (do not
+   to a project by its directory. The options are the `dir` of each npm and Rust project plus `none` (do not
    gate this build). The default is the project of an existing Shearbolt gate that follows
    the build in its job, so a re-run keeps the earlier answer; otherwise the first project.
    The line moves when setup edits the file, so always take IDs from the latest plan.
@@ -70,7 +70,8 @@ The questions come in this order:
    compose-only project the default is the first job that already holds the gate, then the
    first job that pushes or deploys, then the first job. Its
    `unlessChosen` lists every `build-project` question, because assigning an unattributed
-   build to the project gives it a build and makes the question moot.
+   build to the project gives it a build and makes the question moot. A compose-only
+   project's `gate-job` has no `unlessChosen`: no build can be assigned to it.
 
 ## Which questions apply
 
@@ -171,12 +172,13 @@ Each note's `message` already names the file, job or command concerned. Explain 
 the user's terms, using the meanings below. Codes marked *(Bitbucket and GitLab)* occur
 only in Bitbucket Pipelines and GitLab CI files.
 
+Seven notes are informational: `COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`,
+`COMPOSE_NOT_READ`, `COMPOSE_VARIABLE`, `BUILD_NOT_GATED` and `NO_DEPLOY_SEEN`. None is a
+reason to say Shearbolt is "not set up": setup can be complete with them present.
+
 ### Gaps: something runs unchecked until the user acts
 
-These notes need the user to act, or at least to know. None of the compose notes
-(`COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`, `COMPOSE_NOT_READ`,
-`COMPOSE_VARIABLE`) or `BUILD_NOT_GATED` and `NO_DEPLOY_SEEN` is a reason to say Shearbolt is
-"not set up": they are informational, and setup can be complete with them present.
+Every note here except the informational ones listed in the intro above counts against "set up".
 
 - `UNSUPPORTED_EDIT`: setup will not change something automatically, such as a job or
   step layout it cannot edit safely, a `shearbolt.yaml` it cannot parse, or builds in one
@@ -223,7 +225,10 @@ These notes need the user to act, or at least to know. None of the compose notes
 
 - `COMPOSE_NOT_GATED`: an existing `shearbolt.yaml` has no compose target for a compose
   file that pulls images. Setup leaves the config alone, and a compose target the user
-  removed stays removed. The message names the target to add by hand if the file ships.
+  removed stays removed. The message names the target to add by hand if the file ships; then run
+  `shearbolt setup` again, so every gate scans it. Also given, once per compose file, when
+  `shearbolt.yaml` cannot be edited automatically (`UNSUPPORTED_EDIT`). After the user
+  removes a target by hand, running setup again makes the gates stop naming it.
 - `COMPOSE_NOT_READ`: a compose file setup could not read (invalid, or it uses `include`,
   `extends` or a second YAML document), so it is not gated. The message gives the reason.
   Fix the file and run setup again, or add a compose target by hand once it can be read.
@@ -245,7 +250,8 @@ These notes need the user to act, or at least to know. None of the compose notes
 
 - `NO_BUILD_FOUND`: setup found no build step for the project, so the gate in the chosen
   job checks only its lockfiles. If CI does build an image or binary for it somewhere,
-  that artifact is not scanned.
+  that artifact is not scanned. For a compose-only project, the gate checks its compose
+  images instead of lockfiles.
 - `MULTI_PLATFORM`: an image built for more than one platform cannot be loaded into the
   local Docker daemon, so its image is not scanned (multi-platform image gating is not in
   v1). The message says whether the gate runs before the build or after it; either way
@@ -285,7 +291,8 @@ These notes need the user to act, or at least to know. None of the compose notes
   compose file that pulls images, and lists them. Compose files that only run locally or
   in tests do not ship, so ask the user whether each listed file does. For one that does
   not, they remove its target (setup does not add it back) or, for a file that otherwise
-  ships, exclude single services. A compose-only project needs at least one target: if
+  ships, exclude single services. After any such hand edit, `shearbolt setup` must run
+  again, so every gate scans the target (or stops naming it). A compose-only project needs at least one target: if
   none of its files ship, Shearbolt is the wrong tool for the repository.
 - `COMPOSE_NO_IMAGES`: a compose file pulls no image (only build services, or only
   overrides), so it is not gated.

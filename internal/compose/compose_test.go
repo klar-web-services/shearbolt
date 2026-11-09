@@ -268,12 +268,12 @@ func TestParseEmpty(t *testing.T) {
 }
 
 func TestFileName(t *testing.T) {
-	for _, n := range []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml", "docker-compose.prod.yml", "compose.override.yaml"} {
+	for _, n := range []string{"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml", "docker-compose.prod.yml", "compose.override.yaml", "docker-compose-prod.yml", "compose-dev.yaml"} {
 		if !FileName(n) {
 			t.Errorf("FileName(%q) = false, want true", n)
 		}
 	}
-	for _, n := range []string{"compose.yml.bak", "my-compose.yml", "docker-compose.json", "stack.yml"} {
+	for _, n := range []string{"compose.yml.bak", "my-compose.yml", "docker-compose.json", "stack.yml", "docker-composer.yml"} {
 		if FileName(n) {
 			t.Errorf("FileName(%q) = true, want false", n)
 		}

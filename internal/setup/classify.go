@@ -489,8 +489,7 @@ var pushRules = map[string]pushRule{
 }
 
 // isPush reports whether the command pushes or deploys (the fixed list of R2, including compose
-// pushes and stack deploys). vars resolves a
-// program written as a Makefile variable.
+// pushes and stack deploys). vars resolves a program written as a Makefile variable.
 func isPush(args []shell.Word, vars map[string]string) bool {
 	if len(args) == 0 {
 		return false
