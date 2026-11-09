@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -353,4 +354,39 @@ func TestCancelledScanIsAnError(t *testing.T) {
 	if r.ExitCode != 2 || !strings.Contains(codes(r.Errors), "CANCELLED") {
 		t.Fatalf("exit = %d, errors = %s, targets = %+v", r.ExitCode, codes(r.Errors), r.Targets)
 	}
+}
+
+// P2: raw files of the other kinds stay on the target.
+func TestRawFilesStayOnTheTargetForOtherKinds(t *testing.T) {
+	want := func(t *testing.T, got []string, files ...string) {
+		t.Helper()
+		if !slices.Equal(got, files) {
+			t.Fatalf("raw = %v, want %v", got, files)
+		}
+	}
+	t.Run("image", func(t *testing.T) {
+		cfg, _ := project(t, "targets:\n  - name: web\n    image: app:local\n", nil)
+		sc := &fakeScanner{outputs: map[string]output{"registry:app:local": clean("pkg:apk/alpine/musl@1.2.5")}}
+		r := run(t, cfg, sc, nil)
+		want(t, r.Targets[0].Raw, "raw/web.grype.json", "raw/web.cdx.json")
+	})
+	t.Run("fallback", func(t *testing.T) {
+		yaml := "targets:\n  - name: cli\n    file: bin/cli\n    lockfileFallback: Cargo.lock\n"
+		cfg, root := project(t, yaml, map[string]string{"bin/cli": "x", "Cargo.lock": "# lock"})
+		sc := &fakeScanner{outputs: map[string]output{
+			"file:" + filepath.Join(root, "bin/cli"):    {testutil.GrypeJSON(fresh), testutil.SBOMJSON("pkg:generic/cli@1"), nil},
+			"file:" + filepath.Join(root, "Cargo.lock"): clean("pkg:cargo/a@1.0.0"),
+		}}
+		r := run(t, cfg, sc, nil)
+		want(t, r.Targets[0].Raw, "raw/cli.grype.json", "raw/cli.cdx.json", "raw/cli+lockfile.grype.json", "raw/cli+lockfile.cdx.json")
+	})
+	t.Run("nested", func(t *testing.T) {
+		cfg, root := project(t, sourceTarget, nestedFiles(appDeps))
+		sc := &fakeScanner{outputs: map[string]output{
+			"dir:" + root:                       {testutil.GrypeJSON(fresh), testutil.SBOMAt("/app/yarn.lock", "pkg:npm/is-number@7.0.0"), nil},
+			"dir:" + filepath.Join(root, "app"): {testutil.GrypeJSON(fresh), testutil.SBOMAt("/yarn.lock", "pkg:npm/is-number@7.0.0"), nil},
+		}}
+		r := run(t, cfg, sc, nil)
+		want(t, r.Targets[0].Raw, "raw/repo.grype.json", "raw/repo.cdx.json", "raw/repo+nested1.grype.json", "raw/repo+nested1.cdx.json")
+	})
 }

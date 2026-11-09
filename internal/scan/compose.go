@@ -2,7 +2,9 @@ package scan
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"strings"
 
@@ -28,6 +30,10 @@ func (s *state) scanCompose(ctx context.Context, i int, t config.Target) {
 	}
 	f, err := compose.Read(t.Compose, compose.Env(s.opts.Env), t.Exclude)
 	if err != nil {
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
 		s.targetError(i, "COMPOSE_UNREADABLE", fmt.Sprintf("compose file %s cannot be read: %v", file, err))
 		return
 	}
@@ -67,30 +73,25 @@ func (s *state) scanComposeImage(ctx context.Context, i, n int, name string, img
 	res := &s.run.Targets[i].Images[n]
 	req := s.request(fmt.Sprintf("%s+%d", name, n+1))
 	req.Platform = img.Platform
-	if s.opts.HasImage(ctx, img.Ref) {
-		req.Source = "docker:" + img.Ref
-	} else {
-		req.Source = "registry:" + img.Ref
-	}
-	res.Raw = append(res.Raw, s.raw(req)...)
+	req.Source = s.imageSource(ctx, img.Ref)
 	fail := func(code, msg string) {
 		res.Status, res.Note = "error", msg
 		s.targetError(i, code, msg)
 	}
 	if err := s.opts.Scanner.Scan(ctx, req); err != nil {
-		registry := strings.HasPrefix(req.Source, "registry:")
-		if registry && !s.opts.CIMode && ctx.Err() == nil {
+		if s.maySkipImage(ctx, req) {
 			res.Status = "skipped"
 			res.Note = fmt.Sprintf("image %s is not in your local Docker and could not be pulled (%s). Pull it with `docker pull %s` to include it.", img.Ref, firstLine(err.Error()), img.Ref)
 			return false
 		}
 		msg := fmt.Sprintf("image %s: %v", img.Ref, err)
-		if registry {
-			msg += " If the image is in a private registry, log in to it before the shearbolt step."
+		if strings.HasPrefix(req.Source, "registry:") && ctx.Err() == nil {
+			msg = strings.TrimRight(msg, ".") + ". If the image is in a private registry, log in to it before the shearbolt step."
 		}
 		fail("SCAN_FAILED", msg)
 		return false
 	}
+	res.Raw = append(res.Raw, s.raw(req)...)
 	out, inv, err := s.readOutputs(req)
 	if err != nil {
 		fail("BAD_OUTPUT", fmt.Sprintf("image %s: %v", img.Ref, err))

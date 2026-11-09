@@ -132,11 +132,7 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 	var lockfiles []string
 	switch kind {
 	case "image":
-		if s.opts.HasImage(ctx, ref) {
-			req.Source = "docker:" + ref
-		} else {
-			req.Source = "registry:" + ref
-		}
+		req.Source = s.imageSource(ctx, ref)
 	case "source":
 		if info, err := os.Stat(ref); err != nil || !info.IsDir() {
 			s.targetError(i, "MISSING_SOURCE", fmt.Sprintf("source directory %s does not exist", ref))
@@ -177,7 +173,7 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 	if err := s.opts.Scanner.Scan(ctx, req); err != nil {
 		// Only an image that is not in the local daemon and cannot be pulled may be skipped,
 		// and only outside CI mode. A Grype failure on a local image is a real error.
-		if kind == "image" && strings.HasPrefix(req.Source, "registry:") && !s.opts.CIMode && ctx.Err() == nil {
+		if kind == "image" && s.maySkipImage(ctx, req) {
 			s.skip(i, fmt.Sprintf("image %s is not in your local Docker and could not be pulled (%s). Build it with `docker build -t %s .` to include it.", ref, firstLine(err.Error()), ref))
 			return
 		}
@@ -280,6 +276,20 @@ func (s *state) coveringSource(lock string) string {
 		}
 	}
 	return ""
+}
+
+// imageSource is the local daemon's copy of an image when it has one, else the registry's.
+func (s *state) imageSource(ctx context.Context, ref string) string {
+	if s.opts.HasImage(ctx, ref) {
+		return "docker:" + ref
+	}
+	return "registry:" + ref
+}
+
+// maySkipImage reports whether a failed image scan is a skip: only an image that is not in the
+// local daemon and cannot be pulled, outside CI mode and while the run is not cancelled.
+func (s *state) maySkipImage(ctx context.Context, req grype.Request) bool {
+	return strings.HasPrefix(req.Source, "registry:") && !s.opts.CIMode && ctx.Err() == nil
 }
 
 // raw lists a request's output files as recorded in run.json.

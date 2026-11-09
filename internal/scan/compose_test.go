@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klar-web-services/shearbolt/internal/model"
 	"github.com/klar-web-services/shearbolt/internal/testutil"
@@ -90,7 +91,7 @@ func TestComposeSkipsUnpullableImagesLocally(t *testing.T) {
 		t.Fatalf("exit = %d, target = %+v, errors = %+v", r.ExitCode, r.Targets[0], r.Errors)
 	}
 	img := r.Targets[0].Images[0]
-	if img.Status != "skipped" || !strings.Contains(img.Note, "`docker pull nginx:1.27`") || strings.Contains(img.Note, "more") {
+	if img.Status != "skipped" || !strings.Contains(img.Note, "`docker pull nginx:1.27`") || strings.Contains(img.Note, "more") || len(img.Raw) != 0 {
 		t.Fatalf("image = %+v", img)
 	}
 	all := &fakeScanner{outputs: map[string]output{
@@ -111,10 +112,10 @@ func TestComposeScanFailureInCIIsAnError(t *testing.T) {
 	}}
 	r := run(t, cfg, sc, func(o *Options) { o.CIMode = true })
 	if r.ExitCode != 2 || codes(r.Errors) != "SCAN_FAILED" || r.Errors[0].Target != "stack" ||
-		!strings.Contains(r.Errors[0].Message, "log in to it before the shearbolt step") || !strings.Contains(r.Errors[0].Message, "image nginx:1.27") {
+		!strings.Contains(r.Errors[0].Message, "UNAUTHORIZED. If the image is in a private registry, log in to it before the shearbolt step.") || !strings.Contains(r.Errors[0].Message, "image nginx:1.27") {
 		t.Fatalf("exit = %d, errors = %+v", r.ExitCode, r.Errors)
 	}
-	if r.Targets[0].Status != "error" || r.Targets[0].Images[0].Status != "error" || r.Targets[0].Images[1].Status != "scanned" {
+	if r.Targets[0].Status != "error" || r.Targets[0].Images[0].Status != "error" || r.Targets[0].Images[1].Status != "scanned" || len(r.Targets[0].Images[0].Raw) != 0 {
 		t.Fatalf("target = %+v", r.Targets[0])
 	}
 }
@@ -167,7 +168,7 @@ func TestComposeVariables(t *testing.T) {
 func TestComposeFileLevelErrors(t *testing.T) {
 	for name, tc := range map[string]struct{ content, code, prefix string }{
 		"include": {"include:\n  - other.yml\nservices:\n  web:\n    image: nginx\n", "COMPOSE_UNSUPPORTED", "docker-compose.yml:1: "},
-		"invalid": {"services: [\n", "COMPOSE_INVALID", "docker-compose.yml"},
+		"invalid": {"services: [\n", "COMPOSE_INVALID", "docker-compose.yml:"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, _ := project(t, composeTarget, composeFiles(tc.content))
@@ -181,7 +182,7 @@ func TestComposeFileLevelErrors(t *testing.T) {
 	cfg, _ := project(t, composeTarget, nil)
 	for _, ci := range []bool{false, true} {
 		r := run(t, cfg, &fakeScanner{}, func(o *Options) { o.CIMode = ci })
-		if r.ExitCode != 2 || !slices.Contains(strings.Split(codes(r.Errors), ","), "COMPOSE_UNREADABLE") || !strings.Contains(r.Errors[0].Message, "docker-compose.yml") {
+		if r.ExitCode != 2 || codes(r.Errors) != "COMPOSE_UNREADABLE" || r.Errors[0].Message != "compose file docker-compose.yml cannot be read: no such file or directory" {
 			t.Fatalf("ci = %v: exit = %d, errors = %+v", ci, r.ExitCode, r.Errors)
 		}
 	}
@@ -219,37 +220,55 @@ func TestComposeFindingsAcceptTargetExceptions(t *testing.T) {
 	}
 }
 
-// P2: raw files of the other kinds stay on the target.
-func TestRawFilesStayOnTheTargetForOtherKinds(t *testing.T) {
-	want := func(t *testing.T, got []string, files ...string) {
-		t.Helper()
-		if !slices.Equal(got, files) {
-			t.Fatalf("raw = %v, want %v", got, files)
+func TestComposeSkipDoesNotHideAVariableProblem(t *testing.T) {
+	files := composeFiles("services:\n  api:\n    image: \"ghcr.io/acme/api:${API_TAG}\"\n  web:\n    image: nginx:1.27\n")
+	cfg, _ := project(t, composeTarget, files)
+	sc := &fakeScanner{outputs: map[string]output{"registry:nginx:1.27": {err: errors.New("denied")}}}
+	r := run(t, cfg, sc, func(o *Options) { o.Env = func(string) (string, bool) { return "", false } })
+	if r.ExitCode != 2 || codes(r.Errors) != "COMPOSE_VARIABLE" || r.Targets[0].Status != "error" || r.Targets[0].Images[0].Status != "skipped" {
+		t.Fatalf("exit = %d, errors = %s, target = %+v", r.ExitCode, codes(r.Errors), r.Targets[0])
+	}
+}
+
+func TestComposeDaemonImageFailureIsNotSkipped(t *testing.T) {
+	cfg, _ := project(t, composeTarget, composeFiles("services:\n  web:\n    image: nginx:1.27\n"))
+	sc := &fakeScanner{outputs: map[string]output{"docker:nginx:1.27": {err: errors.New("layer unreadable")}}}
+	r := run(t, cfg, sc, func(o *Options) { o.HasImage = func(context.Context, string) bool { return true } })
+	if r.ExitCode != 2 || codes(r.Errors) != "SCAN_FAILED" || r.Targets[0].Images[0].Status != "error" {
+		t.Fatalf("exit = %d, errors = %s, target = %+v", r.ExitCode, codes(r.Errors), r.Targets[0])
+	}
+	if strings.Contains(r.Errors[0].Message, "private registry") {
+		t.Errorf("message = %s", r.Errors[0].Message)
+	}
+}
+
+func TestComposeCancellationSkipsNothingAndAddsNoLoginHint(t *testing.T) {
+	cfg, _ := project(t, composeTarget, composeFiles("services:\n  a:\n    image: app:local\n  b:\n    image: nginx:1.27\n"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sc := &fakeScanner{cancel: cancel, outputs: map[string]output{"registry:app:local": {err: errors.New("context canceled")}}}
+	o := Options{Config: cfg, OutputDir: filepath.Join(t.TempDir(), "evidence"), Scanner: sc, Now: func() time.Time { return now },
+		HasImage: func(context.Context, string) bool { return false }}
+	r := Run(ctx, o)
+	if r.ExitCode != 2 || !strings.Contains(codes(r.Errors), "CANCELLED") {
+		t.Fatalf("exit = %d, errors = %s", r.ExitCode, codes(r.Errors))
+	}
+	for _, img := range r.Targets[0].Images {
+		if img.Status != "error" || len(img.Raw) != 0 {
+			t.Errorf("image = %+v", img)
 		}
 	}
-	t.Run("image", func(t *testing.T) {
-		cfg, _ := project(t, "targets:\n  - name: web\n    image: app:local\n", nil)
-		sc := &fakeScanner{outputs: map[string]output{"registry:app:local": clean("pkg:apk/alpine/musl@1.2.5")}}
-		r := run(t, cfg, sc, nil)
-		want(t, r.Targets[0].Raw, "raw/web.grype.json", "raw/web.cdx.json")
-	})
-	t.Run("fallback", func(t *testing.T) {
-		yaml := "targets:\n  - name: cli\n    file: bin/cli\n    lockfileFallback: Cargo.lock\n"
-		cfg, root := project(t, yaml, map[string]string{"bin/cli": "x", "Cargo.lock": "# lock"})
-		sc := &fakeScanner{outputs: map[string]output{
-			"file:" + filepath.Join(root, "bin/cli"):    {testutil.GrypeJSON(fresh), testutil.SBOMJSON("pkg:generic/cli@1"), nil},
-			"file:" + filepath.Join(root, "Cargo.lock"): clean("pkg:cargo/a@1.0.0"),
-		}}
-		r := run(t, cfg, sc, nil)
-		want(t, r.Targets[0].Raw, "raw/cli.grype.json", "raw/cli.cdx.json", "raw/cli+lockfile.grype.json", "raw/cli+lockfile.cdx.json")
-	})
-	t.Run("nested", func(t *testing.T) {
-		cfg, root := project(t, sourceTarget, nestedFiles(appDeps))
-		sc := &fakeScanner{outputs: map[string]output{
-			"dir:" + root:                       {testutil.GrypeJSON(fresh), testutil.SBOMAt("/app/yarn.lock", "pkg:npm/is-number@7.0.0"), nil},
-			"dir:" + filepath.Join(root, "app"): {testutil.GrypeJSON(fresh), testutil.SBOMAt("/yarn.lock", "pkg:npm/is-number@7.0.0"), nil},
-		}}
-		r := run(t, cfg, sc, nil)
-		want(t, r.Targets[0].Raw, "raw/repo.grype.json", "raw/repo.cdx.json", "raw/repo+nested1.grype.json", "raw/repo+nested1.cdx.json")
-	})
+	for _, e := range r.Errors {
+		if strings.Contains(e.Message, "private registry") {
+			t.Errorf("hint after cancellation: %s", e.Message)
+		}
+	}
+}
+
+func TestComposeOnlyVariableProblemsIsNotNoImages(t *testing.T) {
+	cfg, _ := project(t, composeTarget, composeFiles("services:\n  api:\n    image: \"ghcr.io/acme/api:${API_TAG}\"\n"))
+	r := run(t, cfg, &fakeScanner{}, func(o *Options) { o.Env = func(string) (string, bool) { return "", false } })
+	if r.ExitCode != 2 || codes(r.Errors) != "COMPOSE_VARIABLE" {
+		t.Fatalf("exit = %d, errors = %s", r.ExitCode, codes(r.Errors))
+	}
 }
