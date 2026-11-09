@@ -52,8 +52,8 @@ defaults:
   run:
     shell: bash # bash -eo pipefail
 env:
-  GATE_VERSION: '' # previous release that gates candidates; empty = bootstrap with the pinned Grype
-  GATE_SHA256: '' # SHA-256 of its shearbolt-x86_64-unknown-linux-gnu.tar.gz
+  GATE_VERSION: '1.0.0' # previous release that gates candidates; empty = bootstrap with the pinned Grype
+  GATE_SHA256: '9b99eb05287c879a3c862000f71c4a0f33047f3ad00680c9cef8003fb6967ae7' # SHA-256 of its shearbolt-x86_64-unknown-linux-gnu.tar.gz
 jobs:
   build:
     runs-on: ubuntu-latest
