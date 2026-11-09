@@ -586,3 +586,23 @@ func jsonField(typ reflect.Type, name string) (reflect.StructField, bool) {
 	}
 	return reflect.StructField{}, false
 }
+
+// TestSkillFixingCoversCompose checks that the fixing reference teaches the compose fix flow.
+func TestSkillFixingCoversCompose(t *testing.T) {
+	b, err := fs.ReadFile(skills.Files, "shearbolt/references/fixing.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	for _, want := range []string{
+		"### Compose images",
+		"newest build of the same tag",
+		"docker buildx imagetools inspect",
+		"tag@sha256:",
+		"shearbolt scan --target",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("fixing.md lacks %q", want)
+		}
+	}
+}

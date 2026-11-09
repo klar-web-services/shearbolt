@@ -26,7 +26,7 @@ writes it only with `--apply`. This is the contract the skill drives, at `schema
 | --- | --- |
 | `schemaVersion` | `1`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
 | `shearboltVersion` | The version that computed the plan; `dev` for a development build. |
-| `projects[]` | Detected projects: `ecosystem` (`npm` or `rust`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `framework` (`nextjs`). |
+| `projects[]` | Detected projects: `ecosystem` (`npm`, `rust` or `compose`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `compose` project has no lockfiles: it holds the compose files that no npm or Rust project contains. |
 | `ci[]` | CI files found: `system` (`github`, `bitbucket` or `gitlab`) and `file`. |
 | `questions[]` | Every question setup can ask, computed from the repository alone. See below. |
 | `complete` | `true` when every applicable question has an `--answer`. |
@@ -62,9 +62,13 @@ The questions come in this order:
    the build in its job, so a re-run keeps the earlier answer; otherwise the first project.
    The line moves when setup edits the file, so always take IDs from the latest plan.
 3. `gate-job:<project dir>` (`choice`, with `project` set), sorted by project. Setup found
-   no build for that project, so it asks which job should check its lockfiles. The
+   no build for that project, so it asks which job should check its lockfiles. For a
+   compose-only project (`ecosystem` `compose`) the prompt reads "Which job should check
+   the compose images of <label>?" and the gate checks its compose images instead. The
    options are the editable job IDs (`<file>#<job>`, labels like `ci.yml: test`). The
-   default is the first job, or the job that already holds a gate for that project. Its
+   default is the first job, or the job that already holds a gate for that project. For a
+   compose-only project the default is the first job that already holds the gate, then the
+   first job that pushes or deploys, then the first job. Its
    `unlessChosen` lists every `build-project` question, because assigning an unattributed
    build to the project gives it a build and makes the question moot.
 
@@ -153,7 +157,7 @@ An error plan has `error` set and `changes: []`. It keeps `projects`, `ci` and
 
 | Code | Cause | What to tell the user |
 | --- | --- | --- |
-| `NO_PROJECT` | No npm or Rust project with a lockfile Grype can read. | Pass on the message, which includes any `BUN_LOCKB` or `NO_CARGO_LOCK` advice. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects and Cargo projects with a `Cargo.lock`. |
+| `NO_PROJECT` | No npm or Rust project with a lockfile Grype can read, and no compose file that pulls images. | Pass on the message, which names what setup protects (npm, Rust and Docker Compose files that pull images) and includes any `BUN_LOCKB`, `NO_CARGO_LOCK`, `COMPOSE_NO_IMAGES` or `COMPOSE_NOT_READ` advice. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects, Cargo projects with a `Cargo.lock`, and compose files that pull at least one image. |
 | `NO_CI` | No `.github/workflows/*.yml` or `*.yaml`, `bitbucket-pipelines.yml` or `.gitlab-ci.yml`. | Shearbolt is a CI gate, so there is nothing to add it to. Pass on the message: run setup from the repository root, or add a pipeline that builds the project first; meanwhile `shearbolt scan --source .` checks the lockfiles locally. |
 | `PARSE` | A CI file is not valid YAML. The message names the file and line. | Fix that YAML, then run setup again. |
 | `READ` | The repository could not be read (an I/O error). | Show the message. |
@@ -168,6 +172,11 @@ the user's terms, using the meanings below. Codes marked *(Bitbucket and GitLab)
 only in Bitbucket Pipelines and GitLab CI files.
 
 ### Gaps: something runs unchecked until the user acts
+
+These notes need the user to act, or at least to know. None of the compose notes
+(`COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`, `COMPOSE_NOT_READ`,
+`COMPOSE_VARIABLE`) or `BUILD_NOT_GATED` and `NO_DEPLOY_SEEN` is a reason to say Shearbolt is
+"not set up": they are informational, and setup can be complete with them present.
 
 - `UNSUPPORTED_EDIT`: setup will not change something automatically, such as a job or
   step layout it cannot edit safely, a `shearbolt.yaml` it cannot parse, or builds in one
@@ -212,6 +221,26 @@ only in Bitbucket Pipelines and GitLab CI files.
   without a gate. The message holds the snippet: add it to each of those jobs that builds,
   after the build and before any push.
 
+- `COMPOSE_NOT_GATED`: an existing `shearbolt.yaml` has no compose target for a compose
+  file that pulls images. Setup leaves the config alone, and a compose target the user
+  removed stays removed. The message names the target to add by hand if the file ships.
+- `COMPOSE_NOT_READ`: a compose file setup could not read (invalid, or it uses `include`,
+  `extends` or a second YAML document), so it is not gated. The message gives the reason.
+  Fix the file and run setup again, or add a compose target by hand once it can be read.
+- `COMPOSE_VARIABLE`: a gated compose file needs variables that have no default. The
+  scan fails for those services (`COMPOSE_VARIABLE`) unless the CI job sets them. Set them
+  in the job that runs the gate, or add the service to the target's `exclude` if CI
+  builds that image and gates it another way. Never exclude a service for the user.
+- `BUILD_NOT_GATED`: the repository has no npm or Rust project, so an image or binary
+  build in CI belongs to no project and the gate does not scan what it produces. If a
+  compose service runs that image, the user adds the service to the compose target's
+  `exclude`, so the gate does not try to pull it, and gates the build separately.
+  Setup cannot clear this note.
+- `NO_DEPLOY_SEEN`: a project with compose targets, and setup saw no push or deploy step
+  in the CI jobs it could read. If the platform deploys by itself, for example on every
+  push, a failed `shearbolt` check does not stop it. The user can require the check
+  before merging to the deployed branch, or deploy from CI after the gate.
+
 ### Partial coverage: an artifact is not scanned, the lockfiles still are
 
 - `NO_BUILD_FOUND`: setup found no build step for the project, so the gate in the chosen
@@ -251,6 +280,15 @@ only in Bitbucket Pipelines and GitLab CI files.
   no binary target.
 
 ### Changes setup made that the user should know about
+
+- `COMPOSE_ADDED`: setup created compose targets in a new `shearbolt.yaml`, one per
+  compose file that pulls images, and lists them. Compose files that only run locally or
+  in tests do not ship, so ask the user whether each listed file does. For one that does
+  not, they remove its target (setup does not add it back) or, for a file that otherwise
+  ships, exclude single services. A compose-only project needs at least one target: if
+  none of its files ship, Shearbolt is the wrong tool for the repository.
+- `COMPOSE_NO_IMAGES`: a compose file pulls no image (only build services, or only
+  overrides), so it is not gated.
 
 - `TAG_ADDED`: setup adds a local tag `<repository>:shearbolt-<commit>` to each gated image
   build, and the gate scans that tag. It is never pushed. This makes the gate scan exactly

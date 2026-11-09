@@ -12,15 +12,21 @@ run uploads. The skill reads these paths:
 - `errors[].code`: why the scan is incomplete (table below).
 - `errors[].message`: what failed and what to do, written for the user.
 - `targets[].name`: the target's name in `shearbolt.yaml`.
-- `targets[].kind`: `image`, `dir`, `file` or `source`.
-- `targets[].ref`: the image reference, path or source tree that was scanned.
+- `targets[].kind`: `image`, `dir`, `file`, `source` or `compose`.
+- `targets[].ref`: the image reference, path or source tree that was scanned. For a compose target, the compose file, relative to the config's folder.
 - `targets[].status`: `scanned`, `skipped` or `error`.
 - `targets[].note`: why the target was skipped or failed, and how to build a skipped one. Absent when there is nothing to say.
+- `targets[].images[].ref`: for a compose target, the image reference of one pulled image.
+- `targets[].images[].line`: the line in the compose file where that image is set.
+- `targets[].images[].services`: the compose services that use that image.
+- `targets[].images[].status`: `scanned`, `skipped` or `error`, for that image alone.
+- `targets[].images[].note`: why that image was skipped or failed. Absent when there is nothing to say.
 - `findings[].id`: the vulnerability ID (CVE or GHSA).
 - `findings[].package`: the package name.
 - `findings[].version`: the installed version.
 - `findings[].type`: the package type, such as `npm`, `rust-crate`, `apk`, `deb`, `rpm` or `binary`.
 - `findings[].target`: the name of the target it was found in.
+- `findings[].image`: for a finding in a compose target, the image reference it was found in.
 - `findings[].locations`: where the package was found inside the target, such as a lockfile path or a file in the image.
 - `findings[].fixState`: `fixed`, `not-fixed`, `wont-fix` or `unknown`.
 - `findings[].fixVersions`: the versions that fix it, possibly one per release line.
@@ -42,11 +48,19 @@ file. The message says what to do; in short:
 | `ALL_SKIPPED` | Every target was skipped locally, so nothing was checked. Build an image or binary as the target notes say. |
 | `MISSING_SOURCE`, `NO_LOCKFILE`, `LOCKFILE_UNREAD`, `NO_PACKAGES`, `MISSING_LOCKFILE` | A target had nothing Grype could read: a missing directory, no lockfile, an unreadable lockfile, or an empty result. |
 | `STALE_DATABASE`, `SETUP` | The vulnerability database is too old, or Grype or its database could not be downloaded or verified. Usually network access. |
-| `SCAN_FAILED`, `BAD_OUTPUT`, `FILE_UNREADABLE`, `SOURCE_UNREADABLE`, `EVIDENCE`, `CANCELLED` | Grype failed (in CI mode, also for an image that is neither in the local Docker daemon nor pullable), a file could not be read, the evidence folder could not be written, or the scan was interrupted. |
+| `SCAN_FAILED`, `BAD_OUTPUT`, `FILE_UNREADABLE`, `SOURCE_UNREADABLE`, `EVIDENCE`, `CANCELLED` | Grype failed (in CI mode, also for an image that is neither in the local Docker daemon nor pullable), a file could not be read, the evidence folder could not be written, or the scan was interrupted. For a compose image in CI, the message may add that an image from a private registry needs a registry login before the `shearbolt` step: tell the user to add it. |
+| `COMPOSE_UNREADABLE` | The compose file is missing or cannot be read, locally too. Check the target's `compose` path in `shearbolt.yaml`. |
+| `COMPOSE_INVALID` | The file is not valid YAML or compose, has a bad image reference or platform, or the target's `exclude` names a service the file does not define. The message names the line. Fix the file, or the name in `exclude` if the service was renamed. No image of the target was scanned. |
+| `COMPOSE_UNSUPPORTED` | The file uses `include`, a service with `extends`, or a second YAML document, which Shearbolt does not read. No image of the target was scanned. Tell the user; the change to the file is theirs to decide. |
+| `COMPOSE_VARIABLE` | An image or platform variable is unset or empty, so that one service failed (the other images were still scanned). The variable must have a value where the gate runs: set it in the CI job, or add a default (`${VAR:-value}`) in the file. |
+| `COMPOSE_NO_IMAGES` | The compose file pulls no image: every service builds, has no image or is excluded. If the file pulls nothing that ships, the target is wrong for it, but removing a target is the user's decision. |
 
 Warnings do not block. `NOT_AUDITABLE` means a Rust binary was not built with
 `cargo auditable`, so its crates were checked from `Cargo.lock` instead.
 `EXCEPTION_EXPIRED` means an exception has expired and its finding counts again.
+`COMPOSE_BUILD_NOT_SCANNED` means a compose service builds its image, so that image is not
+scanned by the compose target (an `image` target for the CI build covers it).
+`COMPOSE_SERVICE_NO_IMAGE` means some services define no image.
 
 ## The upgrade for a package
 
@@ -178,6 +192,39 @@ user each command and file change, and run it only after they agree.
   digits and `._/:@-`, then propose
   `docker build -f <Dockerfile> -t <ref> <context>` with the Dockerfile and context the
   CI build uses, and run it only after the user agrees.
+
+### Compose images
+
+A finding with `findings[].image` set comes from a compose target (`targets[].kind` is
+`compose`). The image is pulled, not built by the project, so the operating-system and
+language packages in it come with the image: the fix is a different image, never an npm or
+Cargo change. The report's "Re-pin" line gives the same pin.
+
+1. Find the pin. The image is `findings[].image`, the compose file is the target's `ref`
+   (relative to the folder of the `shearbolt.yaml` you scanned with), and the line is
+   `line` of the entry in `targets[].images[]` with that `ref`. Name the file and line.
+   If the reference there is a variable (`${API_IMAGE}`), the pin is wherever that
+   variable is set, such as a CI variable or an env file. Say so and ask the user to
+   change it there. Do not edit the compose line.
+2. Propose a candidate, in this order:
+   1. the newest build of the same tag. For a tag, a fresh pull gets it. For a digest pin,
+      get the tag's current digest with `docker buildx imagetools inspect <repo:tag>`;
+   2. the newest patch tag of the same release line (`1.30.5` to `1.30.6`).
+
+   Moving to another release line (nginx 1.30, the stable line, to 1.31, the mainline) or
+   to a new major version is proposed only with the reason, for example that no build of
+   the current line has the fix, and only after asking. A digest pin stays a digest pin:
+   the new reference is `tag@sha256:<new digest>`. Never turn a pin into a floating tag,
+   or the reverse.
+3. With the user's agreement, edit the pin, then run `shearbolt scan --target <compose
+   target name>`. It scans the target exactly as the gate does, platform included. If the
+   finding is not cleared, revert the edit and say so. Report the block as fixed only
+   after a full scan passes (SKILL.md 4.4).
+4. Never add an exception, exclude a service or remove the target on your own. If no
+   candidate clears the finding, section "When there is no fix" applies.
+
+When some blocking findings of an image have no fix (`fixState` not `fixed`), a newer
+image may not clear them. Say that before the user changes anything.
 
 ## When there is no fix
 

@@ -11,9 +11,9 @@ metadata:
 # Shearbolt: set up the gate, fix what it blocks
 
 Shearbolt is a deployment gate. In CI it runs after the build and before any push or
-deploy, scans what is about to ship (container image, binary, source lockfiles) with
-Grype, and fails the job when a vulnerability is known exploited (CISA KEV), likely to be
-exploited (EPSS), or fixed upstream. Each project has a `shearbolt.yaml`, and
+deploy, scans what is about to ship (container image, binary, source lockfiles, the images
+a Docker Compose file pulls) with Grype, and fails the job when a vulnerability is known
+exploited (CISA KEV), likely to be exploited (EPSS), or fixed upstream. Each project has a `shearbolt.yaml`, and
 `shearbolt scan` runs the same check locally.
 
 You drive the `shearbolt` CLI and read its JSON. Never invent questions, answers, fields
