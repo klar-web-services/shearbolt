@@ -479,3 +479,19 @@ func TestReadsBackCompose(t *testing.T) {
 		t.Fatal("a bare item must not read back as a compose target")
 	}
 }
+
+// Compose targets are create-only, so the by-hand snippet of an existing config that cannot be
+// edited does not list them, and they get no note of their own.
+func TestConfigExistingUnsupportedOmitsCompose(t *testing.T) {
+	existing := "version: 1\ntargets: [{name: source, source: .}]\n"
+	r := repo(t, map[string]string{"shearbolt.yaml": existing})
+	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
+	planned := []config.Target{{Name: "web", Image: "${SHEARBOLT_IMAGE:-web:local}"}, {Name: "docker-compose", Compose: "docker-compose.yml"}, {Name: "source", Source: "."}}
+	ch, merged, _, _, notes := configChange(r, p, planned)
+	if ch != nil || merged != nil || !slices.Equal(codes(notes), []string{"UNSUPPORTED_EDIT"}) {
+		t.Fatalf("change %v, merged %v, notes %+v", ch, merged, notes)
+	}
+	if m := notes[0].Message; strings.Contains(m, "compose") || !strings.Contains(m, "image: ${SHEARBOLT_IMAGE:-web:local}") {
+		t.Fatalf("message: %q", m)
+	}
+}

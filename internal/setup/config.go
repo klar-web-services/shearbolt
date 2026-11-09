@@ -63,6 +63,7 @@ func imageVarOf(image string) string {
 func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change *plan.FileChange, merged []config.Target, names map[string]string, vars map[string]string, notes []plan.Note) {
 	file := configFile(p)
 	planned = sortTargets(normalizeTargets(planned))
+	listed := planned // the targets an UNSUPPORTED_EDIT snippet lists
 	unsupported := func(reason string) (*plan.FileChange, []config.Target, map[string]string, map[string]string, []plan.Note) {
 		names, vars := map[string]string{}, map[string]string{}
 		for _, t := range planned {
@@ -72,7 +73,7 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 		return nil, nil, names, vars, []plan.Note{{
 			Code: "UNSUPPORTED_EDIT",
 			Message: fmt.Sprintf("%s could not be written automatically (%s); add these targets to its targets list by hand:\n%s",
-				file, reason, strings.Join(targetItems(planned, "  "), "\n")),
+				file, reason, strings.Join(targetItems(listed, "  "), "\n")),
 			File: file,
 		}}
 	}
@@ -109,6 +110,8 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 			Mode:    0o644,
 		}, planned, names, vars, notes
 	}
+	// Compose targets are create-only: an existing file's by-hand snippet never lists them.
+	listed = slices.DeleteFunc(slices.Clone(planned), func(t config.Target) bool { return t.Kind() == "compose" })
 	if err != nil {
 		return unsupported("it cannot be read: " + err.Error())
 	}
