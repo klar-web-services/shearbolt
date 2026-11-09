@@ -52,7 +52,7 @@ type gateModel struct {
 	jobs     []plan.Job
 	ciFiles  []string
 	builds   []located // every build in job order; a duplicate Via build of one command is left out
-	owner    []string  // per build: its project when attributed without a question, else ""
+	owner    []string  // per build: its owner when attributed without a question, else ""
 	question []string  // per build: its build-project question ID, else ""
 }
 
@@ -143,8 +143,10 @@ func (m *gateModel) prefixOwner(dir string) string {
 // owner whose existing gate follows the build, else the first owner), then gate-job by project.
 // A gate-job question is asked for each project without an attributed build when there is an
 // editable job; its default is the first job that already holds the project's gate, otherwise
-// the first job. A compose-only project's gate-job asks which job checks its compose images, and
-// no build-project answer makes it inapplicable: no build can be chosen for that project.
+// the first job. A compose-only project's gate-job asks which job checks its compose images; its
+// default without an existing gate is the first job that pushes or deploys (then the first job),
+// so the deploy is gated. No build-project answer makes it inapplicable: no build can be chosen
+// for that project.
 func (m *gateModel) questions() []plan.Question {
 	var qs []plan.Question
 	if len(m.projects) > 1 {
@@ -216,6 +218,15 @@ func (m *gateModel) questions() []plan.Question {
 			q.Options = append(q.Options, plan.Option{Value: job.ID, Label: job.Label})
 			if g, _ := existingGate(job, p.Dir, m.firstPush(j)); def < 0 && g != nil {
 				def = j
+			}
+		}
+		if def < 0 && p.Ecosystem == "compose" {
+			// Compose images ship with the deploy: the first job that pushes or deploys.
+			for j := range m.jobs {
+				if m.firstPush(j) != never {
+					def = j
+					break
+				}
 			}
 		}
 		if def >= 0 {
@@ -357,9 +368,10 @@ type projectPlan struct {
 // place resolves attribution with the answers in values (from plan.Resolve) and places one
 // gate per gate job of each selected project (R3, R4 rules 1-4 and 7). Gates get version.
 // Builds attributed to selected projects contribute their notes, located at their CI command
-// when they carry no location. Without owners (only a compose-only project), every image or
-// binary build gets BUILD_NOT_GATED. With no editable job at all, no gate is placed and each
-// selected project gets NO_GATE_PLACED with snippet's text for every CI file.
+// when they carry no location. Without owners (only a compose-only project), every
+// non-RewriteOnly image or binary build gets BUILD_NOT_GATED. With no editable job at all, no
+// gate is placed and each selected project gets NO_GATE_PLACED with snippet's text for every CI
+// file.
 func (m *gateModel) place(values map[string]string, version string, snippet func(file string, g plan.Gate) string) *placement {
 	pl := &placement{projects: map[string]*projectPlan{}, attributed: map[string][]plan.Build{}}
 	selected := map[string]bool{}
@@ -396,14 +408,14 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 	}
 	if len(m.owners) == 0 {
 		for _, b := range m.builds {
-			if !b.RewriteOnly && (b.Kind == plan.BuildImage || b.Kind == plan.BuildBinary) {
-				pl.notes = append(pl.notes, plan.Note{
-					Code:    "BUILD_NOT_GATED",
-					Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list",
-					File:    b.Pos.File,
-					Line:    b.Pos.Line,
-				})
+			if b.RewriteOnly || b.Kind != plan.BuildImage && b.Kind != plan.BuildBinary {
+				continue
 			}
+			msg := "this build belongs to no npm or Rust project, so the gate does not scan what it builds"
+			if b.Kind == plan.BuildImage {
+				msg += "; if a compose service runs this image, add the service to its compose target's exclude list"
+			}
+			pl.notes = append(pl.notes, plan.Note{Code: "BUILD_NOT_GATED", Message: msg, File: b.Pos.File, Line: b.Pos.Line})
 		}
 	}
 
@@ -460,7 +472,7 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				pp.gates = append(pp.gates, gp)
 				msg := fmt.Sprintf("No build step was found for %s, so the gate in %s checks its lockfiles.", projectLabel(p), m.jobs[j].Label)
 				if p.Ecosystem == "compose" {
-					msg = fmt.Sprintf("%s has no build step, so the gate in %s checks its compose images.", projectLabel(p), m.jobs[j].Label)
+					msg = fmt.Sprintf("No build belongs to %s, so the gate in %s checks its compose images.", projectLabel(p), m.jobs[j].Label)
 				}
 				pl.notes = append(pl.notes, plan.Note{Code: "NO_BUILD_FOUND", Message: msg, File: gp.file})
 				pl.notes = append(pl.notes, notes...)

@@ -1142,13 +1142,14 @@ func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
 	}
 }
 
-// In a repository without an npm or Rust project, CI builds belong to no project and get
-// BUILD_NOT_GATED; the compose-only project's gate goes at the start of the chosen job, after
-// checkout and before the push.
+// In a repository without an npm or Rust project, CI builds belong to no project, and image and
+// binary builds get BUILD_NOT_GATED; the compose-only project's gate goes at the start of the
+// chosen job, after checkout and before the push.
 func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
 	projects := []plan.Project{composeOnly("compose.yml")}
-	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."), run("docker push ghcr.io/acme/app:1"))}
+	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."),
+		run("cargo build --release"), run("npm run build"), run("docker push ghcr.io/acme/app:1"))}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
 	if len(qs) != 1 || qs[0].ID != "gate-job:." || qs[0].Prompt != "Which job should check the compose images of repo?" || qs[0].UnlessChosen != nil {
 		t.Fatalf("questions: %+v", qs)
@@ -1163,16 +1164,54 @@ func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 	if got := planned["."]; len(got) != 1 || got[0].Name != "compose" || got[0].Compose != "compose.yml" || pl.projects["."].source != "" {
 		t.Fatalf("planned: %+v", got)
 	}
-	n := noteOf(t, pl.notes, "BUILD_NOT_GATED")
-	if n.File != ciFile || n.Line != 200 || countCode(pl.notes, "BUILD_NOT_GATED") != 1 ||
-		n.Message != "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list" {
-		t.Fatalf("BUILD_NOT_GATED: %+v", n)
+	// The image and the binary build get BUILD_NOT_GATED; the npm build (other) does not.
+	got := noteCodes(pl.notes, "BUILD_NOT_GATED")
+	want := []plan.Note{
+		{Code: "BUILD_NOT_GATED", File: ciFile, Line: 200, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list"},
+		{Code: "BUILD_NOT_GATED", File: ciFile, Line: 300, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds"},
 	}
-	if n := noteOf(t, pl.notes, "NO_BUILD_FOUND"); n.File != ciFile || n.Message != "repo has no build step, so the gate in ci.yml: deploy checks its compose images." {
+	if !slices.Equal(got, want) {
+		t.Fatalf("BUILD_NOT_GATED: %+v", got)
+	}
+	if n := noteOf(t, pl.notes, "NO_BUILD_FOUND"); n.File != ciFile || n.Message != "No build belongs to repo, so the gate in ci.yml: deploy checks its compose images." {
 		t.Fatalf("NO_BUILD_FOUND: %+v", n)
 	}
 	if len(pl.attributed["."]) != 0 {
 		t.Fatalf("attributed: %v", pl.attributed)
+	}
+}
+
+// A compose-only project's gate-job defaults to the first job that pushes or deploys, so the
+// deploy is gated; an existing gate of the project still decides first (re-runs keep it). Other
+// projects keep the first job.
+func TestGatesComposeGateJobDefault(t *testing.T) {
+	r := repo(t, map[string]string{"compose.yml": composeImage})
+	checkout := fstep{uses: "actions/checkout@v5"}
+	projects := []plan.Project{composeOnly("compose.yml"), npmProject("apps/a", "a")}
+	jobs := []plan.Job{
+		mkJob(t, r, "test", checkout, run("docker compose up -d")),
+		mkJob(t, r, "deploy", checkout, run("docker stack deploy -c compose.yml app")),
+	}
+	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:.", "gate-job:apps/a"}) {
+		t.Fatalf("questions: %v", got)
+	}
+	if qs[1].Default != jobs[1].ID || qs[2].Default != jobs[0].ID {
+		t.Fatalf("defaults: %s, %s", qs[1].Default, qs[2].Default)
+	}
+	gates, _, _ := planGates(t, r, projects[:1], jobs, nil)
+	if len(gates) != 1 || gates[0].Job != jobs[1].ID || gates[0].At.Step != 0 || gates[0].Before {
+		t.Fatalf("gates: %+v", gates)
+	}
+
+	// An existing gate of the compose-only project in test keeps it there.
+	jobs[0] = mkJob(t, r, "test", checkout, scanStep, run("docker compose up -d"))
+	qs = newGateModel(projects[:1], jobs, []string{ciFile}).questions()
+	if len(qs) != 1 || qs[0].Default != jobs[0].ID {
+		t.Fatalf("existing gate: %+v", qs)
+	}
+	if gates, _, _ = planGates(t, r, projects[:1], jobs, nil); len(gates) != 1 || gates[0].Job != jobs[0].ID || gates[0].Existing == nil {
+		t.Fatalf("existing gate: %+v", gates)
 	}
 }
 
@@ -1190,10 +1229,21 @@ func TestComputeNoDeploySeen(t *testing.T) {
 		t.Fatalf("NO_DEPLOY_SEEN: %+v", n)
 	}
 
-	// A stack deploy is a deploy.
-	root = writeTree(t, map[string]string{"compose.yml": composeImage, fakeCIFile: "test: docker compose up -d\ndeploy: docker stack deploy -c compose.yml app\n"})
-	if p = computeWith(t, root, ci, nil); p.Error != nil || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
-		t.Fatalf("stack deploy: %+v, notes %v", p.Error, codes(p.Notes))
+	// A stack deploy is a deploy, in any job: a later job without a push does not hide it.
+	for _, src := range []string{
+		"test: docker compose up -d\ndeploy: docker stack deploy -c compose.yml app\n",
+		"deploy: docker stack deploy -c compose.yml app\ntest: docker compose up -d\n",
+	} {
+		root = writeTree(t, map[string]string{"compose.yml": composeImage, fakeCIFile: src})
+		if p = computeWith(t, root, ci, nil); p.Error != nil || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
+			t.Fatalf("stack deploy %q: %+v, notes %v", src, p.Error, codes(p.Notes))
+		}
+	}
+
+	// A config setup cannot edit: the planned compose targets decide.
+	root = writeTree(t, map[string]string{"compose.yml": composeImage, "shearbolt.yaml": "version: 1\ntargets: []\n", fakeCIFile: "test: docker compose up -d\n"})
+	if p = computeWith(t, root, ci, nil); p.Error != nil || !hasCode(p.Notes, "UNSUPPORTED_EDIT") || countCode(p.Notes, "NO_DEPLOY_SEEN") != 1 {
+		t.Fatalf("unsupported config: %+v, notes %v", p.Error, codes(p.Notes))
 	}
 
 	// An npm project with a compose file gets it too; one without gets nothing.
