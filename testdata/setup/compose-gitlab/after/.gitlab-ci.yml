@@ -1,0 +1,17 @@
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  image: docker:27
+  variables:
+    SHEARBOLT_CACHE_DIR: $CI_PROJECT_DIR/.shearbolt/cache
+  cache:
+    - key: shearbolt
+      paths:
+        - .shearbolt/cache
+  script:
+    - (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
+    - '"$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"'
+    - docker stack deploy -c compose.yml acme
+  environment: production

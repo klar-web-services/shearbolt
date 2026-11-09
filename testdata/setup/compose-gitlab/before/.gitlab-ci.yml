@@ -1,0 +1,9 @@
+stages:
+  - deploy
+
+deploy:
+  stage: deploy
+  image: docker:27
+  script:
+    - docker stack deploy -c compose.yml acme
+  environment: production

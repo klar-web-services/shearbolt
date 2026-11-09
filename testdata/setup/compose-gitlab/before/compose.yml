@@ -1,0 +1,5 @@
+services:
+  api:
+    image: ghcr.io/acme/api:2.4.1@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  cache:
+    image: redis:7.4

@@ -51,7 +51,7 @@ func TestGolden(t *testing.T) {
 func golden(t *testing.T, fixture string) {
 	before := filepath.Join(fixture, "before")
 	afterDir := filepath.Join(fixture, "after")
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "repo")
 	copyTree(t, before, root)
 	answers := readAnswers(t, filepath.Join(fixture, "answers.txt"))
 

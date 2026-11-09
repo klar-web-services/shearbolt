@@ -123,7 +123,7 @@ func fixtureRepo(t *testing.T, name string) string {
 // copyFixture copies testdata/setup/<name>/before into a new temp dir, keeping executable bits.
 func copyFixture(t *testing.T, name string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "repo")
 	src := filepath.Join(setupFixtures, name, "before")
 	n := 0
 	err := filepath.WalkDir(src, func(p string, e fs.DirEntry, err error) error {

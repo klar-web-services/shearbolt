@@ -1,0 +1,8 @@
+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme
+version: 1
+project: repo
+targets:
+  - name: docker-compose
+    compose: docker-compose.yml
+  - name: test-compose
+    compose: test/compose.yml

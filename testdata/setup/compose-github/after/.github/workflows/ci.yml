@@ -1,0 +1,13 @@
+name: ci
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+      - run: ./test/run.sh

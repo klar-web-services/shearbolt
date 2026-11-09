@@ -1,0 +1,11 @@
+{
+  "questions": [
+    "gate-job:."
+  ],
+  "notes": [
+    "COMPOSE_ADDED",
+    "COMPOSE_NO_IMAGES",
+    "NO_BUILD_FOUND",
+    "NO_DEPLOY_SEEN"
+  ]
+}

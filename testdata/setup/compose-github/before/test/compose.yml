@@ -1,0 +1,7 @@
+services:
+  store:
+    image: minio/minio:RELEASE.2026-01-01T00-00-00Z@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  web:
+    image: nginx:1.27.3-alpine@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  fake:
+    build: ./fake

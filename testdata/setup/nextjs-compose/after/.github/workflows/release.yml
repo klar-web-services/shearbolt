@@ -1,0 +1,33 @@
+name: release
+on:
+  push:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/acme/shop
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The Dockerfile runs `next build` with output: "standalone".
+      - name: Build image
+        id: shearbolt-build
+        run: |
+          docker build \
+            --build-arg NEXT_TELEMETRY_DISABLED=1 \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:shearbolt-${{ github.sha }}" \
+            -t "$IMAGE:latest" \
+            .
+          echo shearbolt-image="$IMAGE:shearbolt-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        env:
+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}
+      - name: Log in
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Push image
+        run: |
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
