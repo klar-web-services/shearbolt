@@ -263,6 +263,26 @@ func TestPushes(t *testing.T) {
 	}
 }
 
+func TestComposePushesAndStackDeploys(t *testing.T) {
+	r := repo(t, nil)
+	for _, s := range []string{
+		"docker compose push", "docker compose -f prod.yml -p app push web",
+		"docker compose --profile ci --env-file .env.ci push", "docker-compose -f a.yml push",
+		"docker --context prod stack deploy -c compose.yml app", "docker stack deploy --compose-file compose.yml app",
+	} {
+		if cl := one(t, r, s); !cl.Push || len(cl.Builds) != 0 || cl.Gate != nil {
+			t.Errorf("%q: %+v", s, cl)
+		}
+	}
+	for _, s := range []string{
+		"docker compose up -d", "docker compose -f prod.yml pull", "docker compose build", "docker-compose up",
+	} {
+		if cl := one(t, r, s); cl.Push {
+			t.Errorf("%q is a push", s)
+		}
+	}
+}
+
 func TestGateCommands(t *testing.T) {
 	r := repo(t, nil)
 	install := "(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh"

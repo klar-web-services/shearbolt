@@ -461,28 +461,35 @@ type pushRule struct {
 	subs [][]string
 }
 
+// composeOpts are compose's options before the subcommand that take a value. They are also
+// docker's options for every subcommand (P3): that only makes positionals more accurate.
+var composeOpts = []string{"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--progress", "--parallel"}
+
 var pushRules = map[string]pushRule{
-	"docker":  {dockerGlobalOpts, [][]string{{"push"}, {"image", "push"}, {"manifest", "push"}, {"buildx", "imagetools", "create"}}},
-	"podman":  {nil, [][]string{{"push"}, {"manifest", "push"}}},
-	"buildah": {nil, [][]string{{"push"}, {"manifest", "push"}}},
-	"crane":   {nil, [][]string{{"push"}, {"copy"}, {"cp"}}},
-	"skopeo":  {nil, [][]string{{"copy"}}},
-	"npm":     {[]string{"--prefix", "-w", "--workspace", "--loglevel"}, [][]string{{"publish"}}},
-	"pnpm":    {[]string{"-C", "--dir", "--filter", "-F", "--loglevel"}, [][]string{{"publish"}}},
-	"bun":     {[]string{"--cwd"}, [][]string{{"publish"}}},
-	"yarn":    {[]string{"--cwd"}, [][]string{{"publish"}, {"npm", "publish"}}},
-	"cargo":   {[]string{"--color", "--config", "-Z", "-C"}, [][]string{{"publish"}}},
-	"gh":      {[]string{"-R", "--repo"}, [][]string{{"release", "create"}, {"release", "upload"}}},
-	"fly":     {[]string{"-a", "--app", "-c", "--config", "-t", "--access-token"}, [][]string{{"deploy"}}},
-	"vercel":  {[]string{"-t", "--token", "-S", "--scope", "--cwd", "-A", "--local-config", "-Q", "--global-config"}, [][]string{{"deploy"}}},
-	"railway": {[]string{"-s", "--service", "-e", "--environment"}, [][]string{{"up"}}},
+	"docker": {append(slices.Clone(dockerGlobalOpts), composeOpts...),
+		[][]string{{"push"}, {"image", "push"}, {"manifest", "push"}, {"buildx", "imagetools", "create"}, {"compose", "push"}, {"stack", "deploy"}}},
+	"docker-compose": {composeOpts, [][]string{{"push"}}},
+	"podman":         {nil, [][]string{{"push"}, {"manifest", "push"}}},
+	"buildah":        {nil, [][]string{{"push"}, {"manifest", "push"}}},
+	"crane":          {nil, [][]string{{"push"}, {"copy"}, {"cp"}}},
+	"skopeo":         {nil, [][]string{{"copy"}}},
+	"npm":            {[]string{"--prefix", "-w", "--workspace", "--loglevel"}, [][]string{{"publish"}}},
+	"pnpm":           {[]string{"-C", "--dir", "--filter", "-F", "--loglevel"}, [][]string{{"publish"}}},
+	"bun":            {[]string{"--cwd"}, [][]string{{"publish"}}},
+	"yarn":           {[]string{"--cwd"}, [][]string{{"publish"}, {"npm", "publish"}}},
+	"cargo":          {[]string{"--color", "--config", "-Z", "-C"}, [][]string{{"publish"}}},
+	"gh":             {[]string{"-R", "--repo"}, [][]string{{"release", "create"}, {"release", "upload"}}},
+	"fly":            {[]string{"-a", "--app", "-c", "--config", "-t", "--access-token"}, [][]string{{"deploy"}}},
+	"vercel":         {[]string{"-t", "--token", "-S", "--scope", "--cwd", "-A", "--local-config", "-Q", "--global-config"}, [][]string{{"deploy"}}},
+	"railway":        {[]string{"-s", "--service", "-e", "--environment"}, [][]string{{"up"}}},
 	"kubectl": {[]string{"-n", "--namespace", "--context", "--kubeconfig", "-s", "--server", "--cluster", "--user", "--token", "--as", "--as-group", "--request-timeout"},
 		[][]string{{"apply"}, {"set"}, {"rollout"}, {"create"}}},
 	"helm": {[]string{"-n", "--namespace", "--kube-context", "--kubeconfig", "--registry-config", "--repository-cache", "--repository-config", "--kube-apiserver", "--kube-token", "--kube-as-user"},
 		[][]string{{"upgrade"}, {"install"}}},
 }
 
-// isPush reports whether the command pushes or deploys (the fixed list of R2). vars resolves a
+// isPush reports whether the command pushes or deploys (the fixed list of R2, including compose
+// pushes and stack deploys). vars resolves a
 // program written as a Makefile variable.
 func isPush(args []shell.Word, vars map[string]string) bool {
 	if len(args) == 0 {
