@@ -11,7 +11,7 @@ cd your-project && shearbolt setup
 
 `shearbolt: command not found`? The installer put it in `~/.local/bin`, which may not be on your `PATH` yet (the installer says so). Run `export PATH="$HOME/.local/bin:$PATH"`, add that line to your shell profile, then run setup again.
 
-Setup finds your npm or Rust project and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
+Setup finds your npm or Rust project (or Docker Compose files) and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
 
 With Claude Code: `shearbolt skill install`, then type `/shearbolt setup`.
 
@@ -37,7 +37,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 | Where | What setup does |
 |---|---|
-| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, plus a target for each image or Rust binary your CI builds. |
+| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, plus a target for each image or Rust binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
 | GitHub Actions | Adds a `shearbolt` step (`uses: klar-web-services/shearbolt@v1`) after the build. A `docker/build-push-action` step that pushes is split: it builds with `push: false` and `load: true`, `shearbolt` scans, then a new step runs `docker push` for the same tags, so you push exactly what was scanned. Other repositories can use the Action only while this repository is public ([note](#supported-projects-and-ci)). |
 | Bitbucket Pipelines, GitLab CI | Adds two commands to the step or job that builds, between the build and the push: install a pinned Shearbolt, then run `shearbolt scan --ci`. A combined `docker build … && docker push …` line is split around them. Adds a CI cache for the vulnerability database. |
 | Image builds | Adds a local tag, `<image>:shearbolt-<commit>`, and passes it to the gate. The gate scans that tag, and it is never pushed. |
@@ -168,8 +168,9 @@ The first scan downloads the pinned Grype release, verified by its SHA-256, and 
 |---|---|
 | npm | npm, pnpm, Yarn and Bun lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, text `bun.lock`); Next.js apps |
 | Rust | Cargo projects with a `Cargo.lock`; release binaries built with cargo-auditable |
+| Docker Compose | Repositories that deploy with Docker Compose: the images their compose files pull |
 | CI | GitHub Actions, Bitbucket Pipelines, GitLab CI |
-| Targets | Container images (local Docker or registry), binaries and other single files, directories, source trees |
+| Targets | Container images (local Docker or registry), images pulled by Docker Compose files, binaries and other single files, directories, source trees |
 
 Scanning works for anything Grype understands; supported means setup support and tests.
 
@@ -209,12 +210,34 @@ targets:
 | `image` | A container image: from the local Docker daemon when it is there, otherwise from the registry. | Error |
 | `dir` | Everything in a directory, such as a built application bundle. | Error |
 | `file` | One file: a binary or an archive. | Error, unless `lockfileFallback` applies |
+| `compose` | Each image a Docker Compose file pulls (services that build their image are not scanned). `exclude` lists service names to leave out. See [Docker Compose](#docker-compose). | Error |
 | `source` | The lockfiles and manifests in a source tree, always without `node_modules/`, `.git/`, `target/` and `.shearbolt/`. `exclude` lists more folders to leave out, as paths relative to the tree (not globs). | Error when the tree has no lockfile, or Grype cannot read one |
 
 - `${VAR}` and `${VAR:-default}` in target fields come from the environment. A `${VAR}` without a default that is unset or empty is an error. Setup's image targets use this: the CI sets `SHEARBOLT_IMAGE` to the tag it just built.
 - After expansion, an `image` reference may contain only letters, digits and `._/:@-`, and must start with a letter or digit.
 - Paths are relative to the config file.
 - Unknown fields, duplicate target names and invalid values are errors. The message names the file and, for YAML mistakes, the line.
+
+### Docker Compose
+
+A `compose` target scans every image a compose file pulls, each like an `image` target. Setup writes one for each compose file that pulls images, so a repository that deploys with Docker Compose is gated even without an npm or Rust project.
+
+```yaml
+targets:
+  - name: docker-compose
+    compose: docker-compose.yml   # path relative to shearbolt.yaml
+    exclude: [app]                # optional: services not to scan, by name
+  - name: test-compose
+    compose: test/compose.yml
+```
+
+- A service that builds its image (`build:`) is not scanned: a warning says so. If CI builds and gates that image with an `image` target, add its service to `exclude`. A name the file does not define is an error.
+- `image:` and `platform:` may use `${VAR}`, `${VAR:-default}` and the other Compose forms. Values come only from the environment, never from `.env` files, so set them where `shearbolt scan` runs. An unset variable without a default fails that service; the others are still scanned.
+- Set `platform:` on a service when production runs another architecture than CI. Without it, the image for the machine that runs the scan is checked.
+- `extends`, `include` and a second YAML document in one file are not supported yet: the scan fails (`COMPOSE_UNSUPPORTED`) instead of skipping what it cannot read. Exclude an `extends` service to scan the rest. Profiles are ignored, so every service is read.
+- A blocked image gets a "Re-pin" line in the report with the file, line and services. Move the pin to a newer build of the tag, or a newer tag, then scan again. A digest pin stays a digest pin.
+- Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests.
+- Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`, and, in a repository with only compose files, at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
 
 ### CLI
 
