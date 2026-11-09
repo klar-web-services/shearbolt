@@ -217,3 +217,29 @@ func TestScanImportsTheSameArchiveOnce(t *testing.T) {
 		t.Fatalf("database differs between the importing and the skipping scan: %+v vs %+v", runs[0].Database, runs[1].Database)
 	}
 }
+
+func TestScanTargetFlagScansOnlyTheComposeTarget(t *testing.T) {
+	dir := projectDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services:\n  web:\n    image: nginx:1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(dir, "shearbolt.yaml")
+	yaml := "version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\n  - name: stack\n    compose: docker-compose.yml\n"
+	if err := os.WriteFile(cfg, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(t.TempDir(), "calls")
+	d := testDeps(t, map[string]string{"FAKE_GRYPE_CALLS": calls, "FAKE_GRYPE_JSON": testutil.GrypeJSON(time.Now().UTC())})
+	code, out, errb := scanCmd(t, d, "--config", cfg, "--target", "stack", "--json", "--output-dir", evidence(t))
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	data, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 || strings.Contains(string(data), "dir:") || !strings.Contains(lines[0], "nginx:1.27") {
+		t.Fatalf("grype calls:\n%s", data)
+	}
+}

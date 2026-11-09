@@ -37,6 +37,7 @@ type Options struct {
 	Scanner    Scanner
 	SetupError error // Grype could not be prepared; recorded, nothing is scanned
 	HasImage   DockerInspector
+	Env        config.Env // compose variables; nil means os.LookupEnv
 	DBArchive  string
 	Now        func() time.Time
 }
@@ -64,6 +65,9 @@ func Run(ctx context.Context, o Options) *model.Run {
 	}
 	if o.HasImage == nil {
 		o.HasImage = DockerHasImage
+	}
+	if o.Env == nil {
+		o.Env = os.LookupEnv
 	}
 	cfg := o.Config
 	start := o.Now().UTC()
@@ -120,6 +124,10 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 	i := len(s.run.Targets)
 	kind, ref := t.Kind(), t.Ref()
 	s.run.Targets = append(s.run.Targets, model.TargetResult{Name: t.Name, Kind: kind, Ref: ref, Exclude: t.Exclude, Status: "scanned"})
+	if kind == "compose" {
+		s.scanCompose(ctx, i, t)
+		return
+	}
 	req := s.request(t.Name)
 	var lockfiles []string
 	switch kind {
@@ -176,7 +184,8 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 		s.targetError(i, "SCAN_FAILED", err.Error())
 		return
 	}
-	res, inv, err := s.readOutputs(i, req)
+	s.run.Targets[i].Raw = append(s.run.Targets[i].Raw, s.raw(req)...)
+	res, inv, err := s.readOutputs(req)
 	if err != nil {
 		s.targetError(i, "BAD_OUTPUT", err.Error())
 		return
@@ -245,7 +254,8 @@ func (s *state) resolveFallbacks(ctx context.Context) {
 			s.targetError(sc.index, "SCAN_FAILED", err.Error())
 			continue
 		}
-		res, inv, err := s.readOutputs(sc.index, req)
+		s.run.Targets[sc.index].Raw = append(s.run.Targets[sc.index].Raw, s.raw(req)...)
+		res, inv, err := s.readOutputs(req)
 		if err != nil {
 			s.targetError(sc.index, "BAD_OUTPUT", err.Error())
 			continue
@@ -272,8 +282,12 @@ func (s *state) coveringSource(lock string) string {
 	return ""
 }
 
-func (s *state) readOutputs(i int, req grype.Request) (*grype.Result, grype.Inventory, error) {
-	s.run.Targets[i].Raw = append(s.run.Targets[i].Raw, s.rel(req.RawJSON), s.rel(req.SBOM))
+// raw lists a request's output files as recorded in run.json.
+func (s *state) raw(req grype.Request) []string {
+	return []string{s.rel(req.RawJSON), s.rel(req.SBOM)}
+}
+
+func (s *state) readOutputs(req grype.Request) (*grype.Result, grype.Inventory, error) {
 	data, err := os.ReadFile(req.RawJSON)
 	if err != nil {
 		return nil, grype.Inventory{}, fmt.Errorf("Grype wrote no report: %w", err)

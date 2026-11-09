@@ -36,6 +36,7 @@ type Finding struct {
 	ID             string   `json:"id"`
 	Aliases        []string `json:"aliases"`
 	Target         string   `json:"target"`
+	Image          string   `json:"image,omitempty"` // the image reference, for compose findings
 	Package        string   `json:"package"`
 	Version        string   `json:"version"`
 	Type           string   `json:"type"`
@@ -60,10 +61,23 @@ type Identity struct {
 	RepoDigests    []string `json:"repoDigests,omitempty"`
 }
 
+// ImageResult is one pulled image of a compose target.
+type ImageResult struct {
+	Ref      string   `json:"ref"`
+	Platform string   `json:"platform,omitempty"`
+	Services []string `json:"services"`
+	Line     int      `json:"line"`
+	Status   string   `json:"status"` // scanned | skipped | error
+	Note     string   `json:"note,omitempty"`
+	Identity Identity `json:"identity"`
+	Packages int      `json:"packages"`
+	Raw      []string `json:"raw,omitempty"`
+}
+
 // TargetResult is the outcome for one configured target.
 type TargetResult struct {
 	Name     string   `json:"name"`
-	Kind     string   `json:"kind"`
+	Kind     string   `json:"kind"` // image | source | dir | file | compose
 	Ref      string   `json:"ref"`
 	Exclude  []string `json:"exclude,omitempty"`
 	Status   string   `json:"status"` // scanned | skipped | error
@@ -71,6 +85,8 @@ type TargetResult struct {
 	Identity Identity `json:"identity"`
 	Packages int      `json:"packages"`
 	Raw      []string `json:"raw,omitempty"`
+	// Images are the pulled images of a compose target.
+	Images []ImageResult `json:"images,omitempty"`
 }
 
 // Database describes the Grype vulnerability database a run used.

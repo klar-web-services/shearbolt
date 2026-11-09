@@ -55,7 +55,8 @@ func (s *state) mergeNested(ctx context.Context, i int, name, ref string, exclud
 			s.targetError(i, "SCAN_FAILED", fmt.Sprintf("%s: %v", lf, err))
 			return false
 		}
-		sub, subInv, err := s.readOutputs(i, req)
+		s.run.Targets[i].Raw = append(s.run.Targets[i].Raw, s.raw(req)...)
+		sub, subInv, err := s.readOutputs(req)
 		if err != nil {
 			s.targetError(i, "BAD_OUTPUT", fmt.Sprintf("%s: %v", lf, err))
 			return false

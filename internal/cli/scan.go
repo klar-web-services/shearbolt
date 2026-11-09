@@ -134,7 +134,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts := scan.Options{
-		Config: cfg, BaseDir: cwd, OutputDir: out, CIMode: *ciFlag || isCI(d.getenv("CI")),
+		Config: cfg, BaseDir: cwd, OutputDir: out, CIMode: *ciFlag || isCI(d.getenv("CI")), Env: env,
 		DBArchive: d.getenv("SHEARBOLT_DB_ARCHIVE"), Now: d.now,
 	}
 	if opts.DBArchive != "" {
