@@ -20,6 +20,9 @@ var upgradeTypes = map[string]bool{"npm": true, "rust-crate": true}
 // Upgrades returns at most one Upgrade per (Type, Package) of the blocking findings, by D5.
 // Sorted by Count descending, then Package.
 //
+// Findings with an Image (inside a compose image) are skipped: the fix is to re-pin the image,
+// which Repins reports instead.
+//
 // A package gets one only when it is an npm package or a Rust crate, every one of its blocking
 // findings is fixed with at least one fix version, every fix and installed version is semver,
 // and the highest fix version is spelled one way only and is above every installed version.
@@ -29,6 +32,9 @@ func Upgrades(blocked []model.Finding) []Upgrade {
 	groups := map[key][]model.Finding{}
 	var keys []key
 	for _, f := range blocked {
+		if f.Image != "" {
+			continue
+		}
 		k := key{f.Type, f.Package}
 		if _, seen := groups[k]; !seen {
 			keys = append(keys, k)

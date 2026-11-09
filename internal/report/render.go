@@ -51,14 +51,18 @@ func Markdown(r *model.Run) string {
 	fmt.Fprintf(&b, "Project `%s` · %s · %s\n\n", code(r.Project), plural(len(r.Targets), "target", "targets"), databaseLine(r))
 	if len(blocked) > 0 {
 		b.WriteString("#### Must fix before deploying\n\n")
-		if ups := Upgrades(blocked); len(ups) > 0 {
-			for _, u := range ups {
-				if u.Count == 1 {
-					fmt.Fprintf(&b, "- Upgrade %s to %s to clear its blocking vulnerability.\n", md(u.Package), md(u.Version))
-				} else {
-					fmt.Fprintf(&b, "- Upgrade %s to %s to clear all %d of its blocking vulnerabilities.\n", md(u.Package), md(u.Version), u.Count)
-				}
+		ups, repins := Upgrades(blocked), Repins(r, blocked)
+		for _, u := range ups {
+			if u.Count == 1 {
+				fmt.Fprintf(&b, "- Upgrade %s to %s to clear its blocking vulnerability.\n", md(u.Package), md(u.Version))
+			} else {
+				fmt.Fprintf(&b, "- Upgrade %s to %s to clear all %d of its blocking vulnerabilities.\n", md(u.Package), md(u.Version), u.Count)
 			}
+		}
+		for _, p := range repins {
+			b.WriteString(repinMarkdown(p))
+		}
+		if len(ups)+len(repins) > 0 {
 			b.WriteString("\n")
 		}
 		b.WriteString("| Package | Installed → fixed | Vulnerability | Why it blocks | Severity | Where |\n|---|---|---|---|---|---|\n")
@@ -80,10 +84,14 @@ func Markdown(r *model.Run) string {
 			skipped = append(skipped, t)
 		}
 	}
-	if len(skipped) > 0 {
+	skippedIm := skippedImages(r)
+	if len(skipped)+len(skippedIm) > 0 {
 		b.WriteString("#### Skipped targets\n\n")
 		for _, t := range skipped {
 			fmt.Fprintf(&b, "- `%s`: %s\n", code(t.Name), md(t.Note))
+		}
+		for _, s := range skippedIm {
+			fmt.Fprintf(&b, "- `%s (%s)`: %s\n", code(s.Target), code(s.Image), md(s.Note))
 		}
 		b.WriteString("\n")
 	}
@@ -138,7 +146,8 @@ func Text(r *model.Run, color bool) string {
 			fmt.Fprintf(&b, "  %s %s → %s  %s (%s)  [%s]\n", clean(f.Package), clean(f.Version), clean(fixedText(f)), clean(f.ID), clean(f.Severity), clean(Where(f)))
 			fmt.Fprintf(&b, "      %s\n", clean(strings.Join(f.Decision.Reasons, "; ")))
 		}
-		if ups := Upgrades(blocked); len(ups) > 0 {
+		ups, repins := Upgrades(blocked), Repins(r, blocked)
+		if len(ups)+len(repins) > 0 {
 			b.WriteString("\nTo unblock:\n")
 			for _, u := range ups {
 				clears := "to clear it"
@@ -146,6 +155,9 @@ func Text(r *model.Run, color bool) string {
 					clears = fmt.Sprintf("to clear all %d", u.Count)
 				}
 				fmt.Fprintf(&b, "  upgrade %s to %s %s\n", clean(u.Package), clean(u.Version), clears)
+			}
+			for _, p := range repins {
+				b.WriteString(repinText(p))
 			}
 		}
 	}
@@ -159,6 +171,9 @@ func Text(r *model.Run, color bool) string {
 		if t.Status == "skipped" {
 			fmt.Fprintf(&b, "\n%s %s: %s\n", paint("33", "Skipped"), clean(t.Name), clean(t.Note))
 		}
+	}
+	for _, s := range skippedImages(r) {
+		fmt.Fprintf(&b, "\n%s %s (%s): %s\n", paint("33", "Skipped"), clean(s.Target), clean(s.Image), clean(s.Note))
 	}
 	for _, e := range r.Errors {
 		fmt.Fprintf(&b, "\n%s %s%s: %s\n", paint("31", "Error"), clean(e.Code), clean(targetSuffix(e.Target)), clean(e.Message))
@@ -177,10 +192,19 @@ func Text(r *model.Run, color bool) string {
 
 // Where names the target and the first location of a finding.
 func Where(f model.Finding) string {
-	if len(f.Locations) == 0 {
-		return f.Target
+	name := f.Target
+	if f.Image != "" {
+		name += ": " + shortImage(f.Image)
 	}
-	w := f.Target + ": " + f.Locations[0]
+	if len(f.Locations) == 0 {
+		return name
+	}
+	w := name
+	if f.Image == "" {
+		w += ": " + f.Locations[0]
+	} else {
+		w += ", " + f.Locations[0]
+	}
 	if extra := len(f.Locations) - 1; extra > 0 {
 		w += fmt.Sprintf(" (+%d more)", extra)
 	}
