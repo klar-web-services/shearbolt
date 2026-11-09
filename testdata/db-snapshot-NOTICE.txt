@@ -1,0 +1,61 @@
+Shearbolt test vulnerability database
+=====================================
+
+This archive is a Grype vulnerability database (SQLite) that only Shearbolt's own tests use. It is a
+frozen test fixture: do not use it to judge real software, whose known vulnerabilities change daily.
+
+How it was made: .github/workflows/test-db.yml in https://github.com/klar-web-services/shearbolt ran
+grype-db (Anchore, Apache-2.0) on Anchore's processed vunnel data for the four sources below.
+grype-db converts the records into Grype's database format. That changes their structure and
+derives some fields, for example fix versions from NVD configurations. No record was edited by hand.
+
+Sources and terms
+-----------------
+
+The database contains data from these four sources only.
+
+1. GitHub Advisory Database, by GitHub, Inc. and its contributors
+   https://github.com/advisories (https://github.com/github/advisory-database)
+   License: Creative Commons Attribution 4.0 International (CC BY 4.0),
+   https://creativecommons.org/licenses/by/4.0/
+   Modified as described above.
+
+2. National Vulnerability Database (NVD), NIST
+   https://nvd.nist.gov/
+   This product uses data from the NVD API but is not endorsed or certified by the NVD.
+   CVE records in it are covered by the CVE Terms of Use below.
+
+3. Known Exploited Vulnerabilities Catalog, CISA
+   https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+   License: CC0 1.0 Universal. Its use does not imply endorsement by CISA or DHS.
+
+4. Exploit Prediction Scoring System (EPSS), FIRST
+   https://www.first.org/epss/
+   Published freely by FIRST, which asks for attribution: EPSS, FIRST.org.
+
+CVE Terms of Use
+----------------
+
+CVE® is a registered trademark of The MITRE Corporation. Copyright © The MITRE Corporation.
+
+CVE Usage: MITRE hereby grants you a perpetual, worldwide, non-exclusive,
+no-charge, royalty-free, irrevocable copyright license to reproduce, prepare
+derivative works of, publicly display, publicly perform, sublicense, and
+distribute Common Vulnerabilities and Exposures (CVE®). Any copy you make for
+such purposes is authorized provided that you reproduce MITRE's copyright
+designation and this license in any such copy.
+
+DISCLAIMERS
+
+ALL DOCUMENTS AND THE INFORMATION CONTAINED THEREIN PROVIDED BY MITRE ARE
+PROVIDED ON AN "AS IS" BASIS AND THE CONTRIBUTOR, THE ORGANIZATION HE/SHE
+REPRESENTS OR IS SPONSORED BY (IF ANY), THE MITRE CORPORATION, ITS BOARD OF
+TRUSTEES, OFFICERS, AGENTS, AND EMPLOYEES, DISCLAIM ALL WARRANTIES, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTY THAT THE USE OF THE
+INFORMATION THEREIN WILL NOT INFRINGE ANY RIGHTS OR ANY IMPLIED WARRANTIES OF
+MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+
+No warranty
+-----------
+
+The sources and Shearbolt's maintainers provide this data "as is", without warranty of any kind.
