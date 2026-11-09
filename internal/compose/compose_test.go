@@ -69,11 +69,13 @@ func TestParseAnchorsAndMergeKeys(t *testing.T) {
 	f := parse(t, `x-base: &base {image: nginx:1.27, restart: always}
 services:
   web: {<<: *base}
-  api: {<<: *base, image: "api:${TAG}"}
+  api:
+    <<: *base
+    image: "api:${TAG}"
 `)
 	wantImages(t, f, []Image{
 		{Ref: "nginx:1.27", Services: []string{"web"}, Line: 3},
-		{Ref: "api:1.2", Services: []string{"api"}, Line: 4},
+		{Ref: "api:1.2", Services: []string{"api"}, Line: 6},
 	})
 
 	t.Run("sequence merge takes a before b", func(t *testing.T) {
@@ -93,6 +95,14 @@ services:
 `)
 		wantImages(t, f, []Image{{Ref: "nginx:1.27", Services: []string{"web"}, Line: 3}})
 	})
+}
+
+func TestParseServiceAlias(t *testing.T) {
+	f := parse(t, `x-t: &t {image: nginx:1}
+services:
+  web: *t
+`)
+	wantImages(t, f, []Image{{Ref: "nginx:1", Services: []string{"web"}, Line: 3}})
 }
 
 func TestParseBuildServices(t *testing.T) {
@@ -146,8 +156,8 @@ func TestParseExtends(t *testing.T) {
     image: postgres:16
 `
 	f := parse(t, yml)
-	if f.Fatal == nil || f.Fatal.Code != "COMPOSE_UNSUPPORTED" || !strings.Contains(f.Fatal.Message, "exclude: [web]") {
-		t.Fatalf("Fatal = %+v, want COMPOSE_UNSUPPORTED naming exclude: [web]", f.Fatal)
+	if f.Fatal == nil || f.Fatal.Code != "COMPOSE_UNSUPPORTED" || f.Fatal.Line != 5 || !strings.Contains(f.Fatal.Message, "exclude: [web]") {
+		t.Fatalf("Fatal = %+v, want COMPOSE_UNSUPPORTED at line 5 naming exclude: [web]", f.Fatal)
 	}
 	f = parse(t, yml, "web")
 	wantImages(t, f, []Image{
@@ -165,32 +175,56 @@ func TestParseExclude(t *testing.T) {
 	}
 }
 
+func wantVariableProblem(t *testing.T, f *File, service string, line int, vars ...string) Problem {
+	t.Helper()
+	if len(f.Missing) != 1 {
+		t.Fatalf("Missing = %+v, want one problem", f.Missing)
+	}
+	p := f.Missing[0]
+	if p.Code != "COMPOSE_VARIABLE" || p.Service != service || p.Line != line ||
+		!strings.Contains(p.Message, "service "+service+" needs "+strings.Join(vars, ", ")) ||
+		!strings.Contains(p.Message, "exclude: ["+service+"]") {
+		t.Errorf("problem = %+v", p)
+	}
+	return p
+}
+
 func TestParseVariables(t *testing.T) {
 	t.Run("missing in image", func(t *testing.T) {
-		f := parse(t, "services:\n  app:\n    image: \"ghcr.io/acme/app:${GIT_SHA}\"\n")
+		f := parse(t, "services:\n  app:\n    image: \"ghcr.io/acme/app:${GIT_SHA}\"\n  web:\n    image: nginx:1\n")
+		p := wantVariableProblem(t, f, "app", 3, "GIT_SHA")
+		if !strings.Contains(p.Message, "GIT_SHA, which is not set or empty. Set it where") {
+			t.Errorf("message = %q", p.Message)
+		}
+		wantImages(t, f, []Image{{Ref: "nginx:1", Services: []string{"web"}, Line: 5}})
+		if !f.Pulls() {
+			t.Error("Pulls() = false, want true")
+		}
+	})
+	t.Run("only missing", func(t *testing.T) {
+		f := parse(t, "services:\n  app:\n    image: \"app:${GIT_SHA}\"\n")
 		if len(f.Images) != 0 || !f.Pulls() {
 			t.Fatalf("images = %v, Pulls() = %v, want none and true", f.Images, f.Pulls())
 		}
-		if len(f.Missing) != 1 {
-			t.Fatalf("Missing = %+v, want one problem", f.Missing)
-		}
-		p := f.Missing[0]
-		if p.Code != "COMPOSE_VARIABLE" || p.Service != "app" || p.Line != 3 ||
-			!strings.Contains(p.Message, "GIT_SHA") || !strings.Contains(p.Message, "exclude: [app]") {
-			t.Errorf("problem = %+v", p)
+	})
+	t.Run("two variables", func(t *testing.T) {
+		f := parse(t, "services:\n  app:\n    image: \"app:${A}-${B}\"\n")
+		p := wantVariableProblem(t, f, "app", 3, "A", "B")
+		if !strings.Contains(p.Message, "which are not set or empty. Set them where") {
+			t.Errorf("message = %q", p.Message)
 		}
 	})
 	t.Run("question mark message", func(t *testing.T) {
 		f := parse(t, "services:\n  app:\n    image: \"app:${X:?set X}\"\n")
-		if len(f.Missing) != 1 || !strings.Contains(f.Missing[0].Message, "set X") {
-			t.Fatalf("Missing = %+v, want message with %q", f.Missing, "set X")
+		p := wantVariableProblem(t, f, "app", 3, "X")
+		if !strings.Contains(p.Message, "set X") {
+			t.Errorf("message = %q, want it to hold %q", p.Message, "set X")
 		}
 	})
 	t.Run("missing in platform", func(t *testing.T) {
 		f := parse(t, "services:\n  app:\n    image: app:1\n    platform: ${PLAT}\n")
-		if len(f.Images) != 0 || len(f.Missing) != 1 || !strings.Contains(f.Missing[0].Message, "PLAT") {
-			t.Fatalf("images = %v, Missing = %+v", f.Images, f.Missing)
-		}
+		wantImages(t, f, nil)
+		wantVariableProblem(t, f, "app", 3, "PLAT")
 	})
 }
 
@@ -260,4 +294,60 @@ func TestRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantImages(t, f, []Image{{Ref: "nginx:1", Services: []string{"web"}, Line: 3}})
+}
+
+func TestParseMultipleDocuments(t *testing.T) {
+	f := parse(t, "services:\n  web:\n    image: nginx:1\n---\nservices:\n  db:\n    image: postgres:16\n")
+	if f.Fatal == nil || f.Fatal.Code != "COMPOSE_UNSUPPORTED" || !strings.Contains(f.Fatal.Message, "more than one YAML document") {
+		t.Fatalf("Fatal = %+v, want COMPOSE_UNSUPPORTED about several documents", f.Fatal)
+	}
+	if len(f.Images) != 0 {
+		t.Errorf("images = %v, want none", f.Images)
+	}
+	for name, yml := range map[string]string{"comment only": "# nothing here\n", "document marker": "---\nservices:\n  web:\n    image: nginx:1\n"} {
+		f := parse(t, yml)
+		if f.Fatal != nil {
+			t.Errorf("%s: unexpected fatal problem: %+v", name, *f.Fatal)
+		}
+	}
+	if f := parse(t, "# nothing here\n"); !reflect.DeepEqual(f, &File{}) {
+		t.Errorf("comment-only file = %+v, want empty", f)
+	}
+}
+
+func TestParseProblemMessagesCarryNoLine(t *testing.T) {
+	t.Run("yaml syntax", func(t *testing.T) {
+		f := parse(t, "services:\n  web: [\n    a: }")
+		if f.Fatal == nil || f.Fatal.Code != "COMPOSE_INVALID" || f.Fatal.Line == 0 {
+			t.Fatalf("Fatal = %+v, want COMPOSE_INVALID with a line", f.Fatal)
+		}
+		if strings.Contains(f.Fatal.Message, "line ") || strings.Contains(f.Fatal.Message, "yaml: ") {
+			t.Errorf("message = %q, want no line prefix", f.Fatal.Message)
+		}
+	})
+	t.Run("merge key", func(t *testing.T) {
+		f := parse(t, "services:\n  web:\n    <<: 5\n    image: a:1\n")
+		if f.Fatal == nil || f.Fatal.Code != "COMPOSE_INVALID" || f.Fatal.Line != 3 {
+			t.Fatalf("Fatal = %+v, want COMPOSE_INVALID at line 3", f.Fatal)
+		}
+		if strings.Contains(f.Fatal.Message, "line ") || !strings.HasPrefix(f.Fatal.Message, "service web: ") {
+			t.Errorf("message = %q", f.Fatal.Message)
+		}
+	})
+}
+
+func TestParsePlatformLines(t *testing.T) {
+	tests := map[string]string{
+		"invalid":    "services:\n  web:\n    image: a:1\n    platform: Linux/AMD64\n",
+		"not string": "services:\n  web:\n    image: a:1\n    platform: [x]\n",
+		"nested":     "services:\n  web:\n    image: a:1\n    platform: \"${A:-${B}}\"\n",
+	}
+	for name, yml := range tests {
+		t.Run(name, func(t *testing.T) {
+			f := parse(t, yml)
+			if f.Fatal == nil || f.Fatal.Code != "COMPOSE_INVALID" || f.Fatal.Line != 4 {
+				t.Fatalf("Fatal = %+v, want COMPOSE_INVALID at line 4", f.Fatal)
+			}
+		})
+	}
 }

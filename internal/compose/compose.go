@@ -3,11 +3,15 @@
 package compose
 
 import (
+	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -53,6 +57,7 @@ var (
 	// whitespace or shell metacharacters into a command line, or start an option.
 	imagePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 	platformPattern = regexp.MustCompile(`^[a-z0-9_]+/[a-z0-9_]+(/[a-z0-9_]+)?$`)
+	yamlSyntax      = regexp.MustCompile(`^yaml: line (\d+): (.+)$`)
 )
 
 // FileName reports whether name is a compose file name setup looks for: compose.yaml,
@@ -75,8 +80,17 @@ func Parse(data []byte, env Env, exclude []string) *File {
 		return &File{Fatal: &Problem{Code: code, Line: line, Message: fmt.Sprintf(format, a...)}}
 	}
 	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return fatal("COMPOSE_INVALID", 0, "the file is not valid YAML: %v", err)
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
+		line, msg := 0, strings.TrimPrefix(err.Error(), "yaml: ")
+		if m := yamlSyntax.FindStringSubmatch(err.Error()); m != nil {
+			line, _ = strconv.Atoi(m[1])
+			msg = m[2]
+		}
+		return fatal("COMPOSE_INVALID", line, "the file is not valid YAML: %s", msg)
+	}
+	if err := dec.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
+		return fatal("COMPOSE_UNSUPPORTED", 0, "the file holds more than one YAML document (separated by ---), which Compose merges and Shearbolt does not follow yet")
 	}
 	root := &yaml.Node{Kind: yaml.MappingNode}
 	if len(doc.Content) > 0 {
@@ -87,7 +101,7 @@ func Parse(data []byte, env Env, exclude []string) *File {
 	}
 	top, err := pairs(root, 0)
 	if err != nil {
-		return fatal("COMPOSE_INVALID", 0, "%v", err)
+		return fatal("COMPOSE_INVALID", errLine(err), "%v", err)
 	}
 	if p, ok := get(top, "include"); ok {
 		return fatal("COMPOSE_UNSUPPORTED", p.key.Line, "include pulls in other compose files, which Shearbolt does not follow yet, so this file cannot be gated as it is")
@@ -100,7 +114,7 @@ func Parse(data []byte, env Env, exclude []string) *File {
 			return fatal("COMPOSE_INVALID", p.key.Line, "services must be a mapping of service names to services")
 		default:
 			if services, err = pairs(v, 0); err != nil {
-				return fatal("COMPOSE_INVALID", 0, "%v", err)
+				return fatal("COMPOSE_INVALID", errLine(err), "%v", err)
 			}
 		}
 	}
@@ -123,7 +137,7 @@ func Parse(data []byte, env Env, exclude []string) *File {
 		}
 		fields, err := pairs(svc, 0)
 		if err != nil {
-			return fatal("COMPOSE_INVALID", sp.key.Line, "service %s: %v", name, err)
+			return fatal("COMPOSE_INVALID", cmp.Or(errLine(err), sp.key.Line), "service %s: %v", name, err)
 		}
 		if p, ok := get(fields, "extends"); ok {
 			return fatal("COMPOSE_UNSUPPORTED", p.key.Line, "service %s uses extends, which Shearbolt does not follow yet; to gate the rest of this file, exclude the service (exclude: [%s]), which is then not scanned", name, name)
@@ -138,7 +152,7 @@ func Parse(data []byte, env Env, exclude []string) *File {
 			continue
 		}
 		line := sp.key.Line
-		if ip.direct && ip.value.Kind != yaml.AliasNode {
+		if sp.value.Kind != yaml.AliasNode && ip.direct && ip.value.Kind != yaml.AliasNode {
 			line = ip.key.Line
 		}
 		raw, ok := str(ip.value)
@@ -149,15 +163,16 @@ func Parse(data []byte, env Env, exclude []string) *File {
 		if err != nil {
 			return fatal("COMPOSE_INVALID", line, "the image of service %s: %v", name, err)
 		}
-		platform := ""
+		platform, platformLine := "", 0
 		if pp, ok := get(fields, "platform"); ok {
+			platformLine = pp.key.Line
 			praw, ok := str(pp.value)
 			if !ok {
-				return fatal("COMPOSE_INVALID", pp.key.Line, "the platform of service %s must be a string", name)
+				return fatal("COMPOSE_INVALID", platformLine, "the platform of service %s must be a string", name)
 			}
 			var pm []missingVar
 			if platform, pm, err = interpolate(praw, env); err != nil {
-				return fatal("COMPOSE_INVALID", pp.key.Line, "the platform of service %s: %v", name, err)
+				return fatal("COMPOSE_INVALID", platformLine, "the platform of service %s: %v", name, err)
 			}
 			missing = append(missing, pm...)
 		}
@@ -169,7 +184,7 @@ func Parse(data []byte, env Env, exclude []string) *File {
 			return fatal("COMPOSE_INVALID", line, "the image reference %q of service %s may only contain letters, digits, '.', '_', '/', ':', '@' and '-', and must start with a letter or digit", ref, name)
 		}
 		if platform != "" && !platformPattern.MatchString(platform) {
-			return fatal("COMPOSE_INVALID", line, "the platform %q of service %s must look like linux/amd64 or linux/arm64/v8", platform, name)
+			return fatal("COMPOSE_INVALID", platformLine, "the platform %q of service %s must look like linux/amd64 or linux/arm64/v8", platform, name)
 		}
 		k := key{ref, platform}
 		if i, ok := index[k]; ok {
@@ -194,12 +209,33 @@ func variableProblem(service string, line int, missing []missingVar) Problem {
 			said = append(said, m.name+": "+m.message)
 		}
 	}
-	msg := fmt.Sprintf("service %s needs %s, which is not set. Set it where shearbolt scan runs (for example as a CI variable), give it a default (${%s:-value}), or, if CI builds this image, exclude the service (exclude: [%s])",
-		service, strings.Join(names, ", "), names[0], service)
+	verb, pronoun := "is", "it"
+	if len(names) > 1 {
+		verb, pronoun = "are", "them"
+	}
+	msg := fmt.Sprintf("service %s needs %s, which %s not set or empty. Set %s where shearbolt scan runs (for example as a CI variable), give %s a default (${%s:-value}), or, if CI builds this image, exclude the service (exclude: [%s])",
+		service, strings.Join(names, ", "), verb, pronoun, pronoun, names[0], service)
 	if len(said) > 0 {
 		msg += " (the compose file says " + strings.Join(said, "; ") + ")"
 	}
 	return Problem{Code: "COMPOSE_VARIABLE", Service: service, Line: line, Message: msg}
+}
+
+// lineError is a problem with the line it was found on; its text carries no line (P5).
+type lineError struct {
+	line int
+	msg  string
+}
+
+func (e *lineError) Error() string { return e.msg }
+
+// errLine is the line a pairs error was found on, or 0.
+func errLine(err error) int {
+	var le *lineError
+	if errors.As(err, &le) {
+		return le.line
+	}
+	return 0
 }
 
 // pair is one mapping entry; direct is false for an entry merged in with <<.
@@ -212,7 +248,7 @@ type pair struct {
 // then earlier merged mappings over later ones, as YAML's merge key type says.
 func pairs(m *yaml.Node, depth int) ([]pair, error) {
 	if depth > 32 {
-		return nil, errors.New("merge keys (<<) nest too deeply")
+		return nil, &lineError{line: m.Line, msg: "merge keys (<<) nest too deeply"}
 	}
 	var own, merged []pair
 	var sources []*yaml.Node
@@ -234,7 +270,7 @@ func pairs(m *yaml.Node, depth int) ([]pair, error) {
 	}
 	for _, src := range sources {
 		if src.Kind != yaml.MappingNode {
-			return nil, fmt.Errorf("line %d: a merge key (<<) must refer to a mapping", src.Line)
+			return nil, &lineError{line: src.Line, msg: "a merge key (<<) must refer to a mapping"}
 		}
 		ps, err := pairs(src, depth+1)
 		if err != nil {

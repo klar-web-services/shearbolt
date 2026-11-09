@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -73,7 +74,7 @@ func braced(body string, env Env) (string, *missingVar, error) {
 		return "", nil, fmt.Errorf("${%s} does not start with a variable name", body)
 	}
 	if strings.Contains(rest, "$") {
-		return "", nil, fmt.Errorf("${%s} nests a variable reference, which Shearbolt does not resolve", body)
+		return "", nil, errors.New("a default or alternative value may not contain $; nested variable references are not resolved")
 	}
 	op, arg := "", ""
 	for _, o := range []string{":-", ":?", ":+", "-", "?", "+"} {
