@@ -11,12 +11,13 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/skill"
 )
 
-const skillUsage = `Usage: shearbolt skill install [--global]
+const skillUsage = `Usage: shearbolt skill install [--project]
 
 Installs the coding-agent skill for Claude Code, which adds /shearbolt setup and
-/shearbolt fix. It goes into .claude/skills/shearbolt in the current directory, or with
---global into ~/.claude/skills/shearbolt. A skill installed earlier by shearbolt is
-updated; a different skill with the same name is left alone.
+/shearbolt fix. It goes into ~/.claude/skills/shearbolt, for all your projects, or with
+--project into .claude/skills/shearbolt in the current directory, to commit and share
+with your team. A skill installed earlier by shearbolt is updated; a different skill
+with the same name is left alone.
 
 Exit codes: 0 success, 2 error.
 
@@ -30,7 +31,9 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	flags := flag.NewFlagSet("skill install", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Usage = func() { fmt.Fprint(stderr, skillUsage); flags.PrintDefaults() }
-	global := flags.Bool("global", false, "install into ~/.claude/skills instead of the current directory")
+	project := flags.Bool("project", false, "install into .claude/skills in the current directory instead of ~/.claude/skills")
+	// --global was needed for a user install in 1.0.0; it stays accepted so scripts keep working.
+	global := flags.Bool("global", false, "install into ~/.claude/skills (the default)")
 	usageError := func(msg string) int {
 		if msg != "" {
 			fmt.Fprintf(stderr, "shearbolt skill: %s\n\n", msg)
@@ -53,32 +56,35 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	if flags.NArg() > 0 {
 		return usageError(fmt.Sprintf("unexpected argument %q", flags.Arg(0)))
 	}
+	if *project && *global {
+		return usageError("--project and --global cannot be combined")
+	}
 
 	fail := func(msg string) int {
 		fmt.Fprintf(stderr, "shearbolt skill: %s\n", termSafe(msg, false))
 		return 2
 	}
 	var base, shown, again string
-	if *global {
+	if !*project {
 		base = d.getenv("HOME")
 		switch {
 		case base == "":
-			return fail("cannot find your home directory: HOME is not set")
+			return fail("cannot find your home directory: HOME is not set. Run shearbolt skill install --project to install into this project instead.")
 		case !filepath.IsAbs(base):
-			return fail(fmt.Sprintf("HOME (%q) is not an absolute path, so the global skill folder is unknown", base))
+			return fail(fmt.Sprintf("HOME (%q) is not an absolute path, so the user skill folder is unknown", base))
 		}
-		shown, again = skill.Dir(base), "shearbolt skill install --global"
+		shown, again = skill.Dir(base), "shearbolt skill install"
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fail(err.Error())
 		}
-		base, shown, again = cwd, projectSkillDir, "shearbolt skill install"
+		base, shown, again = cwd, projectSkillDir, "shearbolt skill install --project"
 	}
 
 	var outcome skill.Outcome
 	var err error
-	if *global {
+	if !*project {
 		// Follow symlinks anywhere: dotfiles layouts link ~/.claude elsewhere.
 		outcome, err = skill.Install(skill.Dir(base))
 	} else {
@@ -88,7 +94,7 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	case errors.Is(err, skill.ErrForeign):
 		return fail(fmt.Sprintf("%s already holds a SKILL.md that shearbolt did not write; remove or rename that folder, then run %s again.", shown, again))
 	case errors.Is(err, skill.ErrOutside):
-		return fail(err.Error() + ". Nothing was written. Remove that symlink, or install for your user with --global.")
+		return fail(err.Error() + ". Nothing was written. Remove that symlink, or install for your user without --project.")
 	case err != nil:
 		return fail(err.Error())
 	}
@@ -101,7 +107,7 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	default:
 		fmt.Fprintf(stdout, "The Shearbolt skill in %s is up to date.\n", shown)
 	}
-	if !*global {
+	if *project {
 		fmt.Fprintf(stdout, "Commit %s to share it with your team.\n", shown)
 	}
 	return 0

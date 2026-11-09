@@ -24,7 +24,7 @@ writes it only with `--apply`. This is the contract the skill drives, at `schema
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | `1`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --global` when it is installed in `~/.claude/skills`. |
+| `schemaVersion` | `1`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
 | `shearboltVersion` | The version that computed the plan; `dev` for a development build. |
 | `projects[]` | Detected projects: `ecosystem` (`npm` or `rust`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `framework` (`nextjs`). |
 | `ci[]` | CI files found: `system` (`github`, `bitbucket` or `gitlab`) and `file`. |

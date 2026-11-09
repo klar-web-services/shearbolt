@@ -222,7 +222,7 @@ targets:
 |---|---|
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
-| `shearbolt skill install [--global]` | Installs the [agent skill](#agent-skill-claude-code) for Claude Code. |
+| `shearbolt skill install [--project]` | Installs the [agent skill](#agent-skill-claude-code) for Claude Code. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
 `setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.
@@ -359,7 +359,7 @@ build-image:
 
 ### Agent skill (Claude Code)
 
-`shearbolt skill install` writes the skill to `.claude/skills/shearbolt/` in the current directory. Commit that folder to share it with your team. `shearbolt skill install --global` writes it to `~/.claude/skills/shearbolt/` instead, for all your projects. Running the command again updates a skill that shearbolt installed, and leaves a different skill named `shearbolt` alone.
+`shearbolt skill install` writes the skill to `~/.claude/skills/shearbolt/`, for all your projects. `shearbolt skill install --project` writes it to `.claude/skills/shearbolt/` in the current directory instead; commit that folder to share it with your team. Running the command again updates a skill that shearbolt installed, and leaves a different skill named `shearbolt` alone. (`--global` from 1.0.0 still works and means the default.)
 
 | In Claude Code | What the agent does |
 |---|---|

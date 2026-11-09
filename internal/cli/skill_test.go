@@ -26,7 +26,7 @@ func skillCmd(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-const skillUsageLine = "shearbolt skill install [--global]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)"
+const skillUsageLine = "shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)"
 
 func TestUsageListsSkillInstall(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -42,7 +42,7 @@ func TestSkillInstallInProject(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	t.Chdir(dir)
-	code, out, errb := skillCmd(t, "install")
+	code, out, errb := skillCmd(t, "install", "--project")
 	if code != 0 || errb != "" {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
@@ -54,13 +54,13 @@ func TestSkillInstallInProject(t *testing.T) {
 	if out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
 	}
-	if code, out, _ := skillCmd(t, "install"); code != 0 || !strings.HasPrefix(out, "The Shearbolt skill in .claude/skills/shearbolt is up to date.\n") {
+	if code, out, _ := skillCmd(t, "install", "--project"); code != 0 || !strings.HasPrefix(out, "The Shearbolt skill in .claude/skills/shearbolt is up to date.\n") {
 		t.Errorf("second run: exit = %d, stdout = %q", code, out)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".claude", "skills", "shearbolt", "references", "fixing.md"), []byte("old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if code, out, _ := skillCmd(t, "install"); code != 0 || !strings.HasPrefix(out, "Updated the Shearbolt skill in .claude/skills/shearbolt.") {
+	if code, out, _ := skillCmd(t, "install", "--project"); code != 0 || !strings.HasPrefix(out, "Updated the Shearbolt skill in .claude/skills/shearbolt.") {
 		t.Errorf("update: exit = %d, stdout = %q", code, out)
 	}
 }
@@ -70,7 +70,7 @@ func TestSkillInstallGlobal(t *testing.T) {
 	t.Setenv("HOME", home)
 	cwd := t.TempDir()
 	t.Chdir(cwd)
-	code, out, errb := skillCmd(t, "install", "--global")
+	code, out, errb := skillCmd(t, "install")
 	if code != 0 || errb != "" {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
@@ -79,17 +79,21 @@ func TestSkillInstallGlobal(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(cwd, ".claude")); err == nil {
-		t.Error("--global also wrote into the current directory")
+		t.Error("the user install also wrote into the current directory")
 	}
 	if want := "Installed the Shearbolt skill in " + installed + ". In Claude Code, type /shearbolt setup.\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
+	}
+	// --global, which 1.0.0 needed for this, still means the user install.
+	if code, out, _ := skillCmd(t, "install", "--global"); code != 0 || out != "The Shearbolt skill in "+installed+" is up to date.\n" {
+		t.Errorf("--global: exit = %d, stdout = %q", code, out)
 	}
 }
 
 func TestSkillInstallGlobalWithoutHome(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Chdir(t.TempDir())
-	if code, _, errb := skillCmd(t, "install", "--global"); code != 2 || !strings.Contains(errb, "HOME") {
+	if code, _, errb := skillCmd(t, "install"); code != 2 || !strings.Contains(errb, "HOME") {
 		t.Errorf("exit = %d, stderr = %q", code, errb)
 	}
 }
@@ -97,7 +101,7 @@ func TestSkillInstallGlobalWithoutHome(t *testing.T) {
 func TestSkillInstallGlobalNeedsAbsoluteHome(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("HOME", "relative/home")
-	if code, _, errb := skillCmd(t, "install", "--global"); code != 2 || !strings.Contains(errb, "absolute") {
+	if code, _, errb := skillCmd(t, "install"); code != 2 || !strings.Contains(errb, "absolute") {
 		t.Errorf("exit = %d, stderr = %q", code, errb)
 	}
 	if _, err := os.Stat("relative"); err == nil {
@@ -116,8 +120,8 @@ func TestSkillInstallInProjectStaysInside(t *testing.T) {
 		t.Skip(err)
 	}
 	t.Chdir(project)
-	code, out, errb := skillCmd(t, "install")
-	if code != 2 || out != "" || !strings.Contains(errb, "outside the project") || !strings.Contains(errb, "--global") {
+	code, out, errb := skillCmd(t, "install", "--project")
+	if code != 2 || out != "" || !strings.Contains(errb, "outside the project") || !strings.Contains(errb, "without --project") {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errb)
 	}
 	if b, _ := os.ReadFile(filepath.Join(outside, "references", "fixing.md")); string(b) != "keep\n" {
@@ -141,7 +145,7 @@ func TestSkillInstallGlobalFollowsDotfilesSymlink(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Chdir(t.TempDir())
-	if code, _, errb := skillCmd(t, "install", "--global"); code != 0 {
+	if code, _, errb := skillCmd(t, "install"); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
 	if _, err := os.Stat(filepath.Join(dotfiles, "skills", "shearbolt", "SKILL.md")); err != nil {
@@ -150,10 +154,11 @@ func TestSkillInstallGlobalFollowsDotfilesSymlink(t *testing.T) {
 }
 
 func TestSkillUsageErrors(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
-	for _, args := range [][]string{{}, {"nope"}, {"install", "extra"}, {"install", "--nope"}} {
+	for _, args := range [][]string{{}, {"nope"}, {"install", "extra"}, {"install", "--nope"}, {"install", "--project", "--global"}} {
 		code, out, errb := skillCmd(t, args...)
-		if code != 2 || out != "" || !strings.Contains(errb, "Usage: shearbolt skill install [--global]") {
+		if code != 2 || out != "" || !strings.Contains(errb, "Usage: shearbolt skill install [--project]") {
 			t.Errorf("skill %v: exit = %d, stdout = %q, stderr = %q", args, code, out, errb)
 		}
 	}
@@ -170,8 +175,8 @@ func TestSkillInstallRefusesForeignSkill(t *testing.T) {
 	t.Chdir(dir)
 	foreign := filepath.Join(dir, ".claude", "skills", "shearbolt", "SKILL.md")
 	writeFiles(t, dir, map[string]string{".claude/skills/shearbolt/SKILL.md": "---\nname: shearbolt\n---\nsomeone else's\n"})
-	code, out, errb := skillCmd(t, "install")
-	want := ".claude/skills/shearbolt already holds a SKILL.md that shearbolt did not write; remove or rename that folder, then run shearbolt skill install again."
+	code, out, errb := skillCmd(t, "install", "--project")
+	want := ".claude/skills/shearbolt already holds a SKILL.md that shearbolt did not write; remove or rename that folder, then run shearbolt skill install --project again."
 	if code != 2 || out != "" || !strings.Contains(errb, want) {
 		t.Errorf("exit = %d, stdout = %q, stderr = %q", code, out, errb)
 	}
@@ -303,7 +308,7 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	dir := fixtureRepo(t, "monorepo")
 
 	// 1. Install the skill into the repository.
-	if code, _, errb := skillCmd(t, "install"); code != 0 {
+	if code, _, errb := skillCmd(t, "install", "--project"); code != 0 {
 		t.Fatalf("skill install: exit = %d, stderr = %s", code, errb)
 	}
 	// 2. The installed skill documents the commands this test runs.

@@ -16,10 +16,10 @@ const usage = `Shearbolt stops a deployment when what you are about to ship cont
 a vulnerability that is exploited, likely to be exploited, or already fixed upstream.
 
 Usage:
-  shearbolt setup [flags]             Add the Shearbolt gate to this repository's CI
-  shearbolt scan [flags]              Scan the targets in shearbolt.yaml, or ad-hoc targets
-  shearbolt skill install [--global]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)
-  shearbolt version                   Print version information
+  shearbolt setup [flags]              Add the Shearbolt gate to this repository's CI
+  shearbolt scan [flags]               Scan the targets in shearbolt.yaml, or ad-hoc targets
+  shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)
+  shearbolt version                    Print version information
 
 Run "shearbolt setup -h", "shearbolt scan -h" or "shearbolt skill install -h" for their flags.
 `
