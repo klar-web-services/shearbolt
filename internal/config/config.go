@@ -28,13 +28,14 @@ type Config struct {
 	Dir string `yaml:"-"`
 }
 
-// Target is one thing to scan. Exactly one of Image, Dir, File or Source is set.
+// Target is one thing to scan. Exactly one of Image, Dir, File, Source or Compose is set.
 type Target struct {
 	Name             string   `yaml:"name" json:"name"`
 	Image            string   `yaml:"image,omitempty" json:"image,omitempty"`
 	Dir              string   `yaml:"dir,omitempty" json:"dir,omitempty"`
 	File             string   `yaml:"file,omitempty" json:"file,omitempty"`
 	Source           string   `yaml:"source,omitempty" json:"source,omitempty"`
+	Compose          string   `yaml:"compose,omitempty" json:"compose,omitempty"`
 	Exclude          []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
 	LockfileFallback string   `yaml:"lockfileFallback,omitempty" json:"lockfileFallback,omitempty"`
 }
@@ -251,7 +252,7 @@ var (
 	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 )
 
-// Kind returns "image", "dir", "file" or "source" (empty if none is set).
+// Kind returns "image", "dir", "file", "source" or "compose" (empty if none is set).
 func (t Target) Kind() string {
 	switch {
 	case t.Image != "":
@@ -262,12 +263,14 @@ func (t Target) Kind() string {
 		return "file"
 	case t.Source != "":
 		return "source"
+	case t.Compose != "":
+		return "compose"
 	}
 	return ""
 }
 
 // Ref returns the image reference or path the target scans.
-func (t Target) Ref() string { return t.Image + t.Dir + t.File + t.Source }
+func (t Target) Ref() string { return t.Image + t.Dir + t.File + t.Source + t.Compose }
 
 // PackageName returns the part of Package before its last '@' (scoped npm names keep their leading '@').
 func (e Exception) PackageName() string {
@@ -422,23 +425,23 @@ func (c *Config) finish(env Env, now time.Time) error {
 		}
 		names[t.Name] = true
 		set := 0
-		for _, v := range []string{t.Image, t.Dir, t.File, t.Source} {
+		for _, v := range []string{t.Image, t.Dir, t.File, t.Source, t.Compose} {
 			if v != "" {
 				set++
 			}
 		}
 		if set != 1 {
-			p = append(p, label+": set exactly one of image, dir, file or source")
+			p = append(p, label+": set exactly one of image, dir, file, source or compose")
 			continue
 		}
 		kind := t.Kind()
-		if len(t.Exclude) > 0 && kind != "source" {
-			p = append(p, label+": exclude is only allowed on source targets")
+		if len(t.Exclude) > 0 && kind != "source" && kind != "compose" {
+			p = append(p, label+": exclude is only allowed on source and compose targets")
 		}
 		if t.LockfileFallback != "" && kind != "file" {
 			p = append(p, label+": lockfileFallback is only allowed on file targets")
 		}
-		fields := []*string{&t.Image, &t.Dir, &t.File, &t.Source, &t.LockfileFallback}
+		fields := []*string{&t.Image, &t.Dir, &t.File, &t.Source, &t.Compose, &t.LockfileFallback}
 		for j := range t.Exclude {
 			fields = append(fields, &t.Exclude[j])
 		}
@@ -461,11 +464,18 @@ func (c *Config) finish(env Env, now time.Time) error {
 			p = append(p, label+fmt.Sprintf(": image reference %q may only contain letters, digits, '.', '_', '/', ':', '@' and '-', and must start with a letter or digit", t.Image))
 		}
 		for _, e := range t.Exclude {
+			if kind == "compose" {
+				if !namePattern.MatchString(e) {
+					p = append(p, label+": exclude entries of a compose target are service names (letters, digits, '.', '_' and '-')")
+					break
+				}
+				continue
+			}
 			if strings.ContainsAny(e, "*?[{\\") {
 				p = append(p, label+fmt.Sprintf(": exclude entries are paths relative to the source, not globs (got %q)", e))
 			}
 		}
-		for _, f := range []*string{&t.Dir, &t.File, &t.Source, &t.LockfileFallback} {
+		for _, f := range []*string{&t.Dir, &t.File, &t.Source, &t.Compose, &t.LockfileFallback} {
 			if *f != "" && !filepath.IsAbs(*f) {
 				*f = filepath.Join(c.Dir, *f)
 			}

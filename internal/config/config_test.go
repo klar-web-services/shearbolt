@@ -230,7 +230,7 @@ exceptions:
 		t.Fatal("expected an error")
 	}
 	for _, want := range []string{
-		`name "bad name" may only contain`, "name is required", "exclude is only allowed on source targets",
+		`name "bad name" may only contain`, "name is required", "exclude is only allowed on source and compose targets",
 		"lockfileFallback is only allowed on file targets", "is empty after expanding variables",
 		"maxDatabaseAgeHours must be a positive", "maxExceptionDays must be a positive", "target nope is not defined",
 	} {
@@ -479,5 +479,63 @@ func TestLoadRejectsNonIntegerPolicyNumbers(t *testing.T) {
 	path = write(t, head+"  maxDatabaseAgeHours: 24\n  maxExceptionDays: 30\n")
 	if cfg, err := Load(path, env(nil), now); err != nil || cfg.Policy.MaxDatabaseAgeHours != 24 || cfg.Policy.MaxExceptionDays != 30 {
 		t.Fatalf("whole numbers: cfg = %+v, err = %v", cfg, err)
+	}
+}
+
+func composeConfig(target string) string {
+	return "version: 1\nproject: p\ntargets:\n  - name: stack\n" + target
+}
+
+func TestLoadComposeTarget(t *testing.T) {
+	path := write(t, composeConfig("    compose: docker-compose.yml\n"))
+	cfg, err := Load(path, env(nil), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := cfg.Targets[0]
+	if tg.Kind() != "compose" {
+		t.Errorf("kind = %q", tg.Kind())
+	}
+	if want := filepath.Join(filepath.Dir(path), "docker-compose.yml"); tg.Ref() != want {
+		t.Errorf("ref = %q, want %q", tg.Ref(), want)
+	}
+}
+
+func TestLoadComposeTargetExpandsVariables(t *testing.T) {
+	path := write(t, composeConfig("    compose: ${DIR:-deploy}/compose.yml\n"))
+	cfg, err := Load(path, env(nil), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(filepath.Dir(path), "deploy/compose.yml"); cfg.Targets[0].Compose != want {
+		t.Errorf("compose = %q, want %q", cfg.Targets[0].Compose, want)
+	}
+}
+
+func TestLoadComposeTargetValidation(t *testing.T) {
+	tests := []struct {
+		name, target, want string
+	}{
+		{"with image", "    compose: c.yml\n    image: app:1\n", "set exactly one of image, dir, file, source or compose"},
+		{"exclude with space", "    compose: c.yml\n    exclude: [\"a b\"]\n", "exclude entries of a compose target are service names (letters, digits, '.', '_' and '-')"},
+		{"exclude glob", "    compose: c.yml\n    exclude: [\"*\"]\n", "exclude entries of a compose target are service names (letters, digits, '.', '_' and '-')"},
+		{"lockfileFallback", "    compose: c.yml\n    lockfileFallback: Cargo.lock\n", "lockfileFallback is only allowed on file targets"},
+		{"exclude on image", "    image: app:1\n    exclude: [app]\n", "exclude is only allowed on source and compose targets"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(write(t, composeConfig(tt.target)), env(nil), now)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+	path := write(t, composeConfig("    compose: c.yml\n    exclude: [app, s3-down]\n"))
+	cfg, err := Load(path, env(nil), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Targets[0].Exclude, ","); got != "app,s3-down" {
+		t.Errorf("exclude = %q", got)
 	}
 }
