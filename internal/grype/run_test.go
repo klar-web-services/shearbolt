@@ -158,3 +158,27 @@ func TestScanCancelledByCaller(t *testing.T) {
 		t.Fatalf("err = %v, want scan cancelled", err)
 	}
 }
+
+func TestScanPassesPlatform(t *testing.T) {
+	r, dir, log := newRunner(t)
+	req := Request{Source: "registry:nginx:1.27", Platform: "linux/arm64", RawJSON: filepath.Join(dir, "a"), SBOM: filepath.Join(dir, "b")}
+	if err := r.Scan(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(read(t, log)), "\n")
+	i := slices.Index(args, "--platform")
+	if i < 0 || i+1 >= len(args) || args[i+1] != "linux/arm64" {
+		t.Fatalf("args = %q, want --platform linux/arm64", args)
+	}
+}
+
+func TestScanWithoutPlatformLogsNoPlatform(t *testing.T) {
+	r, dir, log := newRunner(t)
+	req := Request{Source: "registry:nginx:1.27", RawJSON: filepath.Join(dir, "a"), SBOM: filepath.Join(dir, "b")}
+	if err := r.Scan(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(strings.Split(read(t, log), "\n"), "--platform") {
+		t.Fatalf("unexpected --platform in %q", read(t, log))
+	}
+}

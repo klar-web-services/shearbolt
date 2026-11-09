@@ -18,10 +18,11 @@ var errGrypeTimeout = errors.New("grype timeout")
 
 // Request describes one Grype scan.
 type Request struct {
-	Source  string   // Grype source, e.g. "dir:/path", "docker:ref", "registry:ref", "file:/path"
-	Exclude []string // --exclude globs (directory sources only)
-	RawJSON string   // where Grype writes its JSON report
-	SBOM    string   // where Grype writes its CycloneDX SBOM
+	Source   string   // Grype source, e.g. "dir:/path", "docker:ref", "registry:ref", "file:/path"
+	Exclude  []string // --exclude globs (directory sources only)
+	Platform string   // --platform for image sources ("" = Grype's default: the scanning machine's)
+	RawJSON  string   // where Grype writes its JSON report
+	SBOM     string   // where Grype writes its CycloneDX SBOM
 }
 
 // Runner runs a verified Grype binary isolated from project and user configuration.
@@ -55,6 +56,9 @@ func (r *Runner) Scan(ctx context.Context, req Request) error {
 	args := []string{req.Source, "-o", "json=" + req.RawJSON, "-o", "cyclonedx-json=" + req.SBOM}
 	for _, e := range req.Exclude {
 		args = append(args, "--exclude", e)
+	}
+	if req.Platform != "" {
+		args = append(args, "--platform", req.Platform)
 	}
 	return r.run(ctx, args)
 }
