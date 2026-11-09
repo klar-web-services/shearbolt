@@ -90,6 +90,11 @@ func TestAttachCompose(t *testing.T) {
 		t.Errorf("deepest: %+v", got)
 	}
 
+	got = attachCompose([]plan.Project{proj("npm", "."), proj("npm", "a")}, []string{"a/compose.yml"}, "/r/repo")
+	if len(got) != 2 || len(got[0].Compose) != 0 || !slices.Equal(got[1].Compose, []string{"compose.yml"}) {
+		t.Errorf("one-letter dir: %+v", got)
+	}
+
 	got = attachCompose(nil, []string{"compose.yml"}, "/r/shop")
 	if len(got) != 1 || got[0].Name != "shop" || got[0].Dir != "." || got[0].Ecosystem != "compose" {
 		t.Errorf("none: %+v", got)

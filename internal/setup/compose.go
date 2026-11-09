@@ -79,7 +79,7 @@ func attachCompose(projects []plan.Project, files []string, root string) []plan.
 			} else {
 				continue
 			}
-			if best < 0 || len(p.Dir) > len(projects[best].Dir) {
+			if best < 0 || projects[best].Dir == "." || (p.Dir != "." && len(p.Dir) > len(projects[best].Dir)) {
 				best, rel = i, r
 			}
 		}
