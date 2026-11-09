@@ -1255,6 +1255,13 @@ func TestComputeNoDeploySeen(t *testing.T) {
 	if p = computeWith(t, root, ci, nil); p.Error != nil || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
 		t.Fatalf("npm: %+v, notes %v", p.Error, codes(p.Notes))
 	}
+
+	// Compose targets are written only into a new config: an existing one without a compose
+	// target scans no compose file, so there is no deploy to warn about.
+	root = writeTree(t, npmTree(map[string]string{"compose.yml": composeImage, "shearbolt.yaml": "version: 1\ntargets:\n  - name: source\n    source: .\n", fakeCIFile: "build: npm ci; npm run build\n"}))
+	if p = computeWith(t, root, ci, nil); p.Error != nil || !hasCode(p.Notes, "COMPOSE_NOT_GATED") || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
+		t.Fatalf("existing config: %+v, notes %v", p.Error, codes(p.Notes))
+	}
 }
 
 // A compose target is named after the file's path without its extension, with "/" as "-";
@@ -1307,5 +1314,17 @@ func TestGatesComposeTargetsInSubsets(t *testing.T) {
 	gates = pp.finish(merged, names, map[string]string{"web": "SHEARBOLT_IMAGE"}, func(string) string { return commitExprs["github"] }, map[string]map[string]bool{})
 	if !slices.Equal(gates[0].Targets, []string{"demo", "source"}) || !slices.Equal(gates[1].Targets, []string{"source", "web"}) {
 		t.Fatalf("without the compose target: %v, %v", gates[0].Targets, gates[1].Targets)
+	}
+}
+
+// A compose-only project has no build: the by-hand note says where the gate goes instead.
+func TestGatesNoEditableJobComposeOnly(t *testing.T) {
+	m := newGateModel([]plan.Project{composeOnly("compose.yml")}, nil, []string{ciFile})
+	pl := m.place(resolve(t, m.questions(), nil), "1.2.3", fakeSnippet)
+	n := noteOf(t, pl.notes, "NO_GATE_PLACED")
+	want := "no gate could be placed automatically for "
+	if !strings.HasPrefix(n.Message, want) || !strings.Contains(n.Message, "; add this by hand to a job that runs before any deploy:\n"+ciFile+":\nSNIPPET("+ciFile+",.)") ||
+		strings.Contains(n.Message, "builds it") {
+		t.Fatalf("note: %q", n.Message)
 	}
 }

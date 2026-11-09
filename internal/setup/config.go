@@ -40,7 +40,8 @@ func imageVarOf(image string) string {
 
 // configChange plans project p's shearbolt.yaml for the planned targets (R6).
 //
-//   - Without a file, it renders a new one: image targets, then file targets, then source.
+//   - Without a file, it renders a new one: image targets, then file targets, then compose
+//     targets, then source, with COMPOSE_ADDED when it holds compose targets.
 //   - With one, it appends the targets that are not present after the last item of the block
 //     targets sequence, and touches nothing else. A planned target is present when an existing
 //     target has the same kind and value (its name is then used everywhere), or the same name:
@@ -48,6 +49,10 @@ func imageVarOf(image string) string {
 //     that name gets TARGET_EXISTS (plus IMAGE_REF_FIXED for an image) and is left alone. A
 //     target of another kind under the planned name is no match: the planned target is appended
 //     under a free name, with TARGET_EXISTS, so what the job builds is still scanned.
+//   - Compose targets are written only into a new file. With an existing one, a planned compose
+//     target is present when a compose target scans the same file (its name is then used);
+//     otherwise COMPOSE_NOT_GATED carries the target to add, so a target the user removed is
+//     not added back and the gates name no compose target the file lacks.
 //   - A file that cannot be read, parsed or edited gets UNSUPPORTED_EDIT with the targets to add
 //     by hand, and no change; merged is then nil, so the gates scan every target the file has.
 //
@@ -82,13 +87,27 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 			names[t.Name] = t.Name
 		}
 		addVars(vars, planned)
+		var files []string
+		for _, t := range planned {
+			if t.Kind() == "compose" {
+				files = append(files, t.Compose)
+			}
+		}
+		if len(files) > 0 {
+			notes = append(notes, plan.Note{
+				Code: "COMPOSE_ADDED",
+				Message: fmt.Sprintf("setup gates the images of %s in %s. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service].",
+					strings.Join(files, ", "), file),
+				File: file,
+			})
+		}
 		return &plan.FileChange{
 			Path:    file,
 			Action:  "create",
 			Content: content,
 			Diff:    plan.UnifiedDiff(file, nil, []byte(content)),
 			Mode:    0o644,
-		}, planned, names, vars, nil
+		}, planned, names, vars, notes
 	}
 	if err != nil {
 		return unsupported("it cannot be read: " + err.Error())
@@ -117,6 +136,19 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 	}
 	var add []config.Target
 	for _, t := range planned {
+		if t.Kind() == "compose" {
+			if i := slices.IndexFunc(existing, func(e config.Target) bool { return sameValue(e, t) }); i >= 0 {
+				names[t.Name] = existing[i].Name
+				continue
+			}
+			notes = append(notes, plan.Note{
+				Code: "COMPOSE_NOT_GATED",
+				Message: fmt.Sprintf("%s is not gated: %s has no compose target for it. If its images ship, add this to targets:\n%s",
+					t.Compose, file, strings.Join(targetItems([]config.Target{t}, "  "), "\n")),
+				File: file,
+			})
+			continue
+		}
 		if i := slices.IndexFunc(existing, func(e config.Target) bool { return sameValue(e, t) && e.Name == t.Name }); i >= 0 {
 			names[t.Name] = existing[i].Name
 			continue
@@ -213,10 +245,10 @@ func normalizeTargets(ts []config.Target) []config.Target {
 	return out
 }
 
-// sortTargets returns ts in R6 order: image targets, then dir and file targets, then source,
-// keeping the order within each kind.
+// sortTargets returns ts in R6 order: image targets, then dir and file targets, then compose
+// targets, then source, keeping the order within each kind.
 func sortTargets(ts []config.Target) []config.Target {
-	rank := map[string]int{"image": 0, "dir": 1, "file": 2, "source": 3}
+	rank := map[string]int{"image": 0, "dir": 1, "file": 2, "compose": 3, "source": 4}
 	out := slices.Clone(ts)
 	slices.SortStableFunc(out, func(a, b config.Target) int { return rank[a.Kind()] - rank[b.Kind()] })
 	return out
@@ -289,6 +321,8 @@ func targetLines(t config.Target) []string {
 		out = append(out, "dir: "+yamledit.Scalar(t.Dir))
 	case "file":
 		out = append(out, "file: "+yamledit.Scalar(t.File))
+	case "compose":
+		out = append(out, "compose: "+yamledit.Scalar(t.Compose))
 	case "source":
 		out = append(out, "source: "+yamledit.Scalar(t.Source))
 	}
@@ -336,7 +370,7 @@ func readsBack(out []byte, want []config.Target) bool {
 			return false
 		}
 		seen[a.Name] = true
-		if a.Name != b.Name || a.Image != b.Image || a.Dir != b.Dir || a.File != b.File || a.Source != b.Source ||
+		if a.Name != b.Name || a.Image != b.Image || a.Dir != b.Dir || a.File != b.File || a.Compose != b.Compose || a.Source != b.Source ||
 			a.LockfileFallback != b.LockfileFallback || !slices.Equal(a.Exclude, b.Exclude) {
 			return false
 		}

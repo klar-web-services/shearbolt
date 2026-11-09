@@ -575,3 +575,74 @@ func TestSetupFileEditFailureCarriesSnippet(t *testing.T) {
 		t.Errorf("notes %+v", p.Notes)
 	}
 }
+
+// A compose target the user removed is not added back: the plan has no changes and says so.
+func TestSetupRemovedComposeTargetStaysRemoved(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"docker-compose.yml": composeImage,
+		"test/compose.yml":   composeImage,
+		fakeCIFile:           "test: docker compose up -d\n",
+	})
+	ci := &fakeCI{files: []string{fakeCIFile}}
+	p := computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	cfg := change(p, "shearbolt.yaml")
+	if cfg == nil || !strings.Contains(cfg.Content, "compose: docker-compose.yml") || !strings.Contains(cfg.Content, "compose: test/compose.yml") || strings.Contains(cfg.Content, "source:") {
+		t.Fatalf("config: %+v", cfg)
+	}
+	if err := Write(root, p); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "shearbolt.yaml")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := strings.Index(string(b), "  - name: test-compose")
+	if i < 0 {
+		t.Fatalf("no test-compose target:\n%s", b)
+	}
+	if err := os.WriteFile(path, b[:i], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p = computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if change(p, "shearbolt.yaml") != nil {
+		t.Fatalf("config changed:\n%s", change(p, "shearbolt.yaml").Content)
+	}
+	n := noteOf(t, p.Notes, "COMPOSE_NOT_GATED")
+	if !strings.HasPrefix(n.Message, "test/compose.yml is not gated") || countCode(p.Notes, "COMPOSE_NOT_GATED") != 1 {
+		t.Fatalf("notes: %+v", p.Notes)
+	}
+}
+
+// A compose target the user added for a file setup did not plan stays, and the gates scan it.
+func TestSetupHandAddedComposeTarget(t *testing.T) {
+	cfg := "version: 1\ntargets:\n  - name: docker-compose\n    compose: docker-compose.yml\n  - name: stack\n    compose: stack.yml\n"
+	root := writeTree(t, map[string]string{
+		"docker-compose.yml": composeImage,
+		"stack.yml":          composeImage,
+		"shearbolt.yaml":     cfg,
+		fakeCIFile:           "test: docker compose up -d\ndeploy: docker stack deploy -c stack.yml app\n",
+	})
+	ci := &fakeCI{files: []string{fakeCIFile}}
+	p := computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if change(p, "shearbolt.yaml") != nil {
+		t.Fatalf("config changed: %s", change(p, "shearbolt.yaml").Content)
+	}
+	if len(ci.gates) == 0 {
+		t.Fatal("no gate placed")
+	}
+	for _, g := range ci.gates {
+		if g.Targets != nil && !slices.Contains(g.Targets, "stack") {
+			t.Fatalf("gate targets %v lack stack", g.Targets)
+		}
+	}
+}

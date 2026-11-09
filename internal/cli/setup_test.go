@@ -837,6 +837,11 @@ func TestNothingToChangeCodes(t *testing.T) {
 	if got := nothingToChange(&plan.Plan{Notes: []plan.Note{{Code: "TAG_ADDED"}, {Code: "NO_BUILD_FOUND"}}}); got != "Shearbolt is already set up here; nothing to change." {
 		t.Errorf("informational notes: %q", got)
 	}
+	for _, code := range []string{"COMPOSE_ADDED", "COMPOSE_NOT_GATED", "COMPOSE_NO_IMAGES", "COMPOSE_NOT_READ", "COMPOSE_VARIABLE", "BUILD_NOT_GATED", "NO_DEPLOY_SEEN"} {
+		if got := nothingToChange(&plan.Plan{Notes: []plan.Note{{Code: "TAG_ADDED"}, {Code: code}}}); got != "Shearbolt is already set up here; nothing to change." {
+			t.Errorf("%s: %q", code, got)
+		}
+	}
 }
 
 // typedNumbers is value v of q typed as option numbers, the way a user answers on the terminal.

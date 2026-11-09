@@ -427,7 +427,11 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 		pl.projects[p.Dir] = pp
 		if len(m.jobs) == 0 {
 			g := plan.Gate{Project: p, Config: configFile(p), Version: version}
-			msg := fmt.Sprintf("no gate could be placed automatically for %s; add this by hand to the job that builds it, after the build and before any push:", projectLabel(p))
+			where := "the job that builds it, after the build and before any push"
+			if p.Ecosystem == "compose" {
+				where = "a job that runs before any deploy"
+			}
+			msg := fmt.Sprintf("no gate could be placed automatically for %s; add this by hand to %s:", projectLabel(p), where)
 			for _, f := range m.ciFiles {
 				msg += "\n" + f + ":\n" + snippet(f, g)
 			}

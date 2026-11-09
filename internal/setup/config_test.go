@@ -1,6 +1,7 @@
 package setup
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -361,4 +362,120 @@ func TestConfigReadBackSafetyNet(t *testing.T) {
 		t.Fatalf("variable excludes: %v %v", ch, notes)
 	}
 	loadConfig(t, ch.Content)
+}
+
+const composeNote = "setup gates the images of %s in shearbolt.yaml. A compose file that only runs locally or in tests ships nothing: remove its target, which setup will not add back, or exclude single services with exclude: [service]."
+
+func TestConfigNewFileCompose(t *testing.T) {
+	r := repo(t, nil)
+	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
+	planned := []config.Target{
+		{Name: "source", Source: "."},
+		{Name: "docker-compose", Compose: "docker-compose.yml"},
+		{Name: "web", Image: "${SHEARBOLT_IMAGE:-web:local}"},
+		{Name: "dev", Compose: "test/dev.yml"},
+	}
+	ch, merged, names, _, notes := configChange(r, p, planned)
+	if ch == nil {
+		t.Fatal("no change")
+	}
+	want := "# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme\n" +
+		"version: 1\n" +
+		"project: web\n" +
+		"targets:\n" +
+		"  - name: web\n" +
+		"    image: ${SHEARBOLT_IMAGE:-web:local}\n" +
+		"  - name: docker-compose\n" +
+		"    compose: docker-compose.yml\n" +
+		"  - name: dev\n" +
+		"    compose: test/dev.yml\n" +
+		"  - name: source\n" +
+		"    source: .\n"
+	if ch.Content != want {
+		t.Fatalf("content:\n%s\nwant:\n%s", ch.Content, want)
+	}
+	if got := targetNames(merged); !slices.Equal(got, []string{"web", "docker-compose", "dev", "source"}) || names["dev"] != "dev" {
+		t.Fatalf("merged %v, names %v", got, names)
+	}
+	if len(notes) != 1 || notes[0].Code != "COMPOSE_ADDED" || notes[0].File != "shearbolt.yaml" ||
+		notes[0].Message != fmt.Sprintf(composeNote, "docker-compose.yml, test/dev.yml") {
+		t.Fatalf("notes: %+v", notes)
+	}
+	if cfg := loadConfig(t, ch.Content); cfg.Targets[1].Compose == "" {
+		t.Fatalf("loaded: %+v", cfg.Targets)
+	}
+}
+
+func TestConfigNewFileComposeOnly(t *testing.T) {
+	r := repo(t, nil)
+	p := composeOnly("docker-compose.yml", "test/compose.yml")
+	planned := []config.Target{{Name: "docker-compose", Compose: "docker-compose.yml"}, {Name: "test-compose", Compose: "test/compose.yml"}}
+	ch, _, _, _, notes := configChange(r, p, planned)
+	if ch == nil || len(notes) != 1 || notes[0].Code != "COMPOSE_ADDED" {
+		t.Fatalf("change %v, notes %+v", ch, notes)
+	}
+	t.Logf("compose-only config:\n%s", ch.Content)
+	cfg := loadConfig(t, ch.Content)
+	if len(cfg.Targets) != 2 || cfg.Targets[0].Kind() != "compose" || !strings.HasSuffix(cfg.Targets[1].Compose, "/test/compose.yml") {
+		t.Fatalf("loaded: %+v", cfg.Targets)
+	}
+}
+
+func TestConfigExistingComposeNotGated(t *testing.T) {
+	existing := "version: 1\ntargets:\n  - name: source\n    source: .\n"
+	r := repo(t, map[string]string{"shearbolt.yaml": existing})
+	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
+	planned := []config.Target{{Name: "docker-compose", Compose: "docker-compose.yml", Exclude: []string{"db"}}, {Name: "source", Source: "."}}
+	ch, merged, names, _, notes := configChange(r, p, planned)
+	if ch != nil {
+		t.Fatalf("change: %+v", ch)
+	}
+	if got := targetNames(merged); !slices.Equal(got, []string{"source"}) || names["source"] != "source" {
+		t.Fatalf("merged %v, names %v", got, names)
+	}
+	want := "docker-compose.yml is not gated: shearbolt.yaml has no compose target for it. If its images ship, add this to targets:\n" +
+		"  - name: docker-compose\n    compose: docker-compose.yml\n    exclude: [db]"
+	if len(notes) != 1 || notes[0].Code != "COMPOSE_NOT_GATED" || notes[0].File != "shearbolt.yaml" || notes[0].Message != want {
+		t.Fatalf("notes: %+v", notes)
+	}
+}
+
+func TestConfigExistingComposeOtherName(t *testing.T) {
+	existing := "version: 1\ntargets:\n  - name: stack\n    compose: ./docker-compose.yml\n  - name: source\n    source: .\n"
+	r := repo(t, map[string]string{"shearbolt.yaml": existing})
+	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
+	planned := []config.Target{{Name: "docker-compose", Compose: "docker-compose.yml"}, {Name: "source", Source: "."}}
+	ch, merged, names, _, notes := configChange(r, p, planned)
+	if ch != nil || len(notes) != 0 || names["docker-compose"] != "stack" || len(merged) != 2 {
+		t.Fatalf("change %v, notes %+v, names %v, merged %v", ch, notes, names, merged)
+	}
+}
+
+// A compose target next to a missing image target: the image is appended, the compose target
+// is not.
+func TestConfigExistingComposeNeverAppended(t *testing.T) {
+	existing := "version: 1\ntargets:\n  - name: source\n    source: .\n"
+	r := repo(t, map[string]string{"shearbolt.yaml": existing})
+	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
+	planned := []config.Target{{Name: "web", Image: "${SHEARBOLT_IMAGE:-web:local}"}, {Name: "compose", Compose: "compose.yml"}, {Name: "source", Source: "."}}
+	ch, merged, _, _, notes := configChange(r, p, planned)
+	if ch == nil || strings.Contains(ch.Content, "compose") || !slices.Equal(targetNames(merged), []string{"source", "web"}) {
+		t.Fatalf("change %+v, merged %v", ch, targetNames(merged))
+	}
+	if !slices.Equal(codes(notes), []string{"COMPOSE_NOT_GATED"}) {
+		t.Fatalf("notes: %v", codes(notes))
+	}
+}
+
+func TestSortTargetsCompose(t *testing.T) {
+	got := sortTargets([]config.Target{{Name: "s", Source: "."}, {Name: "c", Compose: "c.yml"}, {Name: "f", File: "f"}, {Name: "d", Dir: "d"}, {Name: "i", Image: "i"}})
+	if n := targetNames(got); !slices.Equal(n, []string{"i", "d", "f", "c", "s"}) {
+		t.Fatalf("order: %v", n)
+	}
+}
+
+func TestReadsBackCompose(t *testing.T) {
+	if readsBack([]byte("targets:\n  - name: a\n"), []config.Target{{Name: "a", Compose: "a.yml"}}) {
+		t.Fatal("a bare item must not read back as a compose target")
+	}
 }
