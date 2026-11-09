@@ -1036,3 +1036,226 @@ func TestGatesBuildProjectDefaultFollowsExistingGate(t *testing.T) {
 		t.Fatalf("questions: %+v", qs)
 	}
 }
+
+// composeOnly is the compose-only project attachCompose makes for compose files that no npm or
+// Rust project contains.
+func composeOnly(files ...string) plan.Project {
+	return plan.Project{Ecosystem: "compose", Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
+}
+
+// A compose-only project never owns builds. With an npm project in web/ and a root compose file,
+// attribution and web's gate are those without the compose file; the only new questions are
+// projects and the compose-only project's gate-job.
+func TestGatesComposeOnlyOwnsNoBuilds(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "docker-compose.yml": composeImage})
+	web := npmProject("web", "web")
+	jobs := []plan.Job{mkJob(t, r, "ci", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/web:1 ."), run("cd web && npm run build"))}
+	if qs := newGateModel([]plan.Project{web}, jobs, []string{ciFile}).questions(); len(qs) != 0 {
+		t.Fatalf("without compose: %v", questionIDs(qs))
+	}
+	before, _, plBefore := planGates(t, r, []plan.Project{web}, jobs, nil)
+
+	projects := []plan.Project{composeOnly("docker-compose.yml"), web}
+	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:."}) {
+		t.Fatalf("questions: %v", got)
+	}
+	if qs[0].Default != ".,web" || qs[0].Options[0].Label != ". (compose)" {
+		t.Fatalf("projects: %+v", qs[0])
+	}
+	if gj := qs[1]; gj.Prompt != "Which job should check the compose images of repo?" || gj.UnlessChosen != nil || gj.Project != "." || gj.Default != jobs[0].ID {
+		t.Fatalf("gate-job:.: %+v", gj)
+	}
+
+	gates, planned, pl := planGates(t, r, projects, jobs, nil)
+	var webGates, wantGates []string
+	var dot []plan.Gate
+	for _, g := range gates {
+		if g.Project.Dir == "web" {
+			webGates = append(webGates, dumpGate(g))
+		} else {
+			dot = append(dot, g)
+		}
+	}
+	for _, g := range before {
+		wantGates = append(wantGates, dumpGate(g))
+	}
+	if !slices.Equal(webGates, wantGates) {
+		t.Fatalf("web's gates %v, want %v", webGates, wantGates)
+	}
+	pos := func(bs []plan.Build) []plan.Pos {
+		var out []plan.Pos
+		for _, b := range bs {
+			out = append(out, b.Pos)
+		}
+		return out
+	}
+	if got, want := pos(pl.attributed["web"]), pos(plBefore.attributed["web"]); len(want) != 2 || !slices.Equal(got, want) || len(pl.attributed["."]) != 0 {
+		t.Fatalf("attributed %v, want web %v", pl.attributed, want)
+	}
+	if len(dot) != 1 || dot[0].Job != jobs[0].ID || dot[0].At.Step != 0 || dot[0].Before || len(dot[0].Builds) != 0 {
+		t.Fatalf("compose-only gate: %+v", dot)
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"docker-compose"}) {
+		t.Fatalf("compose-only targets: %v", got)
+	}
+}
+
+// Build-project questions offer only npm and Rust projects, and an existing gate of the
+// compose-only project after the build does not become the default.
+func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
+	r := repo(t, map[string]string{"docker/Dockerfile": "FROM x\n", "compose.yml": composeImage})
+	projects := []plan.Project{composeOnly("compose.yml"), npmProject("apps/a", "a"), npmProject("apps/b", "b")}
+	bScan := run(`"$HOME/.local/bin/shearbolt" scan --ci --config apps/b/shearbolt.yaml`)
+	jobs := []plan.Job{mkJob(t, r, "ci", run(`cd "$X" && npm run build`), scanStep)}
+	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
+	bp := "build-project:" + ciFile + ":100"
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", bp, "gate-job:.", "gate-job:apps/a", "gate-job:apps/b"}) {
+		t.Fatalf("questions: %v", got)
+	}
+	var opts []string
+	for _, o := range qs[1].Options {
+		opts = append(opts, o.Value)
+	}
+	if !slices.Equal(opts, []string{"apps/a", "apps/b", "none"}) || qs[1].Default != "apps/a" {
+		t.Fatalf("build-project: %+v", qs[1])
+	}
+	if gj := qs[2]; gj.UnlessChosen != nil || gj.Default != jobs[0].ID {
+		t.Fatalf("gate-job:.: %+v", gj)
+	}
+	if gj := qs[3]; !slices.Equal(gj.UnlessChosen, []string{bp}) {
+		t.Fatalf("gate-job:apps/a: %+v", gj)
+	}
+
+	// The compose-only project's gate is passed over for the next gate of an npm project.
+	jobs = []plan.Job{mkJob(t, r, "ci", run(`cd "$X" && npm run build`), scanStep, bScan)}
+	qs = newGateModel(projects, jobs, []string{ciFile}).questions()
+	if i := slices.IndexFunc(qs, func(q plan.Question) bool { return q.ID == bp }); i < 0 || qs[i].Default != "apps/b" {
+		t.Fatalf("questions: %+v", qs)
+	}
+
+	// A build in a directory no npm project contains is asked about too: the compose-only
+	// project at the root does not take it by prefix.
+	jobs = []plan.Job{mkJob(t, r, "image", run("docker build -f docker/Dockerfile -t x:1 docker"))}
+	if got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions()); !slices.Contains(got, bp) {
+		t.Fatalf("questions: %v", got)
+	}
+}
+
+// In a repository without an npm or Rust project, CI builds belong to no project and get
+// BUILD_NOT_GATED; the compose-only project's gate goes at the start of the chosen job, after
+// checkout and before the push.
+func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
+	projects := []plan.Project{composeOnly("compose.yml")}
+	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."), run("docker push ghcr.io/acme/app:1"))}
+	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
+	if len(qs) != 1 || qs[0].ID != "gate-job:." || qs[0].Prompt != "Which job should check the compose images of repo?" || qs[0].UnlessChosen != nil {
+		t.Fatalf("questions: %+v", qs)
+	}
+	gates, planned, pl := planGates(t, r, projects, jobs, nil)
+	if len(gates) != 1 {
+		t.Fatalf("gates: %+v", gates)
+	}
+	if g := gates[0]; g.Job != jobs[0].ID || g.At.Step != 0 || g.At.Command != -1 || g.Before || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
+		t.Fatalf("gate: %s", dumpGate(g))
+	}
+	if got := planned["."]; len(got) != 1 || got[0].Name != "compose" || got[0].Compose != "compose.yml" || pl.projects["."].source != "" {
+		t.Fatalf("planned: %+v", got)
+	}
+	n := noteOf(t, pl.notes, "BUILD_NOT_GATED")
+	if n.File != ciFile || n.Line != 200 || countCode(pl.notes, "BUILD_NOT_GATED") != 1 ||
+		n.Message != "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list" {
+		t.Fatalf("BUILD_NOT_GATED: %+v", n)
+	}
+	if n := noteOf(t, pl.notes, "NO_BUILD_FOUND"); n.File != ciFile || n.Message != "repo has no build step, so the gate in ci.yml: deploy checks its compose images." {
+		t.Fatalf("NO_BUILD_FOUND: %+v", n)
+	}
+	if len(pl.attributed["."]) != 0 {
+		t.Fatalf("attributed: %v", pl.attributed)
+	}
+}
+
+// NO_DEPLOY_SEEN for a project with compose targets when no CI job pushes or deploys.
+func TestComputeNoDeploySeen(t *testing.T) {
+	ci := &fakeCI{files: []string{fakeCIFile}}
+	root := writeTree(t, map[string]string{"compose.yml": composeImage, fakeCIFile: "test: docker compose up -d\n"})
+	p := computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	n := noteOf(t, p.Notes, "NO_DEPLOY_SEEN")
+	if n.File != "shearbolt.yaml" || countCode(p.Notes, "NO_DEPLOY_SEEN") != 1 ||
+		n.Message != "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate." {
+		t.Fatalf("NO_DEPLOY_SEEN: %+v", n)
+	}
+
+	// A stack deploy is a deploy.
+	root = writeTree(t, map[string]string{"compose.yml": composeImage, fakeCIFile: "test: docker compose up -d\ndeploy: docker stack deploy -c compose.yml app\n"})
+	if p = computeWith(t, root, ci, nil); p.Error != nil || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
+		t.Fatalf("stack deploy: %+v, notes %v", p.Error, codes(p.Notes))
+	}
+
+	// An npm project with a compose file gets it too; one without gets nothing.
+	root = writeTree(t, npmTree(map[string]string{"compose.yml": composeImage}))
+	if p = computeWith(t, root, ci, nil); p.Error != nil || countCode(p.Notes, "NO_DEPLOY_SEEN") != 1 {
+		t.Fatalf("npm with compose: %+v, notes %v", p.Error, codes(p.Notes))
+	}
+	root = writeTree(t, npmTree(nil))
+	if p = computeWith(t, root, ci, nil); p.Error != nil || hasCode(p.Notes, "NO_DEPLOY_SEEN") {
+		t.Fatalf("npm: %+v, notes %v", p.Error, codes(p.Notes))
+	}
+}
+
+// A compose target is named after the file's path without its extension, with "/" as "-";
+// collisions are numbered. Compose targets come after file targets and before source, and a
+// compose-only project has no source target.
+func TestGatesComposeTargetNames(t *testing.T) {
+	pp := &projectPlan{project: composeOnly("docker-compose.yml", "test/compose.yml", "compose.yml", "compose.yaml")}
+	pp.plan()
+	var got []string
+	for _, tg := range pp.targets {
+		got = append(got, tg.Name+"="+tg.Compose)
+	}
+	want := []string{"docker-compose=docker-compose.yml", "test-compose=test/compose.yml", "compose=compose.yml", "compose-2=compose.yaml"}
+	if !slices.Equal(got, want) || pp.source != "" {
+		t.Fatalf("targets %v (source %q), want %v", got, pp.source, want)
+	}
+
+	p := npmProject(".", "web")
+	p.Compose = []string{"compose.yml"}
+	pp = &projectPlan{project: p}
+	pp.plan()
+	if got := targetNames(pp.targets); !slices.Equal(got, []string{"compose", "source"}) || pp.source != "source" {
+		t.Fatalf("npm targets: %v", got)
+	}
+}
+
+// Compose targets are scanned by every gate of their project, as source is, also by gates that
+// scan a subset; a compose target the config does not have is never named.
+func TestGatesComposeTargetsInSubsets(t *testing.T) {
+	r := demoRepo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
+	projects := []plan.Project{{Ecosystem: "rust", Dir: ".", Name: "web", Binaries: []string{"demo"}, Compose: []string{"compose.yml"}}}
+	jobs := []plan.Job{
+		mkJob(t, r, "x", run("cargo build --release --locked")),
+		mkJob(t, r, "y", run("docker build -t ghcr.io/acme/web:1 .")),
+	}
+	gates, planned, pl := planGates(t, r, projects, jobs, nil)
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"web", "demo", "compose", "source"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	if !slices.Equal(gates[0].Targets, []string{"compose", "demo", "source"}) || !slices.Equal(gates[1].Targets, []string{"compose", "source", "web"}) {
+		t.Fatalf("targets: %v, %v", gates[0].Targets, gates[1].Targets)
+	}
+
+	pp := pl.projects["."]
+	merged := slices.DeleteFunc(slices.Clone(pp.targets), func(tg config.Target) bool { return tg.Compose != "" })
+	names := map[string]string{}
+	for _, tg := range pp.targets {
+		names[tg.Name] = tg.Name
+	}
+	gates = pp.finish(merged, names, map[string]string{"web": "SHEARBOLT_IMAGE"}, func(string) string { return commitExprs["github"] }, map[string]map[string]bool{})
+	if !slices.Equal(gates[0].Targets, []string{"demo", "source"}) || !slices.Equal(gates[1].Targets, []string{"source", "web"}) {
+		t.Fatalf("without the compose target: %v, %v", gates[0].Targets, gates[1].Targets)
+	}
+}

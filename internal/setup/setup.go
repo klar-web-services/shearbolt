@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/klar-web-services/shearbolt/internal/config"
 	"github.com/klar-web-services/shearbolt/internal/scan"
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/bitbucket"
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/github"
@@ -43,6 +44,10 @@ type Options struct {
 
 // noCIMessage is NO_CI's message (R9).
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
+
+// noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose targets when no CI
+// job setup read pushes or deploys.
+const noDeploySeenMessage = "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate."
 
 // alreadyExcluded are the directories the scan itself never descends into, so a source target
 // does not need to exclude them (R1).
@@ -168,11 +173,17 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 
 	// 7-9. Planned targets, configs, then each gate's targets and image variables (R4 rule 8, R5).
+	// A project whose config has a compose target gets NO_DEPLOY_SEEN when no job pushes or
+	// deploys: a platform that deploys on its own is not stopped by the gate.
 	commit := func(file string) string {
 		if f := byPath[file]; f != nil {
 			return commitExprs[f.ci.Name()]
 		}
 		return ""
+	}
+	pushed := false
+	for j := range jobs {
+		pushed = pushed || m.firstPush(j) != never
 	}
 	var changes []plan.FileChange
 	var gates []plan.Gate
@@ -190,6 +201,13 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 		notes = append(notes, cn...)
 		gates = append(gates, pp.finish(merged, names, vars, commit, usedTags)...)
+		ts := merged
+		if merged == nil {
+			ts = pp.targets
+		}
+		if !pushed && slices.ContainsFunc(ts, func(t config.Target) bool { return t.Kind() == "compose" }) {
+			notes = append(notes, plan.Note{Code: "NO_DEPLOY_SEEN", Message: noDeploySeenMessage, File: configFile(proj)})
+		}
 	}
 
 	// 10. Prepare every build attributed to a selected project. The CI-file parts of a

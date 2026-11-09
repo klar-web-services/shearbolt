@@ -48,6 +48,7 @@ func (l located) at() at { return at{l.step, l.Pos.Command} }
 // gateModel holds the projects, the editable jobs and their builds with their attribution.
 type gateModel struct {
 	projects []plan.Project
+	owners   []plan.Project // the projects that can own builds: npm and Rust, never compose-only
 	jobs     []plan.Job
 	ciFiles  []string
 	builds   []located // every build in job order; a duplicate Via build of one command is left out
@@ -55,14 +56,19 @@ type gateModel struct {
 	question []string  // per build: its build-project question ID, else ""
 }
 
-// newGateModel attributes every build of jobs (R3). A build belongs to the detected project
-// whose Dir is the longest prefix of its directory; with one detected project, every build
-// belongs to it. A build whose directory is unknown, or that matches no prefix, gets a
-// build-project question when there is more than one project. RewriteOnly builds are attributed
-// by prefix only and never get a question. A Via build found twice in one command (a file
-// reached by two calls) counts once.
+// newGateModel attributes every build of jobs (R3) among the owners, the npm and Rust projects:
+// a compose-only project never owns builds. A build belongs to the owner whose Dir is the longest
+// prefix of its directory; with one owner, every build belongs to it. A build whose directory is
+// unknown, or that matches no prefix, gets a build-project question when there is more than one
+// owner. RewriteOnly builds are attributed by prefix only and never get a question. A Via build
+// found twice in one command (a file reached by two calls) counts once.
 func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *gateModel {
 	m := &gateModel{projects: projects, jobs: jobs, ciFiles: ciFiles}
+	for _, p := range projects {
+		if p.Ecosystem != "compose" {
+			m.owners = append(m.owners, p)
+		}
+	}
 	seen := map[string]bool{}
 	for j, job := range jobs {
 		for s, st := range job.Steps {
@@ -75,8 +81,8 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 					seen[key] = true
 				}
 				owner := m.prefixOwner(b.Dir)
-				if !b.RewriteOnly && len(projects) == 1 {
-					owner = projects[0].Dir
+				if !b.RewriteOnly && len(m.owners) == 1 {
+					owner = m.owners[0].Dir
 				}
 				m.builds = append(m.builds, located{Build: b, i: len(m.builds), job: j, step: s})
 				m.owner = append(m.owner, owner)
@@ -88,7 +94,7 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 	// builds share a line.
 	var open []int
 	for i, b := range m.builds {
-		if !b.RewriteOnly && m.owner[i] == "" && len(projects) > 1 {
+		if !b.RewriteOnly && m.owner[i] == "" && len(m.owners) > 1 {
 			open = append(open, i)
 		}
 	}
@@ -117,14 +123,14 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 	return m
 }
 
-// prefixOwner returns the detected project whose Dir is the longest prefix of dir, or "" when
-// dir is unknown or no project contains it.
+// prefixOwner returns the owner whose Dir is the longest prefix of dir, or "" when dir is unknown
+// or no owner contains it.
 func (m *gateModel) prefixOwner(dir string) string {
 	if dir == "" {
 		return ""
 	}
 	best := ""
-	for _, p := range m.projects {
+	for _, p := range m.owners {
 		if (p.Dir == "." || dir == p.Dir || strings.HasPrefix(dir, p.Dir+"/")) && (best == "" || len(p.Dir) > len(best) || best == ".") {
 			best = p.Dir
 		}
@@ -132,11 +138,13 @@ func (m *gateModel) prefixOwner(dir string) string {
 	return best
 }
 
-// questions returns R3's questions: projects (with more than one detected project), then
-// build-project by file and line (default: the project whose existing gate follows the build,
-// else the first project), then gate-job by project. A gate-job question is asked for
-// each project without an attributed build when there is an editable job; its default is the
-// first job that already holds the project's gate, otherwise the first job.
+// questions returns R3's questions: projects (with more than one detected project, compose-only
+// included), then build-project by file and line (options: the owners and none; default: the
+// owner whose existing gate follows the build, else the first owner), then gate-job by project.
+// A gate-job question is asked for each project without an attributed build when there is an
+// editable job; its default is the first job that already holds the project's gate, otherwise
+// the first job. A compose-only project's gate-job asks which job checks its compose images, and
+// no build-project answer makes it inapplicable: no build can be chosen for that project.
 func (m *gateModel) questions() []plan.Question {
 	var qs []plan.Question
 	if len(m.projects) > 1 {
@@ -174,7 +182,7 @@ func (m *gateModel) questions() []plan.Question {
 			Prompt: fmt.Sprintf("Which project does the build at %s:%d (%s) belong to?", b.Pos.File, b.Pos.Line, commandText(b.Build)),
 			Kind:   "choice",
 		}
-		for _, p := range m.projects {
+		for _, p := range m.owners {
 			q.Options = append(q.Options, plan.Option{Value: p.Dir, Label: projectOption(p)})
 		}
 		q.Options = append(q.Options, plan.Option{Value: "none", Label: "none (do not gate this build)"})
@@ -199,6 +207,10 @@ func (m *gateModel) questions() []plan.Question {
 			Project:      p.Dir,
 			UnlessChosen: bp,
 		}
+		if p.Ecosystem == "compose" {
+			q.Prompt = fmt.Sprintf("Which job should check the compose images of %s?", projectLabel(p))
+			q.UnlessChosen = nil
+		}
 		def := -1
 		for j, job := range m.jobs {
 			q.Options = append(q.Options, plan.Option{Value: job.ID, Label: job.Label})
@@ -214,8 +226,10 @@ func (m *gateModel) questions() []plan.Question {
 	return qs
 }
 
-// gateAfter returns the project of the existing scan gate that follows build b most closely in
-// its job, when that is a detected project; "" otherwise.
+// gateAfter returns the owner of the existing scan gate that follows build b most closely in its
+// job, among the gates of owners; "" when there is none. Gates of a compose-only project are
+// passed over, so the default is always one of the build-project options (plan.Resolve does not
+// check defaults).
 func (m *gateModel) gateAfter(b located) string {
 	best, bestAt := "", never
 	for s, st := range m.jobs[b.job].Steps {
@@ -224,7 +238,7 @@ func (m *gateModel) gateAfter(b located) string {
 			if g.Install || !b.at().less(a) || !a.less(bestAt) {
 				continue
 			}
-			if slices.ContainsFunc(m.projects, func(p plan.Project) bool { return p.Dir == g.Project }) {
+			if slices.ContainsFunc(m.owners, func(p plan.Project) bool { return p.Dir == g.Project }) {
 				best, bestAt = g.Project, a
 			}
 		}
@@ -334,17 +348,18 @@ type placement struct {
 type projectPlan struct {
 	project plan.Project
 	gates   []*gatePlace
-	targets []config.Target   // planned (R6 order): image slots, file targets, source
+	targets []config.Target   // planned (R6 order): image slots, file targets, compose targets, source
 	slots   []string          // planned name of image slot k at index k-1
 	files   map[string]string // binary path -> planned name
-	source  string
+	source  string            // planned name of the source target; "" for a compose-only project
 }
 
 // place resolves attribution with the answers in values (from plan.Resolve) and places one
 // gate per gate job of each selected project (R3, R4 rules 1-4 and 7). Gates get version.
 // Builds attributed to selected projects contribute their notes, located at their CI command
-// when they carry no location. With no editable job at all, no gate is placed and each selected
-// project gets NO_GATE_PLACED with snippet's text for every CI file.
+// when they carry no location. Without owners (only a compose-only project), every image or
+// binary build gets BUILD_NOT_GATED. With no editable job at all, no gate is placed and each
+// selected project gets NO_GATE_PLACED with snippet's text for every CI file.
 func (m *gateModel) place(values map[string]string, version string, snippet func(file string, g plan.Gate) string) *placement {
 	pl := &placement{projects: map[string]*projectPlan{}, attributed: map[string][]plan.Build{}}
 	selected := map[string]bool{}
@@ -377,6 +392,18 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				n.File, n.Line = b.Pos.File, b.Pos.Line
 			}
 			pl.notes = append(pl.notes, n)
+		}
+	}
+	if len(m.owners) == 0 {
+		for _, b := range m.builds {
+			if !b.RewriteOnly && (b.Kind == plan.BuildImage || b.Kind == plan.BuildBinary) {
+				pl.notes = append(pl.notes, plan.Note{
+					Code:    "BUILD_NOT_GATED",
+					Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list",
+					File:    b.Pos.File,
+					Line:    b.Pos.Line,
+				})
+			}
 		}
 	}
 
@@ -431,11 +458,11 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 			if j := slices.IndexFunc(m.jobs, func(job plan.Job) bool { return job.ID == values["gate-job:"+p.Dir] }); j >= 0 {
 				gp, notes := m.placeAtStart(p, j, version)
 				pp.gates = append(pp.gates, gp)
-				pl.notes = append(pl.notes, plan.Note{
-					Code:    "NO_BUILD_FOUND",
-					Message: fmt.Sprintf("No build step was found for %s, so the gate in %s checks its lockfiles.", projectLabel(p), m.jobs[j].Label),
-					File:    gp.file,
-				})
+				msg := fmt.Sprintf("No build step was found for %s, so the gate in %s checks its lockfiles.", projectLabel(p), m.jobs[j].Label)
+				if p.Ecosystem == "compose" {
+					msg = fmt.Sprintf("%s has no build step, so the gate in %s checks its compose images.", projectLabel(p), m.jobs[j].Label)
+				}
+				pl.notes = append(pl.notes, plan.Note{Code: "NO_BUILD_FOUND", Message: msg, File: gp.file})
 				pl.notes = append(pl.notes, notes...)
 			}
 		}
@@ -779,13 +806,14 @@ func (m *gateModel) itemText(j int, a at) string {
 // plan computes the project's planned targets from its gates (R5, R6): one image target per
 // slot (as many as the most gated image builds in one job), one file target per binary path of
 // its gated binary builds (only for Rust projects, whose paths are relative to the project's
-// Cargo.lock root), and source with the project's excludes. Slot 1 is named after the project,
-// slot k >= 2 after the last path component of its scan tag's repository in the first job that
-// fills it (image-<k> when that is not usable).
+// Cargo.lock root), one compose target per compose file of the project (composeName), and
+// source with the project's excludes, except for a compose-only project, which has no
+// lockfiles. Slot 1 is named after the project, slot k >= 2 after the last path component of
+// its scan tag's repository in the first job that fills it (image-<k> when that is not usable).
 func (pp *projectPlan) plan() {
 	p := pp.project
 	taken := map[string]bool{"source": true}
-	pp.source = "source"
+	pp.source = ""
 	pp.files = map[string]string{}
 	var images, files []config.Target
 	usedVars := map[string]bool{}
@@ -841,7 +869,26 @@ func (pp *projectPlan) plan() {
 			}
 		}
 	}
-	pp.targets = append(append(images, files...), config.Target{Name: pp.source, Source: ".", Exclude: slices.Clone(p.Excludes)})
+	pp.targets = append(images, files...)
+	for _, f := range p.Compose {
+		pp.targets = append(pp.targets, config.Target{Name: uniqueName(composeName(f), taken), Compose: f})
+	}
+	if p.Ecosystem != "compose" {
+		pp.source = "source"
+		pp.targets = append(pp.targets, config.Target{Name: pp.source, Source: ".", Exclude: slices.Clone(p.Excludes)})
+	}
+}
+
+// composeName is the target name of compose file f, a path relative to the project: f without
+// its extension, "/" replaced by "-", sanitized, with leading and trailing separators trimmed;
+// "compose" when nothing is left. So docker-compose.yml is docker-compose, test/compose.yml is
+// test-compose.
+func composeName(f string) string {
+	n := strings.ReplaceAll(strings.TrimSuffix(f, path.Ext(f)), "/", "-")
+	if n = strings.Trim(sanitizeName(n), ".-_"); n != "" {
+		return n
+	}
+	return "compose"
 }
 
 // finish completes the project's gates against its merged config (R4 rule 8, R5). names maps
@@ -851,9 +898,11 @@ func (pp *projectPlan) plan() {
 // used holds the scan tags already given out per job; it is shared by every project's finish, so
 // scan tags are unique within a job.
 //
-// A gate scans the targets of its gated builds, source, and every target setup did not plan;
-// Targets is nil when that is every target of the merged config. Each gated image build whose
-// target has a variable gets an ImageVar with the scan tag the plugin adds to the build.
+// A gate scans the targets of its gated builds, source, every compose target, and every target
+// setup did not plan; Targets is nil when that is every target of the merged config, and
+// otherwise lists only targets the merged config has (a planned target can be missing from it).
+// Each gated image build whose target has a variable gets an ImageVar with the scan tag the
+// plugin adds to the build.
 func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]string, commit func(file string) string, used map[string]map[string]bool) []plan.Gate {
 	name := func(planned string) string {
 		if n, ok := names[planned]; ok {
@@ -862,13 +911,24 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 		return planned
 	}
 	plannedNames := map[string]bool{}
+	always := map[string]bool{} // scanned by every gate: source and the compose targets
+	if pp.source != "" {
+		always[name(pp.source)] = true
+	}
 	for _, t := range pp.targets {
 		plannedNames[name(t.Name)] = true
+		if t.Kind() == "compose" {
+			always[name(t.Name)] = true
+		}
+	}
+	inMerged := map[string]bool{}
+	for _, t := range merged {
+		inMerged[t.Name] = true
 	}
 	var out []plan.Gate
 	for _, gp := range pp.gates {
 		g := gp.gate
-		set := map[string]bool{name(pp.source): true}
+		set := maps.Clone(always)
 		if used[g.Job] == nil {
 			used[g.Job] = map[string]bool{}
 		}
@@ -909,7 +969,9 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 		}
 		if !all && merged != nil {
 			for n := range set {
-				g.Targets = append(g.Targets, n)
+				if inMerged[n] {
+					g.Targets = append(g.Targets, n)
+				}
 			}
 			slices.Sort(g.Targets)
 		}
