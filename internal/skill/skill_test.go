@@ -110,6 +110,36 @@ func TestSkillFrontmatter(t *testing.T) {
 	}
 }
 
+// The skill brings the CLI (and itself) up to date before it runs any other shearbolt
+// command, so an old install never meets newer instructions or misses newer checks.
+func TestSkillUpdatesTheCLIBeforeUsingIt(t *testing.T) {
+	fm, body := frontmatter(t, string(embedded(t)["SKILL.md"]))
+	const latest = "curl -fsSL https://tools.klar.ws/shearbolt/latest"
+	allowed, _ := fm["allowed-tools"].(string)
+	if !strings.Contains(allowed, "Bash("+latest+")") {
+		t.Errorf("allowed-tools = %q, want the read-only version check %q", allowed, latest)
+	}
+	steps := []string{
+		"command -v shearbolt && shearbolt version",
+		latest,
+		`SHEARBOLT_INSTALL_DIR="$(dirname "$(command -v shearbolt)")" sh`,
+		"shearbolt skill install",
+		"shearbolt setup --plan --json",
+		"shearbolt scan --json",
+	}
+	at := -1
+	for _, s := range steps {
+		i := strings.Index(body, s)
+		if i < 0 {
+			t.Fatalf("SKILL.md does not contain %q", s)
+		}
+		if i < at {
+			t.Errorf("SKILL.md mentions %q before the step that comes ahead of it", s)
+		}
+		at = i
+	}
+}
+
 func TestSkillReferenceLinksExist(t *testing.T) {
 	emb := embedded(t)
 	links := regexp.MustCompile(`references/[A-Za-z0-9._/-]+`).FindAllString(string(emb["SKILL.md"]), -1)

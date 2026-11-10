@@ -390,7 +390,7 @@ build-image:
 | `/shearbolt setup` | Runs `shearbolt setup --plan --json`, asks you only the open questions, asks before applying, shows the diff and tells you what to commit. It never commits. |
 | `/shearbolt fix` | Runs `shearbolt scan --json`, explains each block, proposes the upgrade (a dependency bump, a lockfile update or override, a newer base image), applies it only when you agree, and scans again to confirm. It never adds an exception or changes the policy on its own. |
 
-The skill needs `shearbolt` on your `PATH`.
+The skill needs `shearbolt` on your `PATH`. Before either command, it compares `shearbolt version` with the latest release. If yours is older, the skill updates the CLI where it is installed, runs `shearbolt skill install` (with `--project` for a project install), and goes on with the updated skill. Claude Code asks you before the installer runs, unless your permission settings already allow it. A missing CLI is never installed for you: the skill shows the install command.
 
 ### How Shearbolt is released
 
