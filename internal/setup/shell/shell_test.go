@@ -377,6 +377,20 @@ func TestOperators(t *testing.T) {
 	}
 }
 
+// OpBefore is the operator of the command finished before it. Keywords and an opening { or ( are
+// not commands; the closing } and ) are.
+func TestOpBefore(t *testing.T) {
+	cmds := parseOK(t, "a || b && c\nif d || { e; }; then f; fi\ng || (h)", State{Dir: "."})
+	var got []string
+	for _, c := range cmds {
+		got = append(got, strings.Join(raws(c), " ")+":"+c.OpBefore)
+	}
+	want := []string{"a:", "b:||", "c:&&", "d:\n", "e:||", "}:;", "f:;", "fi:;", "g:\n", "h:||", "):"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestWordParts(t *testing.T) {
 	cmds := parseOK(t, `echo $(echo "a b" ) ${X:-"c d"} `+"`echo e f`"+` 'g h' "i $(j "k") l" \m\ n $'o\'p'`, State{Dir: "."})
 	want := []string{"echo", `$(echo "a b" )`, `${X:-"c d"}`, "`echo e f`", "g h", `i $(j "k") l`, "m n", `o\'p`}

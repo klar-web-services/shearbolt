@@ -27,6 +27,12 @@ func TestStopsDirect(t *testing.T) {
 		"exit":                              {0},
 		`exit "$code"`:                      {0},
 		"exit $?":                           {0},
+		"npm ci || exit $?":                 nil, // after ||, $? is the failed command's status
+		`false || exit "$?"`:                nil,
+		"false || exit ${?}":                nil,
+		"false || { exit $?; }":             nil,
+		"true && exit $?":                   {1},
+		"false || true; exit $?":            {2},
 		"exit 256":                          {0}, // the status is taken modulo 256
 		"exit 1":                            nil,
 		"exit 2 # deploy failed":            nil,

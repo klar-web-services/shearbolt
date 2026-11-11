@@ -25,8 +25,10 @@ import (
 // read or followed. A sourced file outside the repository (~/.cargo/env) does not count, the
 // same rule callOf uses. bash/sh x runs a child shell and never counts.
 //
-// The exit status is taken modulo 256, as the shell does, so exit 256 counts too. depth is the
-// level of the file a source here would read: 1 for a CI command.
+// The exit status is taken modulo 256, as the shell does, so exit 256 counts too. exit $? right
+// after || does not count: $? is then the failed command's non-zero status. Heredoc bodies are
+// parsed as commands, so an exit in one (ssh host <<EOF ... exit ... EOF) is a false positive.
+// depth is the level of the file a source here would read: 1 for a CI command.
 func (c *classifier) stops(cmd shell.Command, ctx plan.Context, depth int) bool {
 	if leadingWord(cmd) == "exec" {
 		return len(cmd.ArgWords()) > 0
@@ -37,7 +39,14 @@ func (c *classifier) stops(cmd shell.Command, ctx plan.Context, depth int) bool 
 	}
 	switch args[0].Value {
 	case "exit":
-		return len(args) == 1 || successStatus(args[1].Value)
+		if len(args) == 1 {
+			return true
+		}
+		v := args[1].Value
+		if cmd.OpBefore == "||" && (v == "$?" || v == "${?}") {
+			return false
+		}
+		return successStatus(v)
 	case "source", ".":
 		return c.sourceStops(cmd, ctx, depth)
 	}

@@ -69,7 +69,10 @@ type Command struct {
 	Redirs     []Redir
 	Start, End int    // byte offsets in the script; End is just after the last word or redirection
 	Op         string // operator after it: "&&", "||", ";", ";;", "|", "&", "\n", or "" at the end or before a closing ")"
-	Before     State  // directory and variables in effect before the command
+	// OpBefore is the Op of the command finished before it ("" for the first). Keywords such as
+	// then and do, and an opening { or (, are not commands: in `a || { b; }`, b's is "||".
+	OpBefore string
+	Before   State // directory and variables in effect before the command
 	// Depth is the nesting in if/for/while/until/select/case, {}, (), a function body or a negated
 	// pipeline. Everything from a heredoc operator to the end of its body is one level deeper, and
 	// so is everything from a construct that never closes to the end of the script. 0 = top level.
@@ -449,7 +452,7 @@ func (p *parser) begin(start int) {
 	if p.heredoc {
 		d++
 	}
-	p.cur = &Command{Start: start, End: start, Depth: d, Before: State{Dir: p.state.Dir, Env: slices.Clone(p.state.Env), Self: p.state.Self}}
+	p.cur = &Command{Start: start, End: start, Depth: d, OpBefore: p.prevOp, Before: State{Dir: p.state.Dir, Env: slices.Clone(p.state.Env), Self: p.state.Self}}
 	p.curCase, p.curCaseIn = false, false
 	p.funcHdr = false
 }
