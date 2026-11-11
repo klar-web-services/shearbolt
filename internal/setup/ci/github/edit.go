@@ -160,10 +160,11 @@ type stepPlan struct {
 	hasPush    bool
 	pushes     []string // docker push lines for its --push builds
 	split      bool
-	cut, rest  int      // part 1 is script[:cut], the remainder script[rest:]
-	last       int      // the command part 1 ends with: the last gated build, or setup's lines after it
-	marker     bool     // the step can stop before the split point: part 1 ends with setup's marker line (design §3.2)
-	state      []string // shell state copied into the remainder
+	cut, rest  int             // part 1 is script[:cut], the remainder script[rest:]
+	last       int             // the command part 1 ends with: the last gated build, or setup's lines after it
+	marker     bool            // the step can stop before the split point: part 1 ends with setup's marker line (design §3.2)
+	state      []string        // shell state copied into the remainder
+	dropped    []droppedAssign // assignments left out of the remainder: the split fails when it reads them
 	remainder  string
 	pushStep   []string // a converted build-push-action's push step, after the gate
 }
@@ -556,6 +557,11 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 		}
 		if strings.Contains(rem, "\n") && !strings.HasSuffix(rem, "\n") {
 			rem += "\n"
+		}
+		for _, d := range sp.dropped {
+			if assignRead(d.names, rem, st.script, st.cmds[:d.cmd]) {
+				return failAt(d.line, d.reason, d.text)
+			}
 		}
 		if st.id != "" && strings.Contains(rem, "GITHUB_OUTPUT") {
 			return failAt(line, "the step has id %s and the part after the gated build writes $GITHUB_OUTPUT, which a split step would not pass on", st.id)

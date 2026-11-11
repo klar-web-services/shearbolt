@@ -2,6 +2,7 @@ package github
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -55,11 +56,11 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	if err := shelledit.Insertable(cmd, line, "split the step after it"); err != nil {
 		return err
 	}
-	state, err := carriedState(st.script, st.cmds[:last], st)
+	state, dropped, err := carriedState(st.script, st.cmds[:last], st)
 	if err != nil {
 		return err
 	}
-	sp.split, sp.state, sp.shellEdits, sp.last = true, state, true, last
+	sp.split, sp.state, sp.dropped, sp.shellEdits, sp.last = true, state, dropped, true, last
 	sp.cut, sp.rest = shelledit.SplitPoints(st.script, cmd)
 	// A stop before the split point ends part 1 successfully, and the remainder would run
 	// although the script never got there (design §3.2): part 1 then ends with setup's marker
@@ -79,12 +80,31 @@ var carried = []string{"cd", "export", "unset", "set", "shopt", "umask", "ulimit
 // uncarried change shell state in ways a new step cannot re-create safely (R4 rule 5 (d)).
 var uncarried = []string{"source", ".", "pushd", "popd", "alias", "unalias", "eval", "trap", "read", "mapfile", "readarray", "local", "hash", "enable"}
 
+// Why carriedState cannot re-create a command's state; %s is the command.
+const (
+	condMsg  = "%s changes the shell state inside a conditional or loop, which a split step cannot re-create"
+	underMsg = "%s runs only under a condition or in a pipeline, so a split step cannot re-create its state"
+	substMsg = "%s uses command substitution, so a split step cannot re-create it"
+)
+
+// droppedAssign is an assignment before the split point that the split step cannot re-create
+// and leaves out (design §4). renderStep fails the split with reason when the continued step
+// may read one of its names.
+type droppedAssign struct {
+	names  []string
+	line   int
+	text   string // the command, as messages show it
+	reason string // one of condMsg, underMsg and substMsg
+	cmd    int    // the command's index in the step
+}
+
 // carriedState returns the commands before the split point that set shell state, to be copied
 // in front of the remainder: cd, set, export and bare assignments without command substitution,
 // and the like. Anything that cannot be carried, or a state change inside a conditional or
-// loop, fails the split.
-func carriedState(script string, cmds []shell.Command, st *step) ([]string, error) {
-	var out []string
+// loop, fails the split, except a command made up only of assignments that is not in a pipeline
+// or in the background: it is returned in dropped, and fails the split only when the continued
+// step reads one of its names (renderStep).
+func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
 	for i, c := range cmds {
 		line := st.cmdLine(c)
 		text := script[c.Start:c.End]
@@ -95,7 +115,7 @@ func carriedState(script string, cmds []shell.Command, st *step) ([]string, erro
 			name = argv[0]
 		}
 		if isFunction(c) {
-			return nil, failAt(line, "the step defines a shell function (%s), which a split step would not have", shelledit.CommandText(c))
+			return nil, nil, failAt(line, "the step defines a shell function (%s), which a split step would not have", shelledit.CommandText(c))
 		}
 		if !bare && !slices.Contains(carried, name) && !slices.Contains(uncarried, name) && !(name == "exec" && len(argv) == 1) {
 			continue
@@ -105,23 +125,187 @@ func carriedState(script string, cmds []shell.Command, st *step) ([]string, erro
 		if i > 0 {
 			after = cmds[i-1].Op
 		}
+		piped := after == "|" || c.Op == "|" || c.Op == "&"
+		reason := ""
 		switch {
 		case c.Depth > 0:
-			return nil, failAt(line, "%s changes the shell state inside a conditional or loop, which a split step cannot re-create", shelledit.CommandText(c))
-		case after == "&&" || after == "||" || after == "|" || c.Op == "|" || c.Op == "&":
-			return nil, failAt(line, "%s runs only under a condition or in a pipeline, so a split step cannot re-create its state", shelledit.CommandText(c))
+			reason = condMsg
+		case after == "&&" || after == "||" || piped:
+			reason = underMsg
 		case slices.Contains(uncarried, name), name == "exec":
-			return nil, failAt(line, "%s changes the shell state in a way a split step cannot re-create", shelledit.CommandText(c))
+			return nil, nil, failAt(line, "%s changes the shell state in a way a split step cannot re-create", shelledit.CommandText(c))
 		case subst:
-			return nil, failAt(line, "%s uses command substitution, so a split step cannot re-create it", shelledit.CommandText(c))
+			reason = substMsg
 		case name == "cd" && len(argv) > 1 && argv[1] == "-":
-			return nil, failAt(line, "%s depends on the previous directory, which a split step does not have", shelledit.CommandText(c))
+			return nil, nil, failAt(line, "%s depends on the previous directory, which a split step does not have", shelledit.CommandText(c))
 		case name == "export" && slices.Contains(argv[1:], "-f"):
-			return nil, failAt(line, "%s exports a shell function, which a split step would not have", shelledit.CommandText(c))
+			return nil, nil, failAt(line, "%s exports a shell function, which a split step would not have", shelledit.CommandText(c))
 		}
-		out = append(out, text)
+		switch {
+		case reason == "":
+			state = append(state, text)
+		case len(c.Words) > 0 && len(c.Prefix()) == len(c.Words) && !piped:
+			dropped = append(dropped, droppedAssign{names: c.Prefix(), line: line, text: shelledit.CommandText(c), reason: reason, cmd: i})
+		default:
+			return nil, nil, failAt(line, reason, shelledit.CommandText(c))
+		}
 	}
-	return out, nil
+	return state, dropped, nil
+}
+
+// assignRead reports whether a split step's continued text rem may read one of names, which an
+// assignment that the split step leaves out sets (design §4). A name counts as read when it is
+// a whole word anywhere in rem, which covers arithmetic, [[ -v ]] and comments; and every name
+// does when rem uses indirect or prefix expansion, or runs eval, source, ., a nameref or a
+// command that prints variables (also inside a substitution), when script exports the name or
+// makes it readonly, or when allexport is set by one of before, the commands ahead of the
+// assignment. A false match only fails the split.
+func assignRead(names []string, rem, script string, before []shell.Command) bool {
+	for _, n := range names {
+		if regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(n) + `([^A-Za-z0-9_]|$)`).MatchString(rem) {
+			return true
+		}
+	}
+	if strings.Contains(rem, "${!") || slices.ContainsFunc(commandsIn(rem, 0), readsAny) {
+		return true
+	}
+	cmds, _ := shell.Parse(script, shell.State{})
+	if slices.ContainsFunc(cmds, func(c shell.Command) bool { return exportsName(c, names) }) {
+		return true
+	}
+	return slices.ContainsFunc(before, allexport)
+}
+
+// commandsIn parses text into commands, adding the commands of the command and process
+// substitutions in their words, to a few levels. The text after an opening $(, ` or <( is
+// parsed to the word's end, so what follows the substitution can only add commands.
+func commandsIn(text string, depth int) []shell.Command {
+	cmds, _ := shell.Parse(text, shell.State{})
+	out := slices.Clone(cmds)
+	if depth >= 4 {
+		return out
+	}
+	for _, c := range cmds {
+		words := slices.Clone(c.Words)
+		for _, r := range c.Redirs {
+			words = append(words, r.Target)
+		}
+		for _, w := range words {
+			for i := 0; i < len(w.Raw); i++ {
+				rest := w.Raw[i:]
+				switch {
+				case strings.HasPrefix(rest, "$(("):
+					i += 2 // arithmetic, not a command
+				case strings.HasPrefix(rest, "$("), strings.HasPrefix(rest, "<("), strings.HasPrefix(rest, ">("):
+					out = append(out, commandsIn(rest[2:], depth+1)...)
+				case rest[0] == '`':
+					out = append(out, commandsIn(rest[1:], depth+1)...)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// builtinArgv is a command's Argv without a leading builtin.
+func builtinArgv(c shell.Command) []string {
+	argv := c.Argv()
+	if len(argv) > 0 && argv[0] == "builtin" {
+		argv = argv[1:]
+	}
+	return argv
+}
+
+// options splits args into the letters of their leading options (-x or +x clusters, up to --)
+// and the arguments after them.
+func options(args []string) (letters string, rest []string) {
+	for i, a := range args {
+		if a == "--" {
+			return letters, args[i+1:]
+		}
+		if len(a) < 2 || a[0] != '-' && a[0] != '+' {
+			return letters, args[i:]
+		}
+		letters += a[1:]
+	}
+	return letters, nil
+}
+
+// readsAny reports a command that can read a variable it does not name: eval, source and ., a
+// nameref, or a command that prints variables.
+func readsAny(c shell.Command) bool {
+	argv := builtinArgv(c)
+	if len(argv) == 0 {
+		return false
+	}
+	opts, args := options(argv[1:])
+	switch argv[0] {
+	case "eval", "source", ".":
+		return true
+	case "set":
+		return len(argv) == 1
+	case "declare", "typeset", "local":
+		return len(args) == 0 || strings.ContainsAny(opts, "np")
+	case "export":
+		return len(args) == 0 || strings.Contains(opts, "p")
+	case "compgen":
+		for i, a := range argv[1:] {
+			if a == "variable" && argv[i] == "-A" || a == "-Avariable" || len(a) > 1 && a[0] == '-' && a[1] != 'A' && strings.Contains(a, "v") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// exportsName reports a command that exports one of names or makes it readonly: export,
+// readonly, or declare, typeset or local with -x or -r.
+func exportsName(c shell.Command, names []string) bool {
+	argv := builtinArgv(c)
+	if len(argv) == 0 {
+		return false
+	}
+	opts, args := options(argv[1:])
+	switch argv[0] {
+	case "export", "readonly":
+	case "declare", "typeset", "local":
+		if !strings.ContainsAny(opts, "xr") {
+			return false
+		}
+	default:
+		return false
+	}
+	return slices.ContainsFunc(args, func(a string) bool { return slices.Contains(names, varName(a)) })
+}
+
+// varName returns NAME for an argument written NAME, NAME=…, NAME+=… or NAME[i]…, else "".
+func varName(a string) string {
+	i := 0
+	for i < len(a) && (a[i] == '_' || a[i] >= 'a' && a[i] <= 'z' || a[i] >= 'A' && a[i] <= 'Z' || i > 0 && a[i] >= '0' && a[i] <= '9') {
+		i++
+	}
+	if rest := a[i:]; i > 0 && (rest == "" || rest[0] == '=' || rest[0] == '[' || strings.HasPrefix(rest, "+=")) {
+		return a[:i]
+	}
+	return ""
+}
+
+// allexport reports set -a, set -o allexport or shopt -o allexport, after which every
+// assignment exports its name.
+func allexport(c shell.Command) bool {
+	argv := builtinArgv(c)
+	if len(argv) == 0 {
+		return false
+	}
+	switch argv[0] {
+	case "set":
+		return slices.ContainsFunc(argv[1:], func(a string) bool {
+			return a == "allexport" || len(a) > 1 && a[0] == '-' && a[1] != '-' && strings.Contains(a, "a")
+		})
+	case "shopt":
+		return slices.Contains(argv[1:], "allexport")
+	}
+	return false
 }
 
 // isFunction reports a function definition: `name () ...` or `function name ...`.
