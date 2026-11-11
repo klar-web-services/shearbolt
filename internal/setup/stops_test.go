@@ -47,6 +47,10 @@ func TestStopsDirect(t *testing.T) {
 		"FOO=1 exec ./run.sh":               {0},
 		"exec >log 2>&1":                    nil,
 		"exec 3>&1":                         nil,
+		"exec > >(tee -a build.log) 2>&1":   nil, // a process substitution is a redirect target
+		"exec &> >(tee log)":                nil,
+		"exec 2> >(logger)":                 nil,
+		"exec {fd}>log":                     nil, // an fd variable
 		"echo exit":                         nil,
 		"echo exec docker push x":           nil,
 		"bash -c 'exit 0'":                  nil,

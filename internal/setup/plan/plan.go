@@ -175,7 +175,7 @@ type Job struct {
 	// PreludeStop is the line of the first command that can stop the job's shell early in the
 	// commands that run before its first step in the same shell (GitLab's before_script; for a
 	// job whose before_script is unknown, any before_script of the file), and PreludeStopCmd that
-	// command's name ("exit", "exec", "source" or "."); 0 and "" when there is none (P6).
+	// command's name ("exit", "exec" or "source", also for .); 0 and "" when there is none (P6).
 	PreludeStop    int
 	PreludeStopCmd string
 }

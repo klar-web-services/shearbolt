@@ -185,7 +185,7 @@ func (s *Script) Steps(classify plan.Classifier, env []string) []plan.Step {
 type Found struct {
 	What string // the command as in messages, or "the pipe <name>"
 	Line int
-	Name string // Stops only: the command's name, "exit", "exec", "source" or "."
+	Name string // Stops only: the command's name, "exit", "exec" or "source" (also for .)
 }
 
 // Pushes returns the pushes in s: commands that push, image builds that push, and pipes.
@@ -224,11 +224,15 @@ func (s *Script) Stops(classify plan.Classifier, env []string) []Found {
 
 // stopName returns the name of the builtin by which cmd, a command the classifier reports as
 // stopping, stops the shell: its first word that is exit, exec, source or ".". Only VAR=x
-// assignments and wrappers such as command come before it.
+// assignments and wrappers such as command come before it. "." is named source, since a message
+// such as "(. at line 4)" reads badly.
 func stopName(cmd shell.Command) string {
 	for _, w := range cmd.Words {
-		if slices.Contains([]string{"exit", "exec", "source", "."}, w.Value) {
+		switch w.Value {
+		case "exit", "exec", "source":
 			return w.Value
+		case ".":
+			return "source"
 		}
 	}
 	return ""

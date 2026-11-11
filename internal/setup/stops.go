@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
@@ -31,10 +32,10 @@ import (
 // (ssh host <<EOF ... exit ... EOF) is a false positive.
 // depth is the level of the file a source here would read: 1 for a CI command.
 func (c *classifier) stops(cmd shell.Command, ctx plan.Context, depth int) bool {
-	if leadingWord(cmd) == "exec" {
-		return len(cmd.ArgWords()) > 0
-	}
 	args := cmd.ArgWords()
+	if leadingWord(cmd) == "exec" {
+		return slices.ContainsFunc(args, func(w shell.Word) bool { return !redirectWord(w) })
+	}
 	if len(args) == 0 {
 		return false
 	}
@@ -47,11 +48,21 @@ func (c *classifier) stops(cmd shell.Command, ctx plan.Context, depth int) bool 
 		if cmd.OpBefore == "||" && (v == "$?" || v == "${?}") {
 			return false
 		}
-		return len(args) == 1 || successStatus(v)
+		return successStatus(v)
 	case "source", ".":
 		return c.sourceStops(cmd, ctx, depth)
 	}
 	return false
+}
+
+// fdVariable matches a {name} word, which names the file descriptor of the redirect after it.
+var fdVariable = regexp.MustCompile(`^\{[A-Za-z_][A-Za-z0-9_]*\}$`)
+
+// redirectWord reports a word the lexer returns as an argument that belongs to a redirect: a
+// process substitution, >(…) or <(…), as in exec > >(tee log), or an fd variable, as in
+// exec {fd}>log. An exec with only such words is a bare exec.
+func redirectWord(w shell.Word) bool {
+	return strings.HasPrefix(w.Raw, ">(") || strings.HasPrefix(w.Raw, "<(") || fdVariable.MatchString(w.Raw)
 }
 
 // shellAssignment matches a word that assigns a shell variable: NAME=…, NAME+=… or NAME[i]=….

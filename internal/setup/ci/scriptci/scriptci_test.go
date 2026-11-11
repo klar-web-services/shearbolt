@@ -1152,10 +1152,36 @@ func TestScriptStops(t *testing.T) {
 	got := s.Stops(classify, nil)
 	wantStops := []scriptci.Found{
 		{What: "`exit 0`", Line: 3, Name: "exit"},
-		{What: "`. ./ci/missing.sh`", Line: 6, Name: "."},
+		{What: "`. ./ci/missing.sh`", Line: 6, Name: "source"}, // "(. at line 6)" reads badly
 		{What: "`exec docker push x`", Line: 9, Name: "exec"},
 	}
 	if !slices.Equal(got, wantStops) {
 		t.Errorf("Stops = %+v, want %+v", got, wantStops)
+	}
+
+	// Every stop the core reports has a name, whatever form it takes.
+	classify, ss = classifier(t, map[string]string{
+		"ci/skip.sh": "exit 0\n",
+		file: lines(
+			"build:",
+			"  script:",
+			"    - exit",
+			`    - exit "$code"`,
+			"    - FOO=1 exec ./run.sh",
+			"    - exec docker push x 2> >(logger)",
+			"    - source ci/skip.sh",
+			"    - . ci/skip.sh",
+			"    - (exit 0)",
+			"    - npm ci && exit $?",
+		),
+	})
+	got = ss[0].Stops(classify, nil)
+	if len(got) != 8 {
+		t.Errorf("Stops = %+v, want 8", got)
+	}
+	for _, f := range got {
+		if f.Name == "" {
+			t.Errorf("%s at line %d has no name", f.What, f.Line)
+		}
 	}
 }
