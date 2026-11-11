@@ -281,12 +281,13 @@ func TestGitHubInheritedAssignmentsRefused(t *testing.T) {
 const hiddenMsg = "assigns a variable inside an expansion or arithmetic, which a split step cannot re-create"
 
 // A command before the split point that assigns a variable inside an expansion, in arithmetic
-// or through a builtin fails the split, whatever command it is and whether or not the rest reads
-// the name: the split step would neither carry nor re-create the assignment.
+// or through a builtin fails the split unless it is carried, whatever command it is and whether
+// or not the rest reads the name: the split step would neither carry nor re-create the
+// assignment.
 func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
 	for _, pre := range []string{
-		"x=${y:=v}",
-		"x=${y=v}",
+		`if [ -n "$X" ]; then x=${y:=v}; fi`,
+		`[ -n "$X" ] && x=${y=v}`,
 		": ${n:=5}",
 		`echo "${a[0]:=v}"`,
 		"x=$(( y = 5 ))",
@@ -296,10 +297,15 @@ func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
 		"echo $(( n <<= 1 ))",
 		"echo $[n=1]",
 		"(( n = 5 ))",
+		"(( a > 0 || n++ ))",
+		"(( ok && (n = 1) ))",
+		"if (( x || (n += 2) )); then :; fi",
+		"(( a | (n = 3) ))",
+		"echo $[a || b++]",
 		"for ((i = 0; i < 3; i++)); do echo $i; done",
 		`echo "${a[i++]}"`,
 		`echo "${s:i++:1}"`,
-		"a[i++]=5",
+		`[ -n "$X" ] && a[i++]=5`,
 		"let n=5",
 		"printf -v n '%s' x",
 		"getopts ab opt",
@@ -321,10 +327,52 @@ func TestGitHubReadOnlyArithmeticSplits(t *testing.T) {
 		"echo $((a+1))",
 		`echo "$((a == 1)) $((a != 1)) $((a <= 1)) $((a >= 1)) $[a+1] ${a[1]} ${x:-y} ${s:1:2} ${s: -1}"`,
 		"x=$((a+1))",
+		`echo "build $(( $(git rev-list --count HEAD) + 1 ))"`,
+		"echo $(( $(grep -c a=1 f) + 1 ))",
+		"x=$(echo $((i++)))",
+		`echo "${tags[@]/#/--tag=}"`,
 	} {
 		_, got := result(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil))
 		wantWorkflow(t, got, head+shipEdited(pre)+pushRun)
 	}
+	// On the build line too.
+	arg := "docker build --build-arg N=$(( $(git rev-list --count HEAD) + 100 )) -t"
+	_, got := result(t, npmRepo("edge", head+strings.Replace(shipWith("echo pre", pushLatest), "docker build -t", arg, 1), nil))
+	wantWorkflow(t, got, head+strings.Replace(shipEdited("echo pre"), "docker build -t", arg, 1)+pushRun)
+}
+
+// A carried command re-runs in the continued step, so it re-creates its own hidden assignment.
+func TestGitHubCarriedHiddenAssignmentStaysCarried(t *testing.T) {
+	pre := "X=${X:=d}\nexport REGISTRY=${REGISTRY:=ghcr.io}\nreg=${reg:=ghcr.io}"
+	_, got := result(t, npmRepo("edge", head+shipWith(pre, pushLatest+"\necho \"$X $REGISTRY\""), nil))
+	wantWorkflow(t, got, head+shipEdited(pre)+lines(
+		"        run: |",
+		"          X=${X:=d}",
+		"          export REGISTRY=${REGISTRY:=ghcr.io}",
+		"          reg=${reg:=ghcr.io}",
+		"          "+pushLatest,
+		`          echo "$X $REGISTRY"`,
+	))
+}
+
+// Writes to $GITHUB_ENV or $GITHUB_PATH before the build never reached the rest of the unsplit
+// step, but would reach the continued step's environment.
+func TestGitHubPart1EnvWritesRefused(t *testing.T) {
+	for name, pre := range map[string]string{
+		"GITHUB_ENV":  `echo "live=1" >> "$GITHUB_ENV"`,
+		"GITHUB_PATH": `echo "$HOME/bin" >> "$GITHUB_PATH"`,
+	} {
+		wantUnsupported(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil), name,
+			"the part before the gated build writes $"+name+", which would change the environment of the rest of the step after a split")
+	}
+}
+
+// A shell run with allexport exports every assignment, so every name counts as read.
+func TestGitHubAllexportShellRefused(t *testing.T) {
+	step := strings.Replace(shipWith(pulled, pushLatest), "        run: |\n", "        shell: bash -ae {0}\n        run: |\n", 1)
+	wantUnsupported(t, npmRepo("edge", head+step, nil), "shell: bash -ae", substMsg)
+	defaults := strings.Replace(head, "jobs:\n", "defaults:\n  run:\n    shell: bash -o allexport {0}\njobs:\n", 1)
+	wantUnsupported(t, npmRepo("edge", defaults+shipWith(pulled, pushLatest), nil), "defaults shell allexport", substMsg)
 }
 
 // A lowercase name may be inherited too: from an env: setup cannot read, the job's container
@@ -343,7 +391,6 @@ func TestGitHubMoreInheritedNamesRefused(t *testing.T) {
 		"container expression":     withJobEnv("    container: ${{ fromJSON(vars.CONTAINER) }}\n") + ship,
 		"$GITHUB_ENV write":        head + lines(`      - run: echo "live=1" >> "$GITHUB_ENV"`) + ship,
 		"unreadable $GITHUB_ENV":   head + lines(`      - run: cat vars.env >> "$GITHUB_ENV"`) + ship,
-		"$GITHUB_ENV in part 1":    head + shipWith(`echo "live=1" >> "$GITHUB_ENV"`+"\n"+pulled, pushLatest),
 		"proxy variable":           head + shipWith("https_proxy=$(cat proxy.txt)", pushLatest),
 	} {
 		wantUnsupported(t, npmRepo("edge", workflow, map[string]string{"vars.env": "A=1\n"}), why, substMsg)

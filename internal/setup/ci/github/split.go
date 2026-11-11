@@ -108,10 +108,12 @@ type droppedAssign struct {
 // state change inside a conditional or loop, fails the split, except a command made up only of
 // assignments that is not in a pipeline or in the background: it is returned in dropped, and
 // fails the split only when the continued step may read one of its names (renderStep,
-// assignRead), which includes every name that may be inherited from the environment. Any
-// command that may assign a variable inside an expansion, in arithmetic or through a builtin
-// fails the split (hiddenAssign): the split step would neither carry nor re-create it.
+// assignRead), which includes every name that may be inherited from the environment. A command
+// that may assign a variable inside an expansion, in arithmetic or through a builtin
+// (hiddenAssign) fails the split unless it is carried: the split step would not re-create its
+// assignment, while a carried command re-runs and re-creates it.
 func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
+	masked := maskSubst(script)
 	for i, c := range cmds {
 		line := st.cmdLine(c)
 		text := script[c.Start:c.End]
@@ -124,10 +126,11 @@ func carriedState(script string, cmds []shell.Command, st *step) (state []string
 		if isFunction(c) {
 			return nil, nil, failAt(line, "the step defines a shell function (%s), which a split step would not have", shelledit.CommandText(c))
 		}
-		if hiddenAssign(script, cmds, i) {
-			return nil, nil, failAt(line, hiddenMsg, shelledit.CommandText(c))
-		}
+		hidden := hiddenAssign(masked, cmds, i)
 		if !bare && !slices.Contains(carried, name) && !slices.Contains(uncarried, name) && !(name == "exec" && len(argv) == 1) {
+			if hidden {
+				return nil, nil, failAt(line, hiddenMsg, shelledit.CommandText(c))
+			}
 			continue
 		}
 		subst := strings.Contains(text, "$(") || strings.Contains(text, "`")
@@ -154,6 +157,8 @@ func carriedState(script string, cmds []shell.Command, st *step) (state []string
 		switch {
 		case reason == "":
 			state = append(state, text)
+		case hidden:
+			return nil, nil, failAt(line, hiddenMsg, shelledit.CommandText(c))
 		case len(c.Words) > 0 && len(c.Prefix()) == len(c.Words) && !piped:
 			dropped = append(dropped, droppedAssign{names: c.Prefix(), line: line, text: shelledit.CommandText(c), reason: reason, cmd: i})
 		default:
@@ -172,16 +177,20 @@ var (
 	// subscriptAssign is a word that assigns NAME[subscript]; an indexed array's subscript is
 	// arithmetic.
 	subscriptAssign = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\[([^\]]*)\]\+?=`)
+	// subscriptHead is the start of the contents of a ${NAME[subscript]…} expansion, up to the [.
+	subscriptHead = regexp.MustCompile(`^[!#]?[A-Za-z_][A-Za-z0-9_]*\[`)
 )
 
-// hiddenAssign reports whether command i of cmds, commands of script, may assign a variable
-// other than through its leading NAME=… words (design §4): a ${NAME=…} or ${NAME:=…} expansion;
-// arithmetic ($((…)), $[…], ((…)), and offsets in ${…}) with ++, -- or an assignment operator; a
-// subscript in ${…} or of an assigned array element with ++, -- or =; or let, getopts, printf -v
-// or wait -p. The check is textual, and runs on the text from the end of the previous command,
-// so it also sees the (( of an arithmetic command or a C-style for, which are not words. A false
+// hiddenAssign reports whether command i of cmds may assign a variable other than through its
+// leading NAME=… words (design §4): a ${NAME=…} or ${NAME:=…} expansion; arithmetic ($((…)),
+// $[…], ((…)), and offsets in ${…}) with ++, -- or an assignment operator; a subscript in ${…} or
+// of an assigned array element with ++, -- or =; or let, getopts, printf -v or wait -p. masked
+// is the script with maskSubst applied, since a command substitution runs in a subshell. The
+// check is textual. It finds openers in the text from the end of the previous command, so it
+// also sees the (( of an arithmetic command or a C-style for, which are not words, and reads
+// each construct to its close in the script, past the || or && that ends the command. A false
 // match only fails the split.
-func hiddenAssign(script string, cmds []shell.Command, i int) bool {
+func hiddenAssign(masked string, cmds []shell.Command, i int) bool {
 	c := cmds[i]
 	if argv := builtinArgv(c); len(argv) > 0 {
 		opts, _ := options(argv[1:])
@@ -202,7 +211,7 @@ func hiddenAssign(script string, cmds []shell.Command, i int) bool {
 		return strings.Contains(s, "++") || strings.Contains(s, "--") || strings.Contains(s, "=")
 	}
 	for _, w := range c.Words {
-		if m := subscriptAssign.FindStringSubmatch(w.Raw); m != nil && steps(m[1]) {
+		if m := subscriptAssign.FindStringSubmatch(masked[w.Start : w.Start+len(w.Raw)]); m != nil && steps(m[1]) {
 			return true
 		}
 	}
@@ -210,23 +219,24 @@ func hiddenAssign(script string, cmds []shell.Command, i int) bool {
 	if i > 0 {
 		from = min(cmds[i-1].End, c.Start)
 	}
-	text := script[from:c.End]
+	text := masked[from:c.End]
 	if defaultAssign.MatchString(text) {
 		return true
 	}
 	for k := 0; k+1 < len(text); k++ {
+		after := masked[from+k+2:]
 		switch {
 		case text[k] == '$' && text[k+1] == '[':
-			if arithAssign(closing(text[k+2:], '[', ']')) {
+			if arithAssign(closing(after, '[', ']')) {
 				return true
 			}
 		case text[k] == '(' && text[k+1] == '(':
-			if arithAssign(closing(text[k+2:], '(', ')')) {
+			if arithAssign(closing(after, '(', ')')) {
 				return true
 			}
-		case text[k] == '$' && text[k+1] == '{' && !strings.HasPrefix(text[k+2:], "{"): // not ${{ }}
-			body := closing(text[k+2:], '{', '}')
-			if j := strings.IndexByte(body, '['); j >= 0 && steps(body[j:]) {
+		case text[k] == '$' && text[k+1] == '{' && !strings.HasPrefix(after, "{"): // not ${{ }}
+			body := closing(after, '{', '}')
+			if m := subscriptHead.FindStringIndex(body); m != nil && steps(closing(body[m[1]:], '[', ']')) {
 				return true
 			}
 			if m := offsetExpr.FindStringSubmatch(body); m != nil && arithAssign(m[1]) {
@@ -235,6 +245,133 @@ func hiddenAssign(script string, cmds []shell.Command, i int) bool {
 		}
 	}
 	return false
+}
+
+// maskSubst returns script with the contents of its command substitutions, $(…) and `…`,
+// blanked out and every offset kept: they run in a subshell, so an assignment inside them cannot
+// reach the step. $((…)) is arithmetic and stays, a substitution nested in it is blanked, and a
+// substitution that never closes stays. Single-quoted text and comments are skipped.
+func maskSubst(script string) string {
+	b := []byte(script)
+	blank := func(from, to int) {
+		for k := from; k < to; k++ {
+			if b[k] != '\n' {
+				b[k] = ' '
+			}
+		}
+	}
+	dq := false
+	for j := 0; j < len(script); j++ {
+		switch c := script[j]; {
+		case c == '\\':
+			j++
+		case c == '"':
+			dq = !dq
+		case c == '\'' && !dq:
+			k := strings.IndexByte(script[j+1:], '\'')
+			if k < 0 {
+				return string(b)
+			}
+			j += k + 1
+		case c == '#' && !dq && (j == 0 || strings.IndexByte(" \t\n;&|(", script[j-1]) >= 0):
+			k := strings.IndexByte(script[j:], '\n')
+			if k < 0 {
+				return string(b)
+			}
+			j += k
+		case c == '`':
+			if k := tickEnd(script[j+1:]); k >= 0 {
+				blank(j+1, j+1+k)
+				j += k + 1
+			}
+		case c == '$' && strings.HasPrefix(script[j+1:], "(") && !strings.HasPrefix(script[j+1:], "(("):
+			if k := substLen(script[j+2:]); k >= 0 {
+				blank(j+2, j+1+k)
+				j += 1 + k
+			}
+		}
+	}
+	return string(b)
+}
+
+// substLen returns the length of the command substitution body s starts with, its closing )
+// included, or -1 when it never closes. Quotes, escapes and nested substitutions are skipped.
+func substLen(s string) int {
+	depth := 0
+	for j := 0; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '\'':
+			k := strings.IndexByte(s[j+1:], '\'')
+			if k < 0 {
+				return -1
+			}
+			j += k + 1
+		case '"':
+			k := dquoteEnd(s[j+1:])
+			if k < 0 {
+				return -1
+			}
+			j += k + 1
+		case '`':
+			k := tickEnd(s[j+1:])
+			if k < 0 {
+				return -1
+			}
+			j += k + 1
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return j + 1
+			}
+			depth--
+		}
+	}
+	return -1
+}
+
+// dquoteEnd returns the index of the " that ends the double-quoted text s starts inside of, or
+// -1 when it never ends. Escapes and substitutions are skipped.
+func dquoteEnd(s string) int {
+	for j := 0; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '"':
+			return j
+		case '`':
+			k := tickEnd(s[j+1:])
+			if k < 0 {
+				return -1
+			}
+			j += k + 1
+		case '$':
+			if strings.HasPrefix(s[j+1:], "(") {
+				k := substLen(s[j+2:])
+				if k < 0 {
+					return -1
+				}
+				j += 1 + k
+			}
+		}
+	}
+	return -1
+}
+
+// tickEnd returns the index of the unescaped backtick that ends the backtick substitution s
+// starts inside of, or -1 when it never ends.
+func tickEnd(s string) int {
+	for j := 0; j < len(s); j++ {
+		switch s[j] {
+		case '\\':
+			j++
+		case '`':
+			return j
+		}
+	}
+	return -1
 }
 
 // closing returns s up to the close that ends the construct s starts inside of (nested
@@ -300,9 +437,9 @@ type continued struct {
 // assignment that the split step leaves out sets (design §4). A name counts as read when it may
 // be an inherited environment variable, which every child process reads without naming it: one
 // of ct.inherited (env: keys of the workflow, the job, its container and the step, and names
-// written to $GITHUB_ENV before the continued step), any name when setup cannot read one of
-// those, a proxy variable, or a name with no lowercase letter, since the runner, the shell (PATH,
-// IFS) or $GITHUB_ENV can set such a name and setup cannot tell. It also counts as read when it
+// written to $GITHUB_ENV by earlier steps), any name when setup cannot read one of those or the
+// step's shell runs with allexport, a proxy variable, or a name with no lowercase letter, since
+// the runner, the shell (PATH, IFS) or $GITHUB_ENV can set such a name and setup cannot tell. It also counts as read when it
 // is a whole word anywhere in ct.text, which covers arithmetic, [[ -v ]] and comments; and every
 // name does when the continued step uses indirect or prefix expansion, or runs eval, source, .,
 // a nameref or a command that prints variables (also inside a substitution), when the step
@@ -329,9 +466,12 @@ func assignRead(names []string, ct *continued, before []shell.Command) bool {
 // inheritedNames returns the names a split step's continued step may inherit from its
 // environment, besides those assignRead assumes anyway: the env: keys of the workflow, the job,
 // its container and the step, and the names written to $GITHUB_ENV by the job's earlier steps
-// and by the split step's part 1, which the continued step follows. all is true when setup
-// cannot read one of them.
+// (renderStep refuses a split whose part 1 writes to it). all is true when setup cannot read one
+// of them, or when the step's shell runs with allexport, which exports every assignment.
 func (e *jobEditor) inheritedNames(sp *stepPlan) (names []string, all bool) {
+	if sp.st.shellSet && shellAllexport(sp.st.shell) {
+		return nil, true
+	}
 	maps := []*yaml.Node{e.d.Root(), e.j.node, sp.st.m}
 	switch c := rawValue(e.j.node, "container"); {
 	case c == nil, c.Kind == yaml.ScalarNode && !strings.Contains(c.Value, "${{"): // an image only
@@ -347,24 +487,28 @@ func (e *jobEditor) inheritedNames(sp *stepPlan) (names []string, all bool) {
 		}
 		names = append(names, ks...)
 	}
-	for k, o := range e.j.steps[:sp.s+1] {
+	for _, o := range e.j.steps[:sp.s] {
 		if o.run == nil || !strings.Contains(o.script, "GITHUB_ENV") {
 			continue
 		}
 		if !o.posix {
 			return nil, true
 		}
-		cmds := o.cmds
-		if k == sp.s {
-			cmds = cmds[:sp.last+1]
-		}
-		ws, all := envWrites(o.script, cmds)
+		ws, all := envWrites(o.script, o.cmds)
 		if all {
 			return nil, true
 		}
 		names = append(names, ws...)
 	}
 	return names, false
+}
+
+// shellAllexport reports a shell: setting that runs the shell with allexport (an option cluster
+// with a, or -o allexport), which exports every assignment.
+func shellAllexport(sh string) bool {
+	return slices.ContainsFunc(strings.Fields(sh), func(f string) bool {
+		return f == "allexport" || len(f) > 1 && f[0] == '-' && f[1] != '-' && strings.Contains(f, "a")
+	})
 }
 
 // envNames returns the keys of mapping m's env:, and false when setup cannot read them: the env:

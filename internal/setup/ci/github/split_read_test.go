@@ -154,6 +154,14 @@ func TestHiddenAssign(t *testing.T) {
 		"echo $[n=1]":                           true,
 		"(( n = 5 ))":                           true,
 		"(( n++ )) || true":                     true,
+		"(( a > 0 || n++ ))":                    true,
+		"(( ok && (n = 1) ))":                   true,
+		"if (( x || (n += 2) )); then :; fi":    true,
+		"(( a | (n = 3) ))":                     true,
+		"echo $[a || b++]":                      true,
+		`echo "$(echo ")") $((n++))"`:           true,
+		`echo $(echo "(") $((n++))`:             true,
+		"echo `echo '`' $((n++))":               true,
 		"for ((i = 0; i < 3; i++)); do :; done": true,
 		`echo "${a[i++]}"`:                      true,
 		`echo "${a[i=2]}"`:                      true,
@@ -175,15 +183,25 @@ func TestHiddenAssign(t *testing.T) {
 		`echo "${a[1]} ${a[@]} ${x:-y} ${x:+y} ${x:?y} ${s:1:2} ${s: -1} ${#x}"`: false,
 		`echo "${{ github.event.labels[0] == 'x' }}"`:                            false,
 		"docker build --build-arg N=$((n+1)) --tag x .":                          false,
-		"x=$((a+1))":      false,
-		"printf '%s' x":   false,
-		"wait $pid":       false,
-		"echo a=1 -- --b": false,
+		"x=$((a+1))": false,
+		`echo "build $(( $(git rev-list --count HEAD) + 1 ))"`: false,
+		"echo $(( $(grep -c a=1 f) + 1 ))":                     false,
+		"x=$(echo $((i++)) ${y:=v})":                           false,
+		`x=$(echo ")" $((i++)))`:                               false,
+		`x=$(echo ')' $((i++)))`:                               false,
+		`echo '$(' $((n++)) ')'`:                               true,
+		"# don't\necho '$(' $((n++)) ')'":                      true,
+		"echo `echo $((i++))`":                                 false,
+		`echo "${tags[@]/#/--tag=}"`:                           false,
+		`echo "${#a[@]} ${!a[@]}"`:                             false,
+		"printf '%s' x":                                        false,
+		"wait $pid":                                            false,
+		"echo a=1 -- --b":                                      false,
 	} {
 		cmds, _ := shell.Parse(script, shell.State{})
 		got := false
 		for i := range cmds {
-			got = got || hiddenAssign(script, cmds, i)
+			got = got || hiddenAssign(maskSubst(script), cmds, i)
 		}
 		if got != want {
 			t.Errorf("hiddenAssign(%q) = %v, want %v", script, got, want)
@@ -238,5 +256,21 @@ func TestCommandsInManyBackticks(t *testing.T) {
 	}
 	if evals == 0 {
 		t.Error("commandsIn does not see the commands inside the backticks")
+	}
+}
+
+// A shell: or defaults.run.shell with -a or allexport exports every assignment.
+func TestShellAllexport(t *testing.T) {
+	for sh, want := range map[string]bool{
+		"bash -ae {0}":          true,
+		"sh -a {0}":             true,
+		"bash -o allexport {0}": true,
+		"bash --noprofile --norc -eo pipefail {0}": false,
+		"bash":      false,
+		"sh -e {0}": false,
+	} {
+		if got := shellAllexport(sh); got != want {
+			t.Errorf("shellAllexport(%q) = %v, want %v", sh, got, want)
+		}
 	}
 }

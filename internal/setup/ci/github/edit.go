@@ -570,6 +570,11 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 		if st.id != "" && strings.Contains(rem, "GITHUB_OUTPUT") {
 			return failAt(line, "the step has id %s and the part after the gated build writes $GITHUB_OUTPUT, which a split step would not pass on", st.id)
 		}
+		for _, v := range []string{"GITHUB_ENV", "GITHUB_PATH"} {
+			if rem != "" && strings.Contains(st.script[:sp.cut], v) {
+				return failAt(line, "the part before the gated build writes $%s, which would change the environment of the rest of the step after a split", v)
+			}
+		}
 		sp.remainder = rem
 		newScript = part1
 	} else {
