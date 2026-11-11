@@ -162,6 +162,9 @@ func (s *Script) Steps(classify plan.Classifier, env []string) []plan.Step {
 			if cl.Push {
 				st.Push = append(st.Push, c)
 			}
+			if cl.Stops {
+				st.Stops = append(st.Stops, c)
+			}
 			if cl.Gate != nil {
 				g := *cl.Gate
 				g.Pos = pos
@@ -182,6 +185,7 @@ func (s *Script) Steps(classify plan.Classifier, env []string) []plan.Step {
 type Found struct {
 	What string // the command as in messages, or "the pipe <name>"
 	Line int
+	Name string // Stops only: the command's name, "exit", "exec", "source" or "."
 }
 
 // Pushes returns the pushes in s: commands that push, image builds that push, and pipes.
@@ -201,6 +205,33 @@ func (s *Script) Pushes(classify plan.Classifier, env []string) []Found {
 		}
 	}
 	return out
+}
+
+// Stops returns the commands in s that can stop the job's shell early (design §3.2, §3.5), with
+// their names.
+func (s *Script) Stops(classify plan.Classifier, env []string) []Found {
+	var out []Found
+	for i, st := range s.Steps(classify, env) {
+		it := &s.Items[i]
+		for _, c := range st.Stops {
+			f := it.found(c)
+			f.Name = stopName(it.Cmds[c])
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// stopName returns the name of the builtin by which cmd, a command the classifier reports as
+// stopping, stops the shell: its first word that is exit, exec, source or ".". Only VAR=x
+// assignments and wrappers such as command come before it.
+func stopName(cmd shell.Command) string {
+	for _, w := range cmd.Words {
+		if slices.Contains([]string{"exit", "exec", "source", "."}, w.Value) {
+			return w.Value
+		}
+	}
+	return ""
 }
 
 // ArtifactBuilds returns the image and binary builds in s (in called files too).

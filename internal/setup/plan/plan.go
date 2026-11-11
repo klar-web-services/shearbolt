@@ -93,6 +93,9 @@ type Classified struct {
 	Builds []Build
 	Push   bool
 	Gate   *GateCmd // existing install or scan command
+	// Stops: the command can end the shell it runs in early and successfully (exit 0, exec cmd,
+	// or a sourced in-repo file that can), whatever else it does (P6).
+	Stops bool
 }
 
 // Project is one protectable project (R1).
@@ -169,6 +172,12 @@ type Job struct {
 	ID    string // "<file>#<path>", e.g. ".github/workflows/ci.yml#test", "bitbucket-pipelines.yml#branches/main/0", ".gitlab-ci.yml#build-image"
 	Label string // for prompts: "ci.yml: test"
 	Steps []Step // GitHub: workflow steps. Bitbucket/GitLab: one Step per script item, so pipes keep their order
+	// PreludeStop is the line of the first command that can stop the job's shell early in the
+	// commands that run before its first step in the same shell (GitLab's before_script; for a
+	// job whose before_script is unknown, any before_script of the file), and PreludeStopCmd that
+	// command's name ("exit", "exec", "source" or "."); 0 and "" when there is none (P6).
+	PreludeStop    int
+	PreludeStopCmd string
 }
 
 // Step is one workflow step or script item.
@@ -178,6 +187,7 @@ type Step struct {
 	Commands []shell.Command // empty for action and pipe steps
 	Builds   []Build
 	Push     []int // indexes into Commands that push; -1 = the step itself pushes (action, pipe)
+	Stops    []int // indexes into Commands that can stop the shell early (Classified.Stops)
 	Gates    []GateCmd
 	Uses     string // GitHub action reference or Bitbucket pipe
 }

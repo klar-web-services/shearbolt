@@ -842,3 +842,112 @@ func TestGitLabSnippetsPinTheVersion(t *testing.T) {
 		}
 	}
 }
+
+// reading is the GitLab plugin, recording the jobs it reads with the classifier setup passes.
+type reading struct {
+	gitlab.Plugin
+	jobs *[]plan.Job
+}
+
+func (p reading) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
+	js, ns, err := p.Plugin.Jobs(r, f, src, classify)
+	*p.jobs = append(*p.jobs, js...)
+	return js, ns, err
+}
+
+// classified returns the jobs setup reads from ci, classified by the core, by key.
+func classified(t *testing.T, ci string) map[string]plan.Job {
+	t.Helper()
+	var js []plan.Job
+	setup.ComputeWith(setup.Options{Root: tree(t, npmRepo(ci)), Yes: true}, reading{jobs: &js})
+	out := map[string]plan.Job{}
+	for _, j := range js {
+		out[strings.TrimPrefix(j.ID, file+"#")] = j
+	}
+	return out
+}
+
+// P6: a job's PreludeStop is the line of the first command of the before_script it runs that can
+// stop its shell early, and PreludeStopCmd its name; a job whose before_script is unknown takes
+// the first in any before_script of the file.
+func TestGitLabPreludeStop(t *testing.T) {
+	type stop struct {
+		line int
+		cmd  string
+	}
+	for name, tc := range map[string]struct {
+		ci   string
+		want map[string]stop
+	}{
+		"own": {lines(
+			"build:",
+			"  before_script:",
+			"    - echo hi",
+			`    - if [ -n "$SKIP" ]; then exit 0; fi`,
+			"    - exit 0",
+			"  script:",
+			"    - npm run build",
+			"test:",
+			"  script:",
+			"    - npm test",
+		), map[string]stop{"build": {4, "exit"}, "test": {}}},
+		"default": {lines(
+			"default:",
+			"  before_script:",
+			"    - cd app || exit 1",
+			"    - exit 0",
+			"build:",
+			"  script:",
+			"    - npm run build",
+		), map[string]stop{"build": {4, "exit"}}},
+		"top level, sourced": {lines(
+			"before_script:",
+			"  - source ./ci/missing.sh",
+			"build:",
+			"  script:",
+			"    - npm run build",
+		), map[string]stop{"build": {2, "source"}}},
+		"unseen": {lines(
+			".base:",
+			"  image: node:22",
+			"other:",
+			"  before_script:",
+			"    - exec ./run.sh",
+			"  script:",
+			"    - npm test",
+			"build:",
+			"  extends: .base",
+			"  script:",
+			"    - npm run build",
+			"own:",
+			"  extends: .base",
+			"  before_script:",
+			"    - echo own",
+			"  script:",
+			"    - npm run build",
+		), map[string]stop{"other": {5, "exec"}, "build": {5, "exec"}, "own": {}}},
+		"none": {lines(
+			"default:",
+			"  before_script:",
+			"    - cd app || exit 1",
+			"    - bash -c 'exit 0'",
+			"build:",
+			"  extends: .base",
+			"  script:",
+			"    - exit 0",
+		), map[string]stop{"build": {}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			js := classified(t, tc.ci)
+			for key, want := range tc.want {
+				j, ok := js[key]
+				if !ok {
+					t.Fatalf("no job %s in %v", key, js)
+				}
+				if got := (stop{j.PreludeStop, j.PreludeStopCmd}); got != want {
+					t.Errorf("%s: prelude stop %+v, want %+v", key, got, want)
+				}
+			}
+		})
+	}
+}

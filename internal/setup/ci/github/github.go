@@ -470,6 +470,9 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 					if cl.Push {
 						ps.Push = append(ps.Push, c)
 					}
+					if cl.Stops {
+						ps.Stops = append(ps.Stops, c)
+					}
 					if cl.Gate != nil {
 						g := *cl.Gate
 						g.Pos = pos

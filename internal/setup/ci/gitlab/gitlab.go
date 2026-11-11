@@ -348,11 +348,12 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 		if j.unseen {
 			befores, whose = c.befores, "a before_script of this file it may run through extends or inherit:"
 		}
-		var builds, pushes []scriptci.Found
+		var builds, pushes, stops []scriptci.Found
 		for _, bs := range befores {
 			if bs != nil {
 				builds = append(builds, bs.ArtifactBuilds(classify, j.env)...)
 				pushes = append(pushes, bs.Pushes(classify, j.env)...)
+				stops = append(stops, bs.Stops(classify, j.env)...)
 			}
 		}
 		if len(builds) > 0 {
@@ -367,8 +368,11 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 				Line:    f.Line,
 			})
 		}
-		label := path.Base(file) + ": " + j.key
-		jobs = append(jobs, plan.Job{ID: j.id, Label: label, Steps: j.script.Steps(classify, j.env)})
+		pj := plan.Job{ID: j.id, Label: path.Base(file) + ": " + j.key, Steps: j.script.Steps(classify, j.env)}
+		if len(stops) > 0 {
+			pj.PreludeStop, pj.PreludeStopCmd = stops[0].Line, stops[0].Name
+		}
+		jobs = append(jobs, pj)
 		if j.after != nil {
 			notes = append(notes, scriptci.AfterScriptNotes(j.after, "after_script", "job "+j.key, classify, j.env)...)
 		}

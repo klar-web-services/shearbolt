@@ -1572,3 +1572,54 @@ func TestGitHubCustomShellWithoutErrexit(t *testing.T) {
 		}
 	}
 }
+
+// reading is the GitHub plugin, recording the jobs it reads with the classifier setup passes.
+type reading struct {
+	github.Plugin
+	jobs *[]plan.Job
+}
+
+func (p reading) Jobs(r plan.Repo, file string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
+	js, ns, err := p.Plugin.Jobs(r, file, src, classify)
+	*p.jobs = append(*p.jobs, js...)
+	return js, ns, err
+}
+
+// jobsOf returns the jobs setup reads from the workflow in files, classified by the core.
+func jobsOf(t *testing.T, files map[string]string) []plan.Job {
+	t.Helper()
+	var jobs []plan.Job
+	setup.ComputeWith(setup.Options{Root: tree(t, files), Yes: true}, reading{jobs: &jobs})
+	if len(jobs) == 0 {
+		t.Fatal("setup read no job")
+	}
+	return jobs
+}
+
+// P6: Step.Stops lists the commands of a run step that can stop it early, next to its builds.
+func TestGitHubStepStops(t *testing.T) {
+	jobs := jobsOf(t, map[string]string{
+		"Dockerfile": "FROM alpine\n",
+		wf: head + lines(
+			"      - run: |",
+			`          if [ -n "$X" ]; then exit 0; fi`,
+			"          docker build .",
+			"      - run: cd app || exit 1",
+		),
+	})
+	st := jobs[0].Steps[1]
+	exit := slices.IndexFunc(st.Commands, func(c shell.Command) bool { return slices.Equal(c.Argv(), []string{"exit", "0"}) })
+	build := slices.IndexFunc(st.Commands, func(c shell.Command) bool { return len(c.Argv()) > 0 && c.Argv()[0] == "docker" })
+	if exit < 0 || build < 0 || !slices.Equal(st.Stops, []int{exit}) {
+		t.Fatalf("stops %v, exit at %d: %+v", st.Stops, exit, st.Commands)
+	}
+	if len(st.Builds) != 1 || st.Builds[0].Pos.Command != build {
+		t.Errorf("builds %+v, want one at %d", st.Builds, build)
+	}
+	if s := jobs[0].Steps[2].Stops; len(s) != 0 {
+		t.Errorf("a non-zero exit does not stop the step early: %v", s)
+	}
+	if s := jobs[0].Steps[0].Stops; len(s) != 0 {
+		t.Errorf("an action step: %v", s)
+	}
+}

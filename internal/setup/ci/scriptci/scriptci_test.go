@@ -1089,3 +1089,73 @@ func TestScriptReReviewMutants(t *testing.T) {
 		}
 	})
 }
+
+// grabbing is listCI, recording the classifier setup passes to Jobs.
+type grabbing struct {
+	listCI
+	classify *plan.Classifier
+}
+
+func (g grabbing) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
+	*g.classify = classify
+	return g.listCI.Jobs(r, f, src, classify)
+}
+
+// classifier returns the core's classifier for a repository with files, and the scripts of its
+// ci.yml.
+func classifier(t *testing.T, files map[string]string) (plan.Classifier, []*scriptci.Script) {
+	t.Helper()
+	var classify plan.Classifier
+	setup.ComputeWith(setup.Options{Root: tree(t, files), Yes: true}, grabbing{classify: &classify})
+	if classify == nil {
+		t.Fatal("setup did not read ci.yml")
+	}
+	d, err := yamledit.Parse([]byte(files[file]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return classify, scripts(d)
+}
+
+// P6: Step.Stops lists the commands of an item that can stop the job's shell early, and
+// Script.Stops reports them with their lines, a sourced file setup cannot follow included.
+func TestScriptStops(t *testing.T) {
+	classify, ss := classifier(t, map[string]string{
+		"Dockerfile": "FROM alpine\n",
+		file: lines(
+			"build:",
+			"  script:",
+			`    - if [ -z "$X" ]; then exit 0; fi`,
+			"    - docker build .",
+			"    - cd app || exit 1",
+			"    - . ./ci/missing.sh",
+			"    - |",
+			"      echo one",
+			"      exec docker push x",
+		),
+	})
+	if len(ss) != 1 {
+		t.Fatalf("scripts %d", len(ss))
+	}
+	s := ss[0]
+	steps := s.Steps(classify, nil)
+	exit := slices.IndexFunc(steps[0].Commands, func(c shell.Command) bool { return slices.Equal(c.Argv(), []string{"exit", "0"}) })
+	if exit < 0 || !slices.Equal(steps[0].Stops, []int{exit}) {
+		t.Errorf("first item: stops %v, exit at %d", steps[0].Stops, exit)
+	}
+	if len(steps[1].Stops) != 0 || len(steps[1].Builds) != 1 || len(steps[2].Stops) != 0 {
+		t.Errorf("build and cd items: %+v, %+v", steps[1], steps[2])
+	}
+	if !slices.Equal(steps[3].Stops, []int{0}) || !slices.Equal(steps[4].Stops, []int{1}) {
+		t.Errorf("sourced and exec items: stops %v, %v", steps[3].Stops, steps[4].Stops)
+	}
+	got := s.Stops(classify, nil)
+	wantStops := []scriptci.Found{
+		{What: "`exit 0`", Line: 3, Name: "exit"},
+		{What: "`. ./ci/missing.sh`", Line: 6, Name: "."},
+		{What: "`exec docker push x`", Line: 9, Name: "exec"},
+	}
+	if !slices.Equal(got, wantStops) {
+		t.Errorf("Stops = %+v, want %+v", got, wantStops)
+	}
+}

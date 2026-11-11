@@ -36,11 +36,19 @@ func newClassifier(r plan.Repo, ecos []plan.Ecosystem) plan.Classifier {
 	return c.classify
 }
 
-// classify classifies one CI command (first match wins): an image build, an ecosystem build, an
-// existing Shearbolt gate, a call to an in-repo file (followed recursively; one that cannot be
-// followed counts as a push), or a push, also inside `bash -c '...'`.
+// classify classifies one CI command (firstMatch), and sets Stops on the result whatever it is: a
+// command that builds or pushes can also stop the shell early (stops).
 func (c *classifier) classify(cmd shell.Command, ctx plan.Context) plan.Classified {
 	ctx.Dir = plan.CleanDir(ctx.Dir)
+	cl := c.firstMatch(cmd, ctx)
+	cl.Stops = c.stops(cmd, ctx, 1)
+	return cl
+}
+
+// firstMatch classifies one CI command (first match wins): an image build, an ecosystem build, an
+// existing Shearbolt gate, a call to an in-repo file (followed recursively; one that cannot be
+// followed counts as a push), or a push, also inside `bash -c '...'`. ctx.Dir is clean.
+func (c *classifier) firstMatch(cmd shell.Command, ctx plan.Context) plan.Classified {
 	args := cmd.ArgWords()
 	if b := imageBuild(cmd, args, ctx, nil); b != nil {
 		return plan.Classified{Builds: []plan.Build{*b}}
