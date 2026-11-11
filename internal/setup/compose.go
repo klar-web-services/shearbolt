@@ -101,3 +101,30 @@ func attachCompose(projects []plan.Project, files []string, root string) []plan.
 	}
 	return projects
 }
+
+// attachImageBuilds returns projects with a root project (ecosystem docker, Dir ".", named after
+// the repository directory, no lockfiles) when no project is npm or Rust and jobs hold at least
+// one non-RewriteOnly image build. An existing root project is kept as it is. projects is
+// sorted by Dir and stays sorted.
+func attachImageBuilds(projects []plan.Project, jobs []plan.Job, root string) []plan.Project {
+	// An npm or Rust project owns the builds; a root project is already there.
+	if slices.ContainsFunc(projects, func(p plan.Project) bool { return p.Ecosystem != plan.EcosystemDocker || p.Dir == "." }) {
+		return projects
+	}
+	built := slices.ContainsFunc(jobs, func(j plan.Job) bool {
+		return slices.ContainsFunc(j.Steps, func(s plan.Step) bool {
+			return slices.ContainsFunc(s.Builds, func(b plan.Build) bool { return b.Kind == plan.BuildImage && !b.RewriteOnly })
+		})
+	})
+	if !built {
+		return projects
+	}
+	projects = append(projects, plan.Project{
+		Ecosystem: plan.EcosystemDocker,
+		Dir:       ".",
+		Name:      filepath.Base(root),
+		Lockfiles: []string{},
+	})
+	slices.SortStableFunc(projects, func(a, b plan.Project) int { return strings.Compare(a.Dir, b.Dir) })
+	return projects
+}

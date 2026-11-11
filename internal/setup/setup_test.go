@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -644,5 +645,146 @@ func TestSetupHandAddedComposeTarget(t *testing.T) {
 		if g.Targets != nil && !slices.Contains(g.Targets, "stack") {
 			t.Fatalf("gate targets %v lack stack", g.Targets)
 		}
+	}
+}
+
+// wantNoProject is NO_PROJECT's message when setup finds nothing to protect, written out so the
+// tests pin its text.
+const wantNoProject = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
+
+// edgeWorkflow is a GitHub workflow whose job builds an image from the root Dockerfile and
+// pushes it.
+const edgeWorkflow = `on: push
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t ghcr.io/acme/edge:latest .
+      - run: docker push ghcr.io/acme/edge:latest
+`
+
+// computeRepo runs Compute, with the registered plugins, on a new repository holding files.
+func computeRepo(t *testing.T, files map[string]string) (*plan.Plan, string) {
+	t.Helper()
+	root := writeTree(t, files)
+	return Compute(Options{Root: root, Yes: true, Version: "1.2.3"}), root
+}
+
+// rootProject is the root project setup creates for a repository at root.
+func rootProject(root string, compose ...string) plan.Project {
+	return plan.Project{Ecosystem: plan.EcosystemDocker, Dir: ".", Name: filepath.Base(root), Lockfiles: []string{}, Compose: compose}
+}
+
+// A repository with only a Dockerfile that CI builds gets the root project.
+func TestComputeRootProjectFromImageBuild(t *testing.T) {
+	p, root := computeRepo(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", ".github/workflows/ci.yml": edgeWorkflow})
+	if want := []plan.Project{rootProject(root)}; !reflect.DeepEqual(p.Projects, want) {
+		t.Fatalf("projects = %+v, want %+v", p.Projects, want)
+	}
+	if p.Error != nil && p.Error.Code == "NO_PROJECT" {
+		t.Fatalf("error = %+v", p.Error)
+	}
+}
+
+// The errors of a repository without an npm, Rust or compose project, in the order of §2.2.
+func TestComputeNoProjectErrors(t *testing.T) {
+	// No image build in CI: NO_PROJECT.
+	p, _ := computeRepo(t, map[string]string{
+		"Dockerfile": "FROM nginx:1.27\n",
+		".github/workflows/ci.yml": `on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: make test
+`,
+	})
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" || p.Error.Message != wantNoProject || len(p.Projects) != 0 {
+		t.Fatalf("no image build: error = %+v, projects = %+v", p.Error, p.Projects)
+	}
+
+	// A CI file that cannot be parsed might hold an image build: PARSE, not NO_PROJECT.
+	p, _ = computeRepo(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", ".github/workflows/ci.yml": "jobs: [build\n"})
+	if p.Error == nil || p.Error.Code != "PARSE" || p.Error.File != ".github/workflows/ci.yml" {
+		t.Fatalf("unparseable CI: error = %+v", p.Error)
+	}
+
+	// No CI at all: NO_PROJECT, not NO_CI.
+	p, _ = computeRepo(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", "README.md": "hi\n"})
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" || p.Error.Message != wantNoProject {
+		t.Fatalf("no CI: error = %+v", p.Error)
+	}
+}
+
+// An npm project owns the image builds: there is no root project.
+func TestComputeImageBuildWithNpmProject(t *testing.T) {
+	p, _ := computeRepo(t, map[string]string{
+		"web/package.json":         `{"name":"web"}`,
+		"web/package-lock.json":    "{}",
+		"Dockerfile":               "FROM node:22\n",
+		".github/workflows/ci.yml": edgeWorkflow,
+	})
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if len(p.Projects) != 1 || p.Projects[0].Ecosystem != "npm" || p.Projects[0].Dir != "web" {
+		t.Fatalf("projects = %+v, want web only", p.Projects)
+	}
+}
+
+// A compose-only repository that builds an image keeps its one root project with its compose
+// files.
+func TestComputeImageBuildWithCompose(t *testing.T) {
+	p, root := computeRepo(t, map[string]string{
+		"compose.yml":              composeImage,
+		"Dockerfile":               "FROM nginx:1.27\n",
+		".github/workflows/ci.yml": edgeWorkflow,
+	})
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if want := []plan.Project{rootProject(root, "compose.yml")}; !reflect.DeepEqual(p.Projects, want) {
+		t.Fatalf("projects = %+v, want %+v", p.Projects, want)
+	}
+}
+
+// attachImageBuilds adds the root project only for non-RewriteOnly image builds when no project
+// is npm or Rust, and keeps an existing root project as it is.
+func TestAttachImageBuilds(t *testing.T) {
+	job := func(builds ...plan.Build) []plan.Job {
+		return []plan.Job{{ID: "ci.yml#a"}, {ID: "ci.yml#b", Steps: []plan.Step{{}, {Builds: builds}}}}
+	}
+	image := plan.Build{Kind: plan.BuildImage, Dir: "."}
+	rewriteOnly := plan.Build{Kind: plan.BuildImage, Dir: ".", RewriteOnly: true}
+	binary := plan.Build{Kind: plan.BuildBinary, Dir: "."}
+	other := plan.Build{Kind: plan.BuildOther, Dir: "."}
+	npmWeb := plan.Project{Ecosystem: "npm", Dir: "web", Name: "web", Lockfiles: []string{"package-lock.json"}}
+	rustCli := plan.Project{Ecosystem: "rust", Dir: "cli", Name: "cli", Lockfiles: []string{"Cargo.lock"}}
+	composeRoot := rootProject("/r/shop", "compose.yml")
+
+	for _, tc := range []struct {
+		name     string
+		projects []plan.Project
+		jobs     []plan.Job
+		want     []plan.Project
+	}{
+		{"image build", nil, job(other, image), []plan.Project{rootProject("/r/shop")}},
+		{"no build", nil, job(), nil},
+		{"no job", nil, nil, nil},
+		{"rewrite-only image build", nil, job(rewriteOnly), nil},
+		{"binary and other builds", nil, job(binary, other), nil},
+		{"npm project", []plan.Project{npmWeb}, job(image), []plan.Project{npmWeb}},
+		{"rust project", []plan.Project{rustCli}, job(image), []plan.Project{rustCli}},
+		{"compose root and npm project", []plan.Project{composeRoot, npmWeb}, job(image), []plan.Project{composeRoot, npmWeb}},
+		{"compose root", []plan.Project{composeRoot}, job(image), []plan.Project{composeRoot}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := attachImageBuilds(slices.Clone(tc.projects), tc.jobs, "/r/shop")
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }

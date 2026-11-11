@@ -45,6 +45,10 @@ type Options struct {
 // noCIMessage is NO_CI's message (R9).
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
 
+// noProjectMessage is NO_PROJECT's message when setup finds nothing to protect. The find notes
+// follow it.
+const noProjectMessage = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
+
 // noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose targets when no CI
 // job setup read pushes or deploys.
 const noDeploySeenMessage = "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate."
@@ -118,9 +122,23 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	slices.SortFunc(p.CI, func(a, b plan.CIFile) int { return strings.Compare(a.File, b.File) })
 	slices.SortFunc(files, func(a, b *ciSource) int { return strings.Compare(a.path, b.path) })
 
-	// 3. Errors.
+	// Without an npm or Rust project, the image builds of the jobs make the root project.
+	var jobs []plan.Job
+	var paths []string
+	for _, f := range files {
+		jobs = append(jobs, f.jobs...)
+		paths = append(paths, f.path)
+	}
+	projects = attachImageBuilds(projects, jobs, root)
+	p.Projects = projects
+
+	// 3. Errors. With nothing to protect, a CI file that was not read might hold an image build.
 	if len(projects) == 0 {
-		msg := "No npm or Rust project with a lockfile, and no Docker Compose file that pulls images, was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root."
+		if parseErr != nil {
+			p.Error = parseErr
+			return p
+		}
+		msg := noProjectMessage
 		for _, n := range findNotes {
 			msg += "\n" + n.Message
 		}
@@ -136,12 +154,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	notes = append(slices.Clone(findNotes), notes...)
 
 	// 4. Questions (R3).
-	var jobs []plan.Job
-	var paths []string
-	for _, f := range files {
-		jobs = append(jobs, f.jobs...)
-		paths = append(paths, f.path)
-	}
 	m := newGateModel(projects, jobs, paths)
 	p.Questions = m.questions()
 	for i := range p.Questions {
