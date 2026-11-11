@@ -132,3 +132,17 @@ func TestMarkerGuarded(t *testing.T) {
 		}
 	}
 }
+
+func TestTemplated(t *testing.T) {
+	for cond, want := range map[string]bool{
+		"":                                       false,
+		"github.ref == 'refs/heads/main'":        false,
+		"${{ github.ref == 'refs/heads/main' }}": false,
+		"github.ref == ${{ env.REF }}":           true,
+		"${{ a }} && ${{ b }}":                   true,
+	} {
+		if got := templated(cond); got != want {
+			t.Errorf("templated(%q) = %v, want %v", cond, got, want)
+		}
+	}
+}

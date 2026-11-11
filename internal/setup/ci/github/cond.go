@@ -164,9 +164,68 @@ func markerGuarded(cond string) (id string, ok bool) {
 	return "", false
 }
 
+// templated reports whether condition cond still holds ${{ }} without its own wrapper: combined
+// with the marker it would be a template string, which is always true.
+func templated(cond string) bool { return strings.Contains(bareExpr(cond), "${{") }
+
 // normCond returns cond without its ${{ }} wrapper and with each run of whitespace as one space.
 func normCond(cond string) string {
 	return strings.Join(strings.Fields(bareExpr(cond)), " ")
+}
+
+// Why a gate keeps running on early stops (EARLY_STOP's running form, design §3.3).
+const (
+	reasonAllTargets = "it checks every target in shearbolt.yaml"
+	reasonLaterPush  = "a later step pushes or deploys"
+	reasonTemplate   = "its condition cannot be combined with the marker"
+	reasonNotNext    = "it does not directly follow this step"
+	reasonRunStep    = "setup does not add an if: to a gate in a run step"
+)
+
+// gateMaySkip reports whether gate g may be skipped when split step s stopped before its build
+// (design §3.3), and why not when it may not: (1) g scans only its own images, all built in
+// step s, and (2) no step after s pushes or deploys unless its if: is one of setup's marker forms
+// for s. On a first run the steps setup inserts after s (the gate, its continued and push steps)
+// are not among the job's steps yet, so the later steps are the original ones; on a re-run the
+// continued step is one of them and passes (2) by its if:.
+func (e *jobEditor) gateMaySkip(g plan.Gate, s int) (bool, string) {
+	if !g.OnlyOwnImages || slices.ContainsFunc(g.Builds, func(b plan.Build) bool { return b.Pos.Step != s }) {
+		if g.Scans == nil {
+			return false, reasonAllTargets
+		}
+		here := map[string]bool{}
+		for _, iv := range g.Images {
+			if iv.Build.Pos.Step == s {
+				here[iv.Target] = true
+			}
+		}
+		var other []string
+		for _, n := range g.Scans {
+			if !here[n] {
+				other = append(other, n)
+			}
+		}
+		if len(other) == 0 {
+			return false, "it also follows builds in other steps"
+		}
+		return false, "it also checks " + strings.Join(other, ", ")
+	}
+	id := e.j.steps[s].id
+	if sp := e.steps[s]; sp != nil && sp.id != "" {
+		id = sp.id
+	}
+	for k := s + 1; k < len(e.j.steps); k++ {
+		if !e.pushes(k) {
+			continue
+		}
+		if n := e.j.steps[k].ifNode; n != nil && id != "" {
+			if got, ok := markerGuarded(n.Value); ok && got == id {
+				continue
+			}
+		}
+		return false, reasonLaterPush
+	}
+	return true, ""
 }
 
 // pushes reports whether step s pushes or deploys: a command or the step itself, or an image

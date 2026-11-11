@@ -10,6 +10,7 @@ import (
 
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/shelledit"
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
+	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
@@ -41,10 +42,14 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 		return err
 	}
 	anchor := g.At.Step
+	decided := -1 // the split step whose early stops decide the gate's marker term
 	switch {
 	case g.Existing != nil:
 		anchor = g.Existing.Pos.Step
-		if err := e.updateExisting(g, env); err != nil {
+		if g.Existing.Pos.Command < 0 {
+			decided = g.Existing.Pos.Step - 1
+		}
+		if err := e.updateExisting(gi, g, env); err != nil {
 			return err
 		}
 	case g.Before:
@@ -57,6 +62,17 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 		if err != nil {
 			return err
 		}
+		if sp := e.markerSplit(gi, g.At.Step); sp != nil {
+			decided = sp.s
+			skip, reason := e.gateMaySkip(g, sp.s)
+			if skip && templated(ifCond) {
+				skip, reason = false, reasonTemplate
+			}
+			if skip {
+				ifCond = withMarker(ifCond, sp.id)
+			}
+			e.notes = append(e.notes, e.earlyStopNote(sp.s, skip, reason))
+		}
 		if err := e.d.InsertItem(e.j.seq, g.At.Step, gateLines(g, ifCond, env, e.unit)); err != nil {
 			return failAt(st.line, "setup cannot add the gate step (%v)", err)
 		}
@@ -64,6 +80,18 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 	for _, sp := range e.sortedPlans() {
 		if sp.gate != gi {
 			continue
+		}
+		// Every new split with the marker gets EARLY_STOP (P9). A split the gate does not
+		// directly follow cannot carry the gate's term, and neither can a gate in a run step.
+		if sp.split && sp.marker && sp.s != decided {
+			reason := reasonNotNext
+			if g.Existing != nil && g.Existing.Pos.Command >= 0 {
+				reason = reasonRunStep
+			}
+			if skip, why := e.gateMaySkip(g, sp.s); !skip {
+				reason = why
+			}
+			e.notes = append(e.notes, e.earlyStopNote(sp.s, false, reason))
 		}
 		if sp.pushStep != nil {
 			if err := e.d.InsertItem(e.j.seq, anchor, sp.pushStep); err != nil {
@@ -109,10 +137,53 @@ func (e *jobEditor) gateIf(g plan.Gate) (string, error) {
 	return cond, nil
 }
 
+// markerSplit returns the plan of step s when this run splits it with the marker for gate gi.
+func (e *jobEditor) markerSplit(gi, s int) *stepPlan {
+	if sp := e.steps[s]; sp != nil && sp.gate == gi && sp.split && sp.marker {
+		return sp
+	}
+	return nil
+}
+
+// earlyStopNote is EARLY_STOP for split step s (design §3.3), on the line of its first command
+// that can stop early: the gate is skipped on early stops, or it keeps running for reason.
+func (e *jobEditor) earlyStopNote(s int, skip bool, reason string) plan.Note {
+	st := e.j.steps[s]
+	where, line := "", st.line
+	for _, k := range e.pj.Steps[s].Stops {
+		if k >= 0 && k < len(st.cmds) {
+			line = st.cmdLine(st.cmds[k])
+			where = fmt.Sprintf(" (%s at line %d)", stopName(st.cmds[k]), line)
+			break
+		}
+	}
+	msg := "this step can stop before its build" + where + "; the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping."
+	if !skip {
+		msg = "this step can stop before its build" + where + "; the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because " + reason + ". Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:."
+	}
+	return plan.Note{Code: "EARLY_STOP", Message: msg, File: e.wf.file, Line: line}
+}
+
+// stopName returns the name of the builtin by which cmd, a command that can stop the step early,
+// stops it: its first word that is exit, exec, source or "." (named source), as scriptci names
+// stops for GitLab and Bitbucket.
+func stopName(cmd shell.Command) string {
+	for _, w := range cmd.Words {
+		switch w.Value {
+		case "exit", "exec", "source":
+			return w.Value
+		case ".":
+			return "source"
+		}
+	}
+	return "exit"
+}
+
 // updateExisting brings an existing gate up to date (R8): its image variables (set, added, or
-// removed when no longer needed) and its targets input. A shearbolt scan command in a run step
-// gets the variables in its step's env; its arguments are the user's.
-func (e *jobEditor) updateExisting(g plan.Gate, env [][2]string) error {
+// removed when no longer needed), its targets input, and the marker term of its if: (gateTerm).
+// A shearbolt scan command in a run step gets the variables in its step's env; its arguments
+// and its if: are the user's.
+func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	ex := g.Existing
 	st := e.j.steps[ex.Pos.Step]
 	if st.m == nil {
@@ -145,7 +216,82 @@ func (e *jobEditor) updateExisting(g plan.Gate, env [][2]string) error {
 	if err := e.setEnv(st, env); err != nil {
 		return err
 	}
-	return e.setTargets(st, g.Targets)
+	if err := e.setTargets(st, g.Targets); err != nil {
+		return err
+	}
+	return e.gateTerm(gi, g, st)
+}
+
+// gateTerm adds or removes the marker term in the if: of existing action gate g (design §3.4)
+// when the step directly before it is a split step with the marker: one this run splits for g,
+// or one that holds setup's marker line and has an id. The term is there exactly when the gate
+// may be skipped (gateMaySkip) and its own condition can be combined with it. A changed if:, or
+// a split that is new, gets EARLY_STOP; an unchanged re-run says nothing. Conditions are compared
+// normalized, so a term the user reformatted stays as written.
+func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
+	s := g.Existing.Pos.Step - 1
+	if s < 0 {
+		return nil
+	}
+	id, split := "", false
+	if sp := e.markerSplit(gi, s); sp != nil {
+		id, split = sp.id, true
+	} else if prev := e.j.steps[s]; prev.run != nil && prev.id != "" && holdsMarker(prev) {
+		id = prev.id
+	} else {
+		return nil
+	}
+	skip, reason := e.gateMaySkip(g, s)
+	if e.d.Get(st.m, "if") != nil && st.ifNode == nil {
+		// An if: that is not a scalar cannot be read as a condition, so it is left alone.
+		if split {
+			if skip {
+				reason = reasonTemplate
+			}
+			e.notes = append(e.notes, e.earlyStopNote(s, false, reason))
+		}
+		return nil
+	}
+	cur := ""
+	if st.ifNode != nil {
+		cur = st.ifNode.Value
+	}
+	next, _ := stripMarker(cur, id)
+	if skip && templated(next) {
+		skip, reason = false, reasonTemplate
+	}
+	if skip {
+		next = withMarker(next, id)
+	}
+	changed := normCond(next) != normCond(cur)
+	if changed {
+		if err := e.setIf(st, next); err != nil {
+			return err
+		}
+	}
+	if changed || split {
+		e.notes = append(e.notes, e.earlyStopNote(s, skip, reason))
+	}
+	return nil
+}
+
+// setIf sets an existing gate's if: to cond, after its name when it has none; an empty cond
+// removes it.
+func (e *jobEditor) setIf(st *step, cond string) error {
+	fail := func(err error) error {
+		return failAt(st.line, "the existing gate's if: cannot be updated (%v)", err)
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	if cond == "" {
+		return wrapErr(fail, e.d.DeleteEntry(st.m, "if"))
+	}
+	after := ""
+	if slices.Contains(keys(st.m), "name") {
+		after = "name"
+	}
+	return wrapErr(fail, e.d.SetKey(st.m, "if", yamledit.Scalar(cond), after))
 }
 
 // imageVarName matches the variables setup manages in a gate's env.

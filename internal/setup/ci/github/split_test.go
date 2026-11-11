@@ -38,10 +38,8 @@ func TestGitHubEarlyStopMarker(t *testing.T) {
 	want := head + earlyStopEdited + lines("        if: steps.shearbolt-build.outputs.shearbolt-reached != ''") + continuedRun
 	_, got := result(t, npmRepo("edge", head+earlyStop, nil))
 	wantWorkflow(t, got, want)
-
-	// The root project owns the image build when there is only a Dockerfile.
-	_, got = result(t, map[string]string{"Dockerfile": "FROM alpine\n", wf: head + earlyStop})
-	wantWorkflow(t, got, want)
+	// The root project's gate, which scans only that image, is skipped too: see
+	// TestGitHubEarlyStopSkipsGate.
 }
 
 // The continued step keeps the step's own if:, unwrapped, in front of the marker.

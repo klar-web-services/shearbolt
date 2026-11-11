@@ -616,6 +616,14 @@ func (e *jobEditor) markerEdit(sp *stepPlan) {
 	sp.edits = append(sp.edits, shelledit.Edit{At: at, End: at, Text: text})
 }
 
+// holdsMarker reports whether a run step's script has setup's marker line, matched by its exact
+// text as markerEdit matches it: OwnLine alone also accepts the image output line.
+func holdsMarker(st *step) bool {
+	return slices.ContainsFunc(st.cmds, func(c shell.Command) bool {
+		return c.End <= len(st.script) && st.script[c.Start:c.End] == shelledit.ReachedLine
+	})
+}
+
 func (e *jobEditor) newID() string {
 	id := "shearbolt-build"
 	for n := 2; e.ids[id]; n++ {
