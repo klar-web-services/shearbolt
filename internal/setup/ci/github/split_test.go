@@ -312,6 +312,11 @@ func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
 		"wait -p pid",
 		`if [ -n "$X" ]; then echo $((i++)); fi`,
 		"cat <<EOF\n$((i++))\nEOF",
+		// Text that a scan of the whole script would read wrongly.
+		"notes=$(cat <<EOF\nHere's the build\nEOF\n)\n(( count++ ))\necho 'built :)'",
+		"sha=$(\n  # don't shorten\n  git rev-parse HEAD\n)\n(( count++ ))\necho 'done :)'",
+		"cat > notes.md <<'EOF'\nPress the ` key\nEOF\n(( count++ ))\necho \"built `date`\"",
+		"notes=$(cat <<EOF\nHere's the build\nEOF\n)\n: ${count:=1}\necho 'ok :)'",
 	} {
 		wantUnsupported(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil), pre, hiddenMsg)
 	}

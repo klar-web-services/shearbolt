@@ -128,33 +128,48 @@ func TestAssignReadInherited(t *testing.T) {
 	}
 }
 
+// misparsed are scripts with a hidden assignment after text that a scan of the whole script
+// would read wrongly: an apostrophe in a heredoc body or a comment inside $(…), and a lone
+// backtick in a quoted heredoc body.
+var misparsed = []string{
+	"notes=$(cat <<EOF\nHere's the build\nEOF\n)\n(( count++ ))\necho 'built :)'",
+	"sha=$(\n  # don't shorten\n  git rev-parse HEAD\n)\n(( count++ ))\necho 'done :)'",
+	"cat > notes.md <<'EOF'\nPress the ` key\nEOF\n(( count++ ))\necho \"built `date`\"",
+	"notes=$(cat <<EOF\nHere's the build\nEOF\n)\n: ${count:=1}\necho 'ok :)'",
+}
+
 // Each form of an assignment hidden in an expansion, in arithmetic or in a builtin, and the
 // forms that only read.
 func TestHiddenAssign(t *testing.T) {
 	for script, want := range map[string]bool{
-		"x=${y:=v}":                             true,
-		"x=${y=v}":                              true,
-		": ${n:=5}":                             true,
-		`echo "${a[0]:=v}"`:                     true,
-		`echo "${x:-${y:=v}}"`:                  true,
-		"x=$(( y = 5 ))":                        true,
-		"echo $((i++))":                         true,
-		"echo $((--i))":                         true,
-		"echo $(( n += 2 ))":                    true,
-		"echo $(( n -= 2 ))":                    true,
-		"echo $(( n *= 2 ))":                    true,
-		"echo $(( n /= 2 ))":                    true,
-		"echo $(( n %= 2 ))":                    true,
-		"echo $(( n <<= 1 ))":                   true,
-		"echo $(( n >>= 1 ))":                   true,
-		"echo $(( n &= 1 ))":                    true,
-		"echo $(( n ^= 1 ))":                    true,
-		"echo $(( n |= 1 ))":                    true,
-		"echo $(( (n = 1) + 2 ))":               true,
-		"echo $[n=1]":                           true,
-		"(( n = 5 ))":                           true,
-		"(( n++ )) || true":                     true,
-		"(( a > 0 || n++ ))":                    true,
+		"x=${y:=v}":               true,
+		"x=${y=v}":                true,
+		": ${n:=5}":               true,
+		`echo "${a[0]:=v}"`:       true,
+		`echo "${x:-${y:=v}}"`:    true,
+		"x=$(( y = 5 ))":          true,
+		"echo $((i++))":           true,
+		"echo $((--i))":           true,
+		"echo $(( n += 2 ))":      true,
+		"echo $(( n -= 2 ))":      true,
+		"echo $(( n *= 2 ))":      true,
+		"echo $(( n /= 2 ))":      true,
+		"echo $(( n %= 2 ))":      true,
+		"echo $(( n <<= 1 ))":     true,
+		"echo $(( n >>= 1 ))":     true,
+		"echo $(( n &= 1 ))":      true,
+		"echo $(( n ^= 1 ))":      true,
+		"echo $(( n |= 1 ))":      true,
+		"echo $(( (n = 1) + 2 ))": true,
+		"echo $[n=1]":             true,
+		"(( n = 5 ))":             true,
+		"(( n++ )) || true":       true,
+		"(( a > 0 || n++ ))":      true,
+		// A mis-parse inside one word must not hide code after it.
+		misparsed[0]:                            true,
+		misparsed[1]:                            true,
+		misparsed[2]:                            true,
+		misparsed[3]:                            true,
 		"(( ok && (n = 1) ))":                   true,
 		"if (( x || (n += 2) )); then :; fi":    true,
 		"(( a | (n = 3) ))":                     true,
@@ -201,7 +216,7 @@ func TestHiddenAssign(t *testing.T) {
 		cmds, _ := shell.Parse(script, shell.State{})
 		got := false
 		for i := range cmds {
-			got = got || hiddenAssign(maskSubst(script), cmds, i)
+			got = got || hiddenAssign(maskWords(script, cmds), cmds, i)
 		}
 		if got != want {
 			t.Errorf("hiddenAssign(%q) = %v, want %v", script, got, want)

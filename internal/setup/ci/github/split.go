@@ -113,7 +113,7 @@ type droppedAssign struct {
 // (hiddenAssign) fails the split unless it is carried: the split step would not re-create its
 // assignment, while a carried command re-runs and re-creates it.
 func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
-	masked := maskSubst(script)
+	masked := maskWords(script, st.cmds)
 	for i, c := range cmds {
 		line := st.cmdLine(c)
 		text := script[c.Start:c.End]
@@ -185,7 +185,7 @@ var (
 // leading NAME=… words (design §4): a ${NAME=…} or ${NAME:=…} expansion; arithmetic ($((…)),
 // $[…], ((…)), and offsets in ${…}) with ++, -- or an assignment operator; a subscript in ${…} or
 // of an assigned array element with ++, -- or =; or let, getopts, printf -v or wait -p. masked
-// is the script with maskSubst applied, since a command substitution runs in a subshell. The
+// is the script with maskWords applied, since a command substitution runs in a subshell. The
 // check is textual. It finds openers in the text from the end of the previous command, so it
 // also sees the (( of an arithmetic command or a C-style for, which are not words, and reads
 // each construct to its close in the script, past the || or && that ends the command. A false
@@ -247,9 +247,29 @@ func hiddenAssign(masked string, cmds []shell.Command, i int) bool {
 	return false
 }
 
-// maskSubst returns script with the contents of its command substitutions, $(…) and `…`,
-// blanked out and every offset kept: they run in a subshell, so an assignment inside them cannot
-// reach the step. $((…)) is arithmetic and stays, a substitution nested in it is blanked, and a
+// maskWords returns script with maskSubst applied to each word and redirection target of cmds,
+// its commands, on its own, and every offset kept. Text between words is never blanked, so text
+// that maskSubst reads wrongly (an apostrophe in a heredoc body or in a comment inside $(…), or a
+// lone backtick in a quoted heredoc body) cannot blank code past the word that holds it.
+func maskWords(script string, cmds []shell.Command) string {
+	b := []byte(script)
+	for _, c := range cmds {
+		ws := slices.Clone(c.Words)
+		for _, r := range c.Redirs {
+			ws = append(ws, r.Target)
+		}
+		for _, w := range ws {
+			if w.Raw != "" && w.Start+len(w.Raw) <= len(b) {
+				copy(b[w.Start:], maskSubst(w.Raw))
+			}
+		}
+	}
+	return string(b)
+}
+
+// maskSubst returns s with the contents of its command substitutions, $(…) and `…`, blanked out
+// and every offset kept: they run in a subshell, so an assignment inside them cannot reach the
+// step. $((…)) is arithmetic and stays, a substitution nested in it is blanked, and a
 // substitution that never closes stays. Single-quoted text and comments are skipped.
 func maskSubst(script string) string {
 	b := []byte(script)
