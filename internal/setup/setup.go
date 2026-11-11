@@ -49,6 +49,14 @@ const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucke
 // follow it.
 const noProjectMessage = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
+// noGateableMessage is NO_PROJECT's message when CI builds images but the root project, the only
+// project, has no target to scan after placement. The notes of those builds follow it.
+const noGateableMessage = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
+
+// noGateableCodes are the notes of image builds that the gate does not scan, which follow
+// noGateableMessage.
+var noGateableCodes = []string{"MULTI_PLATFORM", "PUSH_IN_BUILD", "BUILD_AFTER_PUSH", "BUILD_AFTER_GATE"}
+
 // noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose targets when no CI
 // job setup read pushes or deploys.
 const noDeploySeenMessage = "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate."
@@ -91,7 +99,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	if err != nil {
 		return fail("READ", err.Error(), "")
 	}
-	p.Projects = projects
 
 	// 2. CI files and their jobs.
 	classify := newClassifier(r, ecos)
@@ -174,6 +181,17 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 	snippet := func(file string, g plan.Gate) string { return byPath[file].ci.Snippet(r, file, g) }
 	pl := m.place(values, o.Version, snippet)
+	// A root project that owns the image builds needs a target it will scan: without a compose
+	// file, a gated image (§2.2, error 3).
+	if pp := pl.projects["."]; m.rootOwns && pp != nil && len(pp.project.Compose) == 0 && len(pp.targets) == 0 {
+		msg := noGateableMessage
+		for _, n := range dedupeNotes(pl.notes) {
+			if slices.Contains(noGateableCodes, n.Code) {
+				msg += fmt.Sprintf("\n%s:%d: %s", n.File, n.Line, n.Message)
+			}
+		}
+		return fail("NO_PROJECT", msg, "")
+	}
 	notes = append(notes, pl.notes...)
 	// NO_GATE_PLACED snippets carry the version already; a development build's are unpinned.
 	if slices.ContainsFunc(pl.notes, func(n plan.Note) bool { return n.Code == "NO_GATE_PLACED" }) {

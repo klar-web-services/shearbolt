@@ -676,14 +676,79 @@ func rootProject(root string, compose ...string) plan.Project {
 	return plan.Project{Ecosystem: plan.EcosystemDocker, Dir: ".", Name: filepath.Base(root), Lockfiles: []string{}, Compose: compose}
 }
 
-// A repository with only a Dockerfile that CI builds gets the root project.
+// A repository with only a Dockerfile that CI builds and pushes gets the root project, which
+// owns the build: a complete plan whose shearbolt.yaml has one image target, and a gate after
+// the build and before the push.
 func TestComputeRootProjectFromImageBuild(t *testing.T) {
-	p, root := computeRepo(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", ".github/workflows/ci.yml": edgeWorkflow})
+	base := writeTree(t, map[string]string{"edge/Dockerfile": "FROM nginx:1.27\n", "edge/.github/workflows/ci.yml": edgeWorkflow})
+	root := filepath.Join(base, "edge")
+	p := Compute(Options{Root: root, Yes: true, Version: "1.2.3"})
+	if p.Error != nil {
+		t.Fatalf("error = %+v", p.Error)
+	}
 	if want := []plan.Project{rootProject(root)}; !reflect.DeepEqual(p.Projects, want) {
 		t.Fatalf("projects = %+v, want %+v", p.Projects, want)
 	}
-	if p.Error != nil && p.Error.Code == "NO_PROJECT" {
-		t.Fatalf("error = %+v", p.Error)
+	if !p.Complete || len(p.Questions) != 0 || hasCode(p.Notes, "BUILD_NOT_GATED") {
+		t.Fatalf("complete = %v, questions = %v, notes = %v", p.Complete, questionIDs(p.Questions), codes(p.Notes))
+	}
+	cfg := change(p, "shearbolt.yaml")
+	if cfg == nil || cfg.Action != "create" {
+		t.Fatalf("no new shearbolt.yaml: %v", changePaths(p))
+	}
+	loadConfig(t, cfg.Content)
+	if !strings.Contains(cfg.Content, "targets:\n  - name: edge\n    image: ${SHEARBOLT_IMAGE:-edge:local}\n") || strings.Count(cfg.Content, "- name:") != 1 {
+		t.Fatalf("shearbolt.yaml:\n%s", cfg.Content)
+	}
+	ci := change(p, ".github/workflows/ci.yml")
+	if ci == nil {
+		t.Fatalf("no CI change: %v", changePaths(p))
+	}
+	build := strings.Index(ci.Content, "docker build -t ghcr.io/acme/edge:latest")
+	gate := strings.Index(ci.Content, "SHEARBOLT_IMAGE: ")
+	push := strings.Index(ci.Content, "docker push ghcr.io/acme/edge:latest")
+	if build < 0 || gate < build || push < gate || !strings.Contains(ci.Content, "ghcr.io/acme/edge:shearbolt-${{ github.sha }}") {
+		t.Fatalf("ci.yml:\n%s", ci.Content)
+	}
+}
+
+// wantNoGateable is NO_PROJECT's message when CI builds images that give the root project
+// nothing to scan.
+const wantNoGateable = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
+
+// IP-3: when the root project's image builds leave it no planned target and it has no compose
+// file, setup stops with NO_PROJECT, followed by those builds' notes.
+func TestComputeNoGateableImage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		notes string // the note lines after the message
+	}{
+		{"multi-platform", map[string]string{fakeCIFile: "deploy: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:1 .\n"},
+			fakeCIFile + ":1: this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; no gate is placed for it in this job"},
+		// Setup finds no image build inside a called script, so the only gateable build runs after
+		// a build that pushes.
+		{"after a push", map[string]string{fakeCIFile: "deploy: docker buildx build -o type=registry -t ghcr.io/acme/edge:cache .; docker build -t ghcr.io/acme/edge:1 .\n"},
+			fakeCIFile + ":1: this image build pushes through its output, so no gate can run between the build and the push and its image is not scanned; no gate is placed for it in this job. Build with --load (or load: true) and push in a later step to scan the image\n" +
+				fakeCIFile + ":1: this build runs after a push or deploy in the same job, so the gate, which runs before that push, does not scan it; build before you push, or in a separate job, to scan it"},
+		{"after the gate", map[string]string{fakeCIFile: `deploy: "$HOME/.local/bin/shearbolt" scan --ci; docker build -t ghcr.io/acme/edge:1 .; docker push ghcr.io/acme/edge:1` + "\n"},
+			fakeCIFile + ":1: this build runs after the existing Shearbolt gate in this job, so that gate does not scan it"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.files["Dockerfile"] = "FROM nginx:1.27\n"
+			root := writeTree(t, tc.files)
+			p := computeWith(t, root, &fakeCI{files: []string{fakeCIFile}}, nil)
+			if p.Error == nil || p.Error.Code != "NO_PROJECT" {
+				t.Fatalf("error = %+v, notes = %v", p.Error, codes(p.Notes))
+			}
+			msg, notes, _ := strings.Cut(p.Error.Message, "\n")
+			if msg != wantNoGateable || !strings.HasPrefix(notes, tc.notes) || strings.Count(notes, "\n") != strings.Count(tc.notes, "\n") {
+				t.Fatalf("message:\n%s", p.Error.Message)
+			}
+			if len(p.Changes) != 0 {
+				t.Fatalf("changes: %v", changePaths(p))
+			}
+		})
 	}
 }
 

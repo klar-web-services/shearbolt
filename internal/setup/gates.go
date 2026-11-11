@@ -48,7 +48,8 @@ func (l located) at() at { return at{l.step, l.Pos.Command} }
 // gateModel holds the projects, the editable jobs and their builds with their attribution.
 type gateModel struct {
 	projects []plan.Project
-	owners   []plan.Project // the projects that can own builds: npm and Rust, never compose-only
+	owners   []plan.Project // the projects that can own builds: npm and Rust; without them, the root project
+	rootOwns bool           // the root project (ecosystem docker) is the owner: it owns only image builds
 	jobs     []plan.Job
 	ciFiles  []string
 	builds   []located // every build in job order; a duplicate Via build of one command is left out
@@ -56,18 +57,23 @@ type gateModel struct {
 	question []string  // per build: its build-project question ID, else ""
 }
 
-// newGateModel attributes every build of jobs (R3) among the owners, the npm and Rust projects:
-// a compose-only project never owns builds. A build belongs to the owner whose Dir is the longest
-// prefix of its directory; with one owner, every build belongs to it. A build whose directory is
-// unknown, or that matches no prefix, gets a build-project question when there is more than one
-// owner. RewriteOnly builds are attributed by prefix only and never get a question. A Via build
-// found twice in one command (a file reached by two calls) counts once.
+// newGateModel attributes every build of jobs (R3) among the owners, the npm and Rust projects.
+// Without them, the root project (ecosystem docker) is the one owner (rootOwns), and it owns only
+// image builds: every other build belongs to no project. Where npm or Rust projects exist, the
+// root project never owns builds. A build belongs to the owner whose Dir is the longest prefix of
+// its directory; with one owner, every build belongs to it. A build whose directory is unknown,
+// or that matches no prefix, gets a build-project question when there is more than one owner.
+// RewriteOnly builds are attributed by prefix only and never get a question. A Via build found
+// twice in one command (a file reached by two calls) counts once.
 func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *gateModel {
 	m := &gateModel{projects: projects, jobs: jobs, ciFiles: ciFiles}
 	for _, p := range projects {
 		if p.Ecosystem != plan.EcosystemDocker {
 			m.owners = append(m.owners, p)
 		}
+	}
+	if i := slices.IndexFunc(projects, func(p plan.Project) bool { return p.Ecosystem == plan.EcosystemDocker }); len(m.owners) == 0 && i >= 0 {
+		m.owners, m.rootOwns = []plan.Project{projects[i]}, true
 	}
 	seen := map[string]bool{}
 	for j, job := range jobs {
@@ -83,6 +89,9 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 				owner := m.prefixOwner(b.Dir)
 				if !b.RewriteOnly && len(m.owners) == 1 {
 					owner = m.owners[0].Dir
+				}
+				if m.rootOwns && b.Kind != plan.BuildImage {
+					owner = ""
 				}
 				m.builds = append(m.builds, located{Build: b, i: len(m.builds), job: j, step: s})
 				m.owner = append(m.owner, owner)
@@ -340,6 +349,7 @@ type gatePlace struct {
 	file     string       // the CI file
 	images   []plan.Build // gated image builds: slot k is images[k-1]
 	binaries []plan.Build // gated binary builds
+	drop     bool         // a root project's gate with nothing to scan: it is not placed
 }
 
 // placement is the result of attribution and placement for one set of answers. The gates are
@@ -362,16 +372,16 @@ type projectPlan struct {
 	targets []config.Target   // planned (R6 order): image slots, file targets, compose targets, source
 	slots   []string          // planned name of image slot k at index k-1
 	files   map[string]string // binary path -> planned name
-	source  string            // planned name of the source target; "" for a compose-only project
+	source  string            // planned name of the source target; "" for the root project (docker)
 }
 
 // place resolves attribution with the answers in values (from plan.Resolve) and places one
 // gate per gate job of each selected project (R3, R4 rules 1-4 and 7). Gates get version.
 // Builds attributed to selected projects contribute their notes, located at their CI command
-// when they carry no location. Without owners (only a compose-only project), every
-// non-RewriteOnly image or binary build gets BUILD_NOT_GATED. With no editable job at all, no
-// gate is placed and each selected project gets NO_GATE_PLACED with snippet's text for every CI
-// file.
+// when they carry no location. Without an npm or Rust project, every non-RewriteOnly binary
+// build, which no project owns, gets BUILD_NOT_GATED. A root project's gate with nothing to scan
+// is not placed (placeIn), so all of its gates can be gone. With no editable job at all, no gate
+// is placed and each selected project gets NO_GATE_PLACED with snippet's text for every CI file.
 func (m *gateModel) place(values map[string]string, version string, snippet func(file string, g plan.Gate) string) *placement {
 	pl := &placement{projects: map[string]*projectPlan{}, attributed: map[string][]plan.Build{}}
 	selected := map[string]bool{}
@@ -406,16 +416,13 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 			pl.notes = append(pl.notes, n)
 		}
 	}
-	if len(m.owners) == 0 {
-		for _, b := range m.builds {
-			if b.RewriteOnly || b.Kind != plan.BuildImage && b.Kind != plan.BuildBinary {
+	if m.rootOwns || len(m.owners) == 0 { // no npm or Rust project
+		for i, b := range m.builds {
+			if b.RewriteOnly || b.Kind != plan.BuildBinary || m.owner[i] != "" {
 				continue
 			}
-			msg := "this build belongs to no npm or Rust project, so the gate does not scan what it builds"
-			if b.Kind == plan.BuildImage {
-				msg += "; if a compose service runs this image, add the service to its compose target's exclude list"
-			}
-			pl.notes = append(pl.notes, plan.Note{Code: "BUILD_NOT_GATED", Message: msg, File: b.Pos.File, Line: b.Pos.Line})
+			pl.notes = append(pl.notes, plan.Note{Code: "BUILD_NOT_GATED", Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds",
+				File: b.Pos.File, Line: b.Pos.Line})
 		}
 	}
 
@@ -490,7 +497,9 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				}
 			}
 			gp, notes := m.placeIn(p, j, g, version)
-			pp.gates = append(pp.gates, gp)
+			if !gp.drop {
+				pp.gates = append(pp.gates, gp)
+			}
 			pl.notes = append(pl.notes, notes...)
 		}
 		pp.plan()
@@ -585,6 +594,12 @@ func isCheckout(uses string) bool {
 // firstPush cannot stop the push: it is left alone, gets GATE_AFTER_PUSH, and a new gate is
 // placed. Builds of g that are not gated get MULTI_PLATFORM or PUSH_IN_BUILD (image builds that
 // cannot be gated), or BUILD_AFTER_PUSH.
+//
+// The root project has no source to check. Its gate is dropped (gatePlace.drop) when B is empty,
+// it has no compose file and there is no existing gate: its empty target list would mean every
+// target, so it would scan an image this job never built. A dropped gate returns only the notes
+// of its builds, which say that no gate is placed; the notes about where the gate runs
+// (GATE_AFTER_PUSH, orderNotes) are left out.
 func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) (*gatePlace, []plan.Note) {
 	file := m.jobFile(j)
 	inG := func(b located) bool { return slices.ContainsFunc(g, func(x located) bool { return x.i == b.i }) }
@@ -619,7 +634,9 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		gate.At, gate.Before = g[0].Pos, true
 	}
 	e, late := existingGate(m.jobs[j], p.Dir, firstPush)
-	if e == nil && late != nil {
+	root := p.Ecosystem == plan.EcosystemDocker
+	drop := root && len(bset) == 0 && len(p.Compose) == 0 && e == nil
+	if e == nil && late != nil && !drop {
 		notes = append(notes, lateGateNote(p, late))
 	}
 	if e != nil {
@@ -647,9 +664,22 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		if slices.ContainsFunc(bset, func(x located) bool { return x.i == b.i }) {
 			continue
 		}
-		order := "the gate runs before it and checks the source lockfiles"
-		if !gateBefore(b) {
+		order, still := "the gate runs before it and checks the source lockfiles", "; the source lockfiles are still checked"
+		switch {
+		case drop:
+			order = "no gate is placed for it in this job"
+		case !gateBefore(b):
 			order = "the gate in this job runs after it, so it does not stop this build's push"
+		case root && len(p.Compose) > 0:
+			order = "the gate runs before it and checks its compose images"
+		case root:
+			order = "the gate runs before it and checks only the images built before it"
+		}
+		if root {
+			still = ""
+			if len(p.Compose) > 0 {
+				still = "; its compose images are still checked"
+			}
 		}
 		switch {
 		case !gateable(b) && b.Image.OutputPush:
@@ -657,13 +687,15 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		case !gateable(b) && gateBefore(b):
 			note(b, "MULTI_PLATFORM", "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; "+order)
 		case !gateable(b):
-			note(b, "MULTI_PLATFORM", "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image; the source lockfiles are still checked")
+			note(b, "MULTI_PLATFORM", "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image"+still)
 		case !b.at().less(firstPush) && !slices.ContainsFunc(b.Notes, func(n plan.Note) bool { return n.Code == "BUILD_AFTER_PUSH" }):
 			note(b, "BUILD_AFTER_PUSH", where(b)+" runs after a push or deploy in the same job, so the gate, which runs before that push, does not scan it; build before you push, or in a separate job, to scan it")
 		}
 	}
-	notes = append(notes, m.orderNotes(p, j, g, bset, gate, inG)...)
-	gp := &gatePlace{file: file}
+	if !drop {
+		notes = append(notes, m.orderNotes(p, j, g, bset, gate, inG)...)
+	}
+	gp := &gatePlace{file: file, drop: drop}
 	for _, b := range bset {
 		gate.Builds = append(gate.Builds, b.Build)
 		switch b.Kind {
@@ -823,7 +855,7 @@ func (m *gateModel) itemText(j int, a at) string {
 // slot (as many as the most gated image builds in one job), one file target per binary path of
 // its gated binary builds (only for Rust projects, whose paths are relative to the project's
 // Cargo.lock root), one compose target per compose file of the project (composeName), and
-// source with the project's excludes, except for a compose-only project, which has no
+// source with the project's excludes, except for the root project (docker), which has no
 // lockfiles. Slot 1 is named after the project, slot k >= 2 after the last path component of
 // its scan tag's repository in the first job that fills it (image-<k> when that is not usable).
 func (pp *projectPlan) plan() {

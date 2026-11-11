@@ -3,6 +3,7 @@ package setup
 import (
 	"fmt"
 	"path"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -1037,8 +1038,9 @@ func TestGatesBuildProjectDefaultFollowsExistingGate(t *testing.T) {
 	}
 }
 
-// composeOnly is the compose-only project attachCompose makes for compose files that no npm or
-// Rust project contains.
+// composeOnly is the root project (ecosystem docker) that attachCompose makes for compose files
+// that no npm or Rust project contains. Without files, it is the one attachImageBuilds makes for
+// the image builds of a repository without an npm or Rust project.
 func composeOnly(files ...string) plan.Project {
 	return plan.Project{Ecosystem: "docker", Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
 }
@@ -1142,41 +1144,32 @@ func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
 	}
 }
 
-// In a repository without an npm or Rust project, CI builds belong to no project, and image and
-// binary builds get BUILD_NOT_GATED; the compose-only project's gate goes at the start of the
-// chosen job, after checkout and before the push.
+// Reverse of the compose design's test: in a compose-only repository, the root project owns the
+// image build. Its gate goes after the build and before the push, it plans the image target
+// before the compose target, and neither BUILD_NOT_GATED nor the gate-job question remains.
 func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
 	projects := []plan.Project{composeOnly("compose.yml")}
 	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."),
-		run("cargo build --release"), run("npm run build"), run("docker push ghcr.io/acme/app:1"))}
-	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
-	if len(qs) != 1 || qs[0].ID != "gate-job:." || qs[0].Prompt != "Which job should check the compose images of repo?" || qs[0].UnlessChosen != nil {
-		t.Fatalf("questions: %+v", qs)
+		run("docker push ghcr.io/acme/app:1"))}
+	if qs := newGateModel(projects, jobs, []string{ciFile}).questions(); len(qs) != 0 {
+		t.Fatalf("questions: %v", questionIDs(qs))
 	}
 	gates, planned, pl := planGates(t, r, projects, jobs, nil)
 	if len(gates) != 1 {
 		t.Fatalf("gates: %+v", gates)
 	}
-	if g := gates[0]; g.Job != jobs[0].ID || g.At.Step != 0 || g.At.Command != -1 || g.Before || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
+	if g := gates[0]; g.Job != jobs[0].ID || g.At.Step != 1 || g.At.Command != 0 || g.Before || len(g.Builds) != 1 || len(g.Images) != 1 || g.Targets != nil {
 		t.Fatalf("gate: %s", dumpGate(g))
 	}
-	if got := planned["."]; len(got) != 1 || got[0].Name != "compose" || got[0].Compose != "compose.yml" || pl.projects["."].source != "" {
-		t.Fatalf("planned: %+v", got)
+	want := []config.Target{{Name: "repo", Image: "${SHEARBOLT_IMAGE:-repo:local}"}, {Name: "compose", Compose: "compose.yml"}}
+	if !reflect.DeepEqual(planned["."], want) || pl.projects["."].source != "" {
+		t.Fatalf("planned: %+v", planned["."])
 	}
-	// The image and the binary build get BUILD_NOT_GATED; the npm build (other) does not.
-	got := noteCodes(pl.notes, "BUILD_NOT_GATED")
-	want := []plan.Note{
-		{Code: "BUILD_NOT_GATED", File: ciFile, Line: 200, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds; if a compose service runs this image, add the service to its compose target's exclude list"},
-		{Code: "BUILD_NOT_GATED", File: ciFile, Line: 300, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds"},
+	if hasCode(pl.notes, "BUILD_NOT_GATED") || hasCode(pl.notes, "NO_BUILD_FOUND") {
+		t.Fatalf("notes: %v", pl.notes)
 	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("BUILD_NOT_GATED: %+v", got)
-	}
-	if n := noteOf(t, pl.notes, "NO_BUILD_FOUND"); n.File != ciFile || n.Message != "No build belongs to repo, so the gate in ci.yml: deploy checks its compose images." {
-		t.Fatalf("NO_BUILD_FOUND: %+v", n)
-	}
-	if len(pl.attributed["."]) != 0 {
+	if bs := pl.attributed["."]; len(bs) != 1 || bs[0].Kind != plan.BuildImage {
 		t.Fatalf("attributed: %v", pl.attributed)
 	}
 }
@@ -1326,5 +1319,216 @@ func TestGatesNoEditableJobComposeOnly(t *testing.T) {
 	if !strings.HasPrefix(n.Message, want) || !strings.Contains(n.Message, "; add this by hand to a job that runs before any deploy:\n"+ciFile+":\nSNIPPET("+ciFile+",.)") ||
 		strings.Contains(n.Message, "builds it") {
 		t.Fatalf("note: %q", n.Message)
+	}
+}
+
+// IP-1: without an npm or Rust project, the root project owns the image builds. Its gate goes
+// after the build and before the push, it plans one image target and no source target, and no
+// question is asked.
+func TestGatesRootOwnsImageBuild(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
+	projects := []plan.Project{composeOnly()}
+	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"},
+		run("docker build -t ghcr.io/acme/edge:latest ."), run("docker push ghcr.io/acme/edge:latest"))}
+	m := newGateModel(projects, jobs, []string{ciFile})
+	if !slices.Equal(m.owner, []string{"."}) {
+		t.Fatalf("owners: %q", m.owner)
+	}
+	if qs := m.questions(); len(qs) != 0 {
+		t.Fatalf("questions: %v", questionIDs(qs))
+	}
+	gates, planned, pl := planGates(t, r, projects, jobs, nil)
+	if len(gates) != 1 {
+		t.Fatalf("gates: %+v", gates)
+	}
+	build := jobs[0].Steps[1].Builds[0]
+	if g := gates[0]; g.Job != jobs[0].ID || g.At != build.Pos || g.Before || len(g.Builds) != 1 || g.Builds[0].Pos != build.Pos || g.Targets != nil ||
+		len(g.Images) != 1 || g.Images[0].Var != "SHEARBOLT_IMAGE" || g.Images[0].ScanTag != "ghcr.io/acme/edge:shearbolt-${{ github.sha }}" {
+		t.Fatalf("gate: %s", dumpGate(g))
+	}
+	want := []config.Target{{Name: "repo", Image: "${SHEARBOLT_IMAGE:-repo:local}"}}
+	if !reflect.DeepEqual(planned["."], want) || pl.projects["."].source != "" {
+		t.Fatalf("planned: %+v", planned["."])
+	}
+	if hasCode(pl.notes, "BUILD_NOT_GATED") || hasCode(pl.notes, "NO_BUILD_FOUND") {
+		t.Fatalf("notes: %v", pl.notes)
+	}
+	if bs := pl.attributed["."]; len(bs) != 1 || bs[0].Pos != build.Pos {
+		t.Fatalf("attributed: %v", pl.attributed)
+	}
+}
+
+// Without an npm or Rust project, the root project owns only image builds: a cargo binary build
+// keeps BUILD_NOT_GATED, and an npm build (other) is unowned and gets no note.
+func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
+	projects := []plan.Project{composeOnly()}
+	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"},
+		run("docker build -t ghcr.io/acme/edge:latest ."), run("cargo build --release"), run("npm run build"),
+		run("docker push ghcr.io/acme/edge:latest"))}
+	m := newGateModel(projects, jobs, []string{ciFile})
+	var kinds []plan.BuildKind
+	for _, b := range m.builds {
+		kinds = append(kinds, b.Kind)
+	}
+	if !slices.Equal(kinds, []plan.BuildKind{plan.BuildImage, plan.BuildBinary, plan.BuildOther}) || !slices.Equal(m.owner, []string{".", "", ""}) {
+		t.Fatalf("builds %v, owners %q", kinds, m.owner)
+	}
+	if qs := m.questions(); len(qs) != 0 {
+		t.Fatalf("questions: %v", questionIDs(qs))
+	}
+	gates, planned, pl := planGates(t, r, projects, jobs, nil)
+	if len(gates) != 1 || gates[0].At.Step != 1 || gates[0].Before || len(gates[0].Builds) != 1 || len(gates[0].Images) != 1 {
+		t.Fatalf("gates: %+v", gates)
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	got := noteCodes(pl.notes, "BUILD_NOT_GATED")
+	want := []plan.Note{{Code: "BUILD_NOT_GATED", File: ciFile, Line: 300, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("BUILD_NOT_GATED: %+v", got)
+	}
+	if bs := pl.attributed["."]; len(bs) != 1 || bs[0].Kind != plan.BuildImage {
+		t.Fatalf("attributed: %v", pl.attributed)
+	}
+
+	// Without an image build, the root project owns nothing: its compose images get the gate-job
+	// question, and the cargo build keeps BUILD_NOT_GATED.
+	r = repo(t, map[string]string{"compose.yml": composeImage})
+	projects = []plan.Project{composeOnly("compose.yml")}
+	jobs = []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("cargo build --release"), run("docker stack deploy -c compose.yml app"))}
+	if got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions()); !slices.Equal(got, []string{"gate-job:."}) {
+		t.Fatalf("questions: %v", got)
+	}
+	gates, planned, pl = planGates(t, r, projects, jobs, nil)
+	if len(gates) != 1 || gates[0].At.Step != 0 || gates[0].Before || len(gates[0].Builds) != 0 || !hasCode(pl.notes, "NO_BUILD_FOUND") {
+		t.Fatalf("gates: %+v, notes %v", gates, pl.notes)
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"compose"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	want[0].Line = 200
+	if got := noteCodes(pl.notes, "BUILD_NOT_GATED"); !slices.Equal(got, want) {
+		t.Fatalf("BUILD_NOT_GATED: %+v", got)
+	}
+}
+
+// IP-5: a job whose only root build cannot be gated gets no gate when the root project has no
+// compose file, because its empty target list would scan an image the job never built. The
+// build's note says so, and no note describes the gate that is not there. With a compose file,
+// the job gets a gate before the build that checks the compose images.
+func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
+	jobs := []plan.Job{
+		mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1")),
+		mkJob(t, r, "b", fstep{uses: "actions/checkout@v5"}, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi ."), scanStep),
+	}
+	gates, planned, pl := planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+	if len(gates) != 1 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 || gates[0].Targets != nil {
+		t.Fatalf("gates: %+v", gates)
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	want := []plan.Note{{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
+		Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; no gate is placed for it in this job"}}
+	if got := noteCodes(pl.notes, "MULTI_PLATFORM"); !slices.Equal(got, want) {
+		t.Fatalf("MULTI_PLATFORM: %+v", got)
+	}
+	if hasCode(pl.notes, "GATE_AFTER_PUSH") || hasCode(pl.notes, "PUSH_BEFORE_GATE") {
+		t.Fatalf("notes about a gate that is not placed: %v", pl.notes)
+	}
+
+	// A build that pushes through its output: PUSH_IN_BUILD says the same.
+	jobs[1] = mkJob(t, r, "b", run("docker buildx build -o type=registry -t ghcr.io/acme/edge:out ."))
+	gates, _, pl = planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+	if n := noteOf(t, pl.notes, "PUSH_IN_BUILD"); len(gates) != 1 || !strings.Contains(n.Message, "; no gate is placed for it in this job. Build with --load") {
+		t.Fatalf("PUSH_IN_BUILD: gates %+v, note %+v", gates, n)
+	}
+
+	// With a compose file, b's gate runs before its build and checks only the compose images.
+	jobs[1] = mkJob(t, r, "b", fstep{uses: "actions/checkout@v5"}, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi ."))
+	gates, planned, pl = planGates(t, r, []plan.Project{composeOnly("compose.yml")}, jobs, nil)
+	if len(gates) != 2 || gates[0].Job != jobs[0].ID || gates[0].Targets != nil {
+		t.Fatalf("gates: %+v", gates)
+	}
+	if g := gates[1]; g.Job != jobs[1].ID || !g.Before || g.At != jobs[1].Steps[1].Builds[0].Pos || len(g.Builds) != 0 || !slices.Equal(g.Targets, []string{"compose"}) {
+		t.Fatalf("b's gate: %s", dumpGate(g))
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo", "compose"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	if n := noteOf(t, pl.notes, "MULTI_PLATFORM"); !strings.HasSuffix(n.Message, "scanned before it is pushed; the gate runs before it and checks its compose images") {
+		t.Fatalf("MULTI_PLATFORM: %+v", n)
+	}
+}
+
+// A job whose only root build runs after a push (BUILD_AFTER_PUSH) gets no gate when the root
+// project has no compose file, and no PUSH_BEFORE_GATE or GATE_AFTER_PUSH for it. Setup finds no
+// image build inside a called script, so the build that pushes first is an action here.
+func TestGatesRootDropsGateAfterPush(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
+	release := fstep{uses: "acme/release-action@v1", push: true, builds: []plan.Build{
+		{Kind: plan.BuildImage, Dir: ".", Image: &plan.Image{Tool: "docker", Tags: []string{"ghcr.io/acme/edge:2"}}},
+	}}
+	a := mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1"))
+	for _, tc := range []struct {
+		name  string
+		steps []fstep
+		codes []string // the notes of job b
+	}{
+		{"only build", []fstep{run("docker push ghcr.io/acme/old:1"), release, scanStep}, []string{"BUILD_AFTER_PUSH"}},
+		{"after its own push", []fstep{run("docker buildx build -o type=registry -t ghcr.io/acme/edge:cache ."), run("docker build -t ghcr.io/acme/edge:2 ."), scanStep},
+			[]string{"PUSH_IN_BUILD", "BUILD_AFTER_PUSH"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jobs := []plan.Job{a, mkJob(t, r, "b", tc.steps...)}
+			gates, planned, pl := planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+			if len(gates) != 1 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
+				t.Fatalf("gates: %+v", gates)
+			}
+			if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
+				t.Fatalf("planned: %v", got)
+			}
+			if got := codes(pl.notes); !slices.Equal(got, tc.codes) {
+				t.Fatalf("notes: %v", pl.notes)
+			}
+			if n := noteOf(t, pl.notes, "BUILD_AFTER_PUSH"); n.File != ciFile || n.Line != 200 {
+				t.Fatalf("BUILD_AFTER_PUSH: %+v", n)
+			}
+		})
+	}
+}
+
+// The root project's notes promise no lockfile check. A multi-platform build after the gate says
+// the gate checks only the images built before it; one before the gate says the gate does not
+// scan its image and, with a compose file, that the compose images are still checked.
+func TestGatesRootNoteWording(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
+	gateable := run("docker build -t ghcr.io/acme/edge:1 .")
+	multi := run("docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/edge:multi .")
+	multiNote := func(project plan.Project, steps ...fstep) (plan.Gate, string) {
+		t.Helper()
+		gates, _, pl := planGates(t, r, []plan.Project{project}, []plan.Job{mkJob(t, r, "ci", steps...)}, nil)
+		if len(gates) != 1 || gates[0].Before || len(gates[0].Images) != 1 {
+			t.Fatalf("gates: %+v", gates)
+		}
+		return gates[0], noteOf(t, pl.notes, "MULTI_PLATFORM").Message
+	}
+	const mpBefore = "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; "
+	const mpAfter = "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image"
+
+	if g, msg := multiNote(composeOnly(), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks only the images built before it" {
+		t.Fatalf("gate before: %s, %q", dumpGate(g), msg)
+	}
+	if g, msg := multiNote(composeOnly("compose.yml"), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks its compose images" {
+		t.Fatalf("gate before, compose: %s, %q", dumpGate(g), msg)
+	}
+	if g, msg := multiNote(composeOnly(), multi, gateable); g.At.Step != 1 || msg != mpAfter {
+		t.Fatalf("gate after: %s, %q", dumpGate(g), msg)
+	}
+	if g, msg := multiNote(composeOnly("compose.yml"), multi, gateable); g.At.Step != 1 || msg != mpAfter+"; its compose images are still checked" {
+		t.Fatalf("gate after, compose: %s, %q", dumpGate(g), msg)
 	}
 }
