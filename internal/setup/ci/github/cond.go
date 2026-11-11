@@ -111,16 +111,6 @@ func continuedIf(copied, id string) (string, error) {
 	return "success() && (" + b + ") && " + markerExpr(id), nil
 }
 
-// stripMarker removes step id's marker from condition cond as withMarker adds it (stripAnyMarker
-// with that id). ok is false, and cond comes back unchanged, when cond holds no such term for id.
-func stripMarker(cond, id string) (string, bool) {
-	s, got, ok := stripAnyMarker(cond)
-	if !ok || got != id {
-		return cond, false
-	}
-	return s, true
-}
-
 // stripAnyMarker removes a marker term in setup's form, whatever its step id: (<X>) && <marker>
 // becomes X, and a condition that is exactly <marker> becomes "". A ${{ }} wrapper is dropped,
 // which means the same. The marker is matched with any run of whitespace where setup writes a

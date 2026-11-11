@@ -440,7 +440,7 @@ func TestSetupUsageErrors(t *testing.T) {
 
 func TestSetupHelp(t *testing.T) {
 	code, _, errb := setupCmd(t, setupDeps(false, ""), "-h")
-	if code != 0 || !strings.Contains(errb, "Usage: shearbolt setup") || !strings.Contains(errb, "-answer") {
+	if code != 0 || !strings.Contains(errb, "Usage: shearbolt setup") || !strings.Contains(errb, "-answer") || !strings.Contains(errb, "Docker images the CI builds") {
 		t.Errorf("exit = %d, stderr = %s", code, errb)
 	}
 }

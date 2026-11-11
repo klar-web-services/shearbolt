@@ -63,8 +63,9 @@ func findCompose(r plan.Repo) ([]string, []plan.Note, error) {
 }
 
 // attachCompose gives each compose file to the deepest npm or Rust project whose Dir contains
-// it, as a path relative to that Dir, and puts the rest into one compose-only project at "."
-// named after the repository directory. projects is sorted by Dir and stays sorted.
+// it, as a path relative to that Dir, and puts the rest into the root project (ecosystem docker)
+// at ".", named after the repository directory. Without an npm or Rust project, that project
+// also owns the image builds (attachImageBuilds). projects is sorted by Dir and stays sorted.
 func attachCompose(projects []plan.Project, files []string, root string) []plan.Project {
 	var rest []string
 	for _, f := range files {

@@ -63,41 +63,6 @@ func TestNeedsWrapMarkerGuarded(t *testing.T) {
 	}
 }
 
-func TestStripMarker(t *testing.T) {
-	for cond, want := range map[string]string{
-		marker:                  "",
-		"${{ " + marker + " }}": "",
-		"(github.ref == 'refs/heads/main') && " + marker:                   "github.ref == 'refs/heads/main'",
-		"${{ (github.ref == 'refs/heads/main') && " + marker + " }}":       "github.ref == 'refs/heads/main'",
-		"(a || b) && " + marker:                                            "a || b",
-		"(a)  &&  steps.shearbolt-build.outputs.shearbolt-reached  !=  ''": "a",
-	} {
-		got, ok := stripMarker(cond, "shearbolt-build")
-		if !ok || got != want {
-			t.Errorf("stripMarker(%q) = %q, %v, want %q", cond, got, ok, want)
-		}
-	}
-	// What withMarker adds, stripMarker removes.
-	for _, cond := range []string{"", "a || b", "github.ref == 'refs/heads/main'"} {
-		if got, ok := stripMarker(withMarker(cond, "x"), "x"); !ok || got != cond {
-			t.Errorf("stripMarker(withMarker(%q)) = %q, %v", cond, got, ok)
-		}
-	}
-	for _, cond := range []string{
-		"",
-		"a",
-		"(a) && steps.other.outputs.shearbolt-reached != ''",
-		"(a) || (b) && " + marker,
-		"a && " + marker,
-		marker + " && a",
-		"a || " + marker,
-	} {
-		if got, ok := stripMarker(cond, "shearbolt-build"); ok || got != cond {
-			t.Errorf("stripMarker(%q) = %q, %v, want it unchanged", cond, got, ok)
-		}
-	}
-}
-
 func TestMarkerGuarded(t *testing.T) {
 	for cond, want := range map[string]string{
 		marker:                  "shearbolt-build",
@@ -153,18 +118,34 @@ func TestStripAnyMarker(t *testing.T) {
 		{"${{ steps.shearbolt-build.outputs.shearbolt-reached  !=  '' }}", "", "shearbolt-build"},
 		{"(github.ref == 'refs/heads/main') && steps.build.outputs.shearbolt-reached != ''", "github.ref == 'refs/heads/main'", "build"},
 		{"(steps.a.outputs.shearbolt-reached != '') && steps.b.outputs.shearbolt-reached != ''", "steps.a.outputs.shearbolt-reached != ''", "b"},
+		{marker, "", "shearbolt-build"},
+		{"${{ " + marker + " }}", "", "shearbolt-build"},
+		{"${{ (github.ref == 'refs/heads/main') && " + marker + " }}", "github.ref == 'refs/heads/main'", "shearbolt-build"},
+		{"(a || b) && " + marker, "a || b", "shearbolt-build"},
+		{"(a)  &&  steps.shearbolt-build.outputs.shearbolt-reached  !=  ''", "a", "shearbolt-build"},
+		{"(a) && steps.other.outputs.shearbolt-reached != ''", "a", "other"},
 	} {
 		got, id, ok := stripAnyMarker(c.cond)
 		if !ok || got != c.stripped || id != c.id {
 			t.Errorf("stripAnyMarker(%q) = %q, %q, %v; want %q, %q", c.cond, got, id, ok, c.stripped, c.id)
 		}
 	}
+	// What withMarker adds, stripAnyMarker removes.
+	for _, cond := range []string{"", "a || b", "github.ref == 'refs/heads/main'"} {
+		if got, id, ok := stripAnyMarker(withMarker(cond, "x")); !ok || got != cond || id != "x" {
+			t.Errorf("stripAnyMarker(withMarker(%q)) = %q, %q, %v", cond, got, id, ok)
+		}
+	}
 	for _, cond := range []string{
 		"",
+		"a",
 		"github.ref == 'refs/heads/main'",
 		"(a) || (b) && steps.build.outputs.shearbolt-reached != ''",
+		"(a) || (b) && " + marker,
 		"success() && (a) && steps.build.outputs.shearbolt-reached != ''",
 		"a && steps.build.outputs.shearbolt-reached != ''",
+		marker + " && a",
+		"a || " + marker,
 	} {
 		if got, id, ok := stripAnyMarker(cond); ok || got != cond || id != "" {
 			t.Errorf("stripAnyMarker(%q) = %q, %q, %v; want it unchanged", cond, got, id, ok)

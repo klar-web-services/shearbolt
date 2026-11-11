@@ -46,7 +46,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 - In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
 - If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
-- What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (the gate goes before it and checks the lockfiles), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
+- What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (its image cannot be scanned, so the gate checks only the rest of the project, such as its lockfiles or compose images), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
 - A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
 - Running setup again is safe. It never overwrites an existing `shearbolt.yaml` (it only adds missing targets), and a second run changes nothing.

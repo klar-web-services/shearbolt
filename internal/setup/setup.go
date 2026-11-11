@@ -1,5 +1,6 @@
-// Package setup implements `shearbolt setup`: it finds the npm and Rust projects in a repository
-// and edits its CI so a Shearbolt gate runs after each build and before any push or deploy.
+// Package setup implements `shearbolt setup`: it finds the npm and Rust projects, the Docker
+// images CI builds and the Docker Compose files in a repository, and edits its CI so a Shearbolt
+// gate runs after each build and before any push or deploy.
 //
 // Compute is a pure function of the repository and the answers: it returns a plan.Plan with the
 // questions, every file change (full content plus diff) and notes, and writes nothing. Write
@@ -58,8 +59,8 @@ const noGateableMessage = "CI builds Docker images, but none of them can be gate
 // noGateableMessage.
 var noGateableCodes = []string{"MULTI_PLATFORM", "PUSH_IN_BUILD", "BUILD_AFTER_PUSH", "BUILD_AFTER_GATE"}
 
-// noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose targets when no CI
-// job setup read pushes or deploys.
+// noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose or image targets
+// when no CI job setup read pushes or deploys.
 const noDeploySeenMessage = "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate."
 
 // alreadyExcluded are the directories the scan itself never descends into, so a source target
