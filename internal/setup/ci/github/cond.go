@@ -198,7 +198,8 @@ const (
 // step s, and (2) no step after s pushes or deploys unless its if: is one of setup's marker forms
 // for s. On a first run the steps setup inserts after s (the gate, its continued and push steps)
 // are not among the job's steps yet, so the later steps are the original ones; on a re-run the
-// continued step is one of them and passes (2) by its if:.
+// continued step is one of them and passes (2) by its if:. A reason about targets names those
+// other than the images and files step s builds.
 func (e *jobEditor) gateMaySkip(g plan.Gate, s int) (bool, string) {
 	if !g.OnlyOwnImages || slices.ContainsFunc(g.Builds, func(b plan.Build) bool { return b.Pos.Step != s }) {
 		if g.Scans == nil {
@@ -208,6 +209,11 @@ func (e *jobEditor) gateMaySkip(g plan.Gate, s int) (bool, string) {
 		for _, iv := range g.Images {
 			if iv.Build.Pos.Step == s {
 				here[iv.Target] = true
+			}
+		}
+		for _, f := range g.Files {
+			if f.Build.Pos.Step == s {
+				here[f.Target] = true
 			}
 		}
 		var other []string

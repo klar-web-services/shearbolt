@@ -360,27 +360,39 @@ again.
   does either. The note is on the line of the first such command. Setup adds a marker line
   after the build, `echo shearbolt-reached=true >> "$GITHUB_OUTPUT"`, and gives the step an
   id if it has none. The rest of the step, which moves to a new step after the gate, runs
-  only when the marker is set, that is, when the build ran. The message has one of three
+  only when the marker is set, that is, when the build ran. The message has one of four
   forms:
   - **The gate is skipped on early stops.** It checks only images built in that step, and
     no later step in the job pushes or deploys unchecked, so when the build did not run
     there is nothing to check and nothing ships. If the user adds a target to
     `shearbolt.yaml` by hand, setup must run again, so the gate stops skipping.
-  - **The gate keeps running.** On an early stop it still runs and fails when the image
-    was not built, so the run turns red although nothing ships. This fails closed. The
-    message says why: the gate also checks other targets (named, or every target when
-    setup could not read `shearbolt.yaml`), it also follows builds in other steps, or a
-    later step pushes or deploys. It then advises removing targets that do not ship and
-    running setup again, or moving the early stop into the job's `if:`. Three other
-    reasons are about the gate itself, each with its own advice: the gate does not
-    directly follow the step, it is a `shearbolt scan` command in a run step rather than
-    the Action, or its `if:` cannot be combined with the check that the build ran.
-    SKILL.md section 3.7 says what to offer.
+  - **The gate keeps running and fails.** It scans an image built in that step ("fails
+    when the image was not built") or a file, such as a Rust binary ("fails when its
+    artifact was not built"). On an early stop it still runs and fails for the missing
+    build, so the run turns red although nothing ships. This fails closed. The message
+    says why the gate cannot be skipped, with advice:
+    - It also checks other targets (named, or every target when setup could not read
+      `shearbolt.yaml`). The advice is to remove targets that do not ship from
+      `shearbolt.yaml` and run setup again, or to move the early stop into the job's `if:`.
+    - It also follows builds in other steps, or a later step pushes or deploys. Removing
+      targets cannot let it skip, so the advice is to move the early stop into the job's
+      `if:`, which skips the gate as well.
+    - Three reasons are about the gate itself, each with its own advice: the gate does not
+      directly follow the step, it is a `shearbolt scan` command in a run step rather
+      than the Action, or its `if:` cannot be combined with the check that the build ran.
+  - **The gate keeps running and checks other targets.** It scans nothing built in that
+    step, for example only the `source` target of an npm project whose step runs
+    `npm run build`. On an early stop it still runs and checks the targets the message
+    names ("the shearbolt gate still runs on early stops and checks T1, T2"). Those do not
+    need the build, so the early stop does not fail the gate. The message gives no advice,
+    and nothing needs to change.
   - **A stale condition was removed.** On a re-run, an existing gate's `if:` checked a
     step's marker, but the step directly before the gate no longer has that marker line
     and id (a step was inserted between them, or the id or the line changed). Setup
     removed that check, so the gate now runs on every run. Where the `if:` shares its
     line with the step's `-`, setup writes `if: success()` instead, which means the same.
+
+  SKILL.md section 3.7 says what to offer for each form.
 - `CACHE_NOT_ADDED` *(Bitbucket and GitLab)*: setup could not add the CI cache for
   Shearbolt's scanner and database: the GitLab job inherits a global or `default` cache, it
   already has GitLab's maximum of 4 caches, or the cache list is in flow style. The

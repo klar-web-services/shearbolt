@@ -989,7 +989,8 @@ func composeName(f string) string {
 // setup did not plan; Targets is nil when that is every target of the merged config, and
 // otherwise lists only targets the merged config has (a planned target can be missing from it).
 // Each gated image build whose target has a variable gets an ImageVar with the scan tag the
-// plugin adds to the build.
+// plugin adds to the build, and each file target of a gated binary build that the gate scans a
+// FileTarget.
 func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]string, commit func(file string) string, used map[string]map[string]bool) []plan.Gate {
 	name := func(planned string) string {
 		if n, ok := names[planned]; ok {
@@ -1044,6 +1045,9 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 			for _, f := range b.Paths {
 				if n, ok := pp.files[f]; ok {
 					set[name(n)] = true
+					if merged == nil || inMerged[name(n)] {
+						g.Files = append(g.Files, plan.FileTarget{Build: b, Target: name(n)})
+					}
 				}
 			}
 		}

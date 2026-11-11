@@ -204,13 +204,14 @@ type Gate struct {
 	Project  Project
 	Config   string // repo-relative path of the project's shearbolt.yaml
 	Job      string
-	At       Pos        // insert after this position; Command -1 = after the whole step
-	Before   bool       // insert before At instead (R4 rules 3 and 4)
-	Images   []ImageVar // one per image target scanned here
-	Targets  []string   // nil = every target in the merged config (R4 rule 8)
-	Builds   []Build    // gated builds (the plugin adds tags, --load, splits, converts)
-	Existing *GateCmd   // update this gate instead of inserting one
-	Version  string     // "dev" = unpinned
+	At       Pos          // insert after this position; Command -1 = after the whole step
+	Before   bool         // insert before At instead (R4 rules 3 and 4)
+	Images   []ImageVar   // one per image target scanned here
+	Files    []FileTarget // one per file target of its gated binary builds that it scans (P7)
+	Targets  []string     // nil = every target in the merged config (R4 rule 8)
+	Builds   []Build      // gated builds (the plugin adds tags, --load, splits, converts)
+	Existing *GateCmd     // update this gate instead of inserting one
+	Version  string       // "dev" = unpinned
 	// Scans is the sorted names of every target the gate scans, resolved also when Targets is nil;
 	// nil when the config could not be read or edited, so what the gate scans is unknown (P7).
 	Scans []string
@@ -226,6 +227,13 @@ type ImageVar struct {
 	Build   Build  // which build provides the tag
 	ScanTag string // R5: the local shearbolt-<commit> tag setup adds and the gate scans, in the CI's syntax
 	Target  string // the name of its image target, as Scans and Targets name it (P7)
+}
+
+// FileTarget is one file target the gate scans and the gated build that writes its file, so a
+// plugin can tell which build the file comes from.
+type FileTarget struct {
+	Build  Build  // the gated binary build
+	Target string // the name of its file target, as Scans and Targets name it (P7)
 }
 
 // Prep is what a build needs before it can be gated (Rust: the auditable rewrite and its install).

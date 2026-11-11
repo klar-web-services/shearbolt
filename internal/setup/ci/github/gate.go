@@ -70,7 +70,7 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 			if skip {
 				ifCond = withMarker(ifCond, sp.id)
 			}
-			e.notes = append(e.notes, e.earlyStopNote(sp.s, skip, reason))
+			e.notes = append(e.notes, e.earlyStopNote(g, sp.s, skip, reason))
 		}
 		if err := e.d.InsertItem(e.j.seq, g.At.Step, gateLines(g, ifCond, env, e.unit)); err != nil {
 			return failAt(st.line, "setup cannot add the gate step (%v)", err)
@@ -90,7 +90,7 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 			if skip, why := e.gateMaySkip(g, sp.s); !skip {
 				reason = why
 			}
-			e.notes = append(e.notes, e.earlyStopNote(sp.s, false, reason))
+			e.notes = append(e.notes, e.earlyStopNote(g, sp.s, false, reason))
 		}
 		if sp.pushStep != nil {
 			if err := e.d.InsertItem(e.j.seq, anchor, sp.pushStep); err != nil {
@@ -144,9 +144,11 @@ func (e *jobEditor) markerSplit(gi, s int) *stepPlan {
 	return nil
 }
 
-// earlyStopNote is EARLY_STOP for split step s (design §3.3), on the line of its first command
-// that can stop early: the gate is skipped on early stops, or it keeps running for reason.
-func (e *jobEditor) earlyStopNote(s int, skip bool, reason string) plan.Note {
+// earlyStopNote is EARLY_STOP for gate g and split step s (design §3.3), on the line of its first
+// command that can stop early: the gate is skipped on early stops, or it keeps running for
+// reason. A running gate fails on early stops only when it scans an image or a file built in
+// step s; otherwise it passes, and the note says what it checks, without advice.
+func (e *jobEditor) earlyStopNote(g plan.Gate, s int, skip bool, reason string) plan.Note {
 	st := e.j.steps[s]
 	where, line := "", st.line
 	for _, k := range e.pj.Steps[s].Stops {
@@ -160,18 +162,44 @@ func (e *jobEditor) earlyStopNote(s int, skip bool, reason string) plan.Note {
 			break
 		}
 	}
-	msg := "this step can stop before its build" + where + "; the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping."
-	if !skip {
-		msg = "this step can stop before its build" + where + "; the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because " + reason + ". " + advice(reason)
+	lead := "this step can stop before its build" + where + "; "
+	var msg string
+	switch missing := builtIn(g, s); {
+	case skip:
+		msg = lead + "the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping."
+	case missing != "":
+		msg = lead + "the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when " + missing + " was not built, because " + reason + ". " + advice(reason)
+	default:
+		checks := "every target in shearbolt.yaml"
+		if g.Scans != nil {
+			checks = strings.Join(g.Scans, ", ")
+		}
+		msg = lead + "the rest of the step runs only when the build ran, and the shearbolt gate still runs on early stops and checks " + checks + "."
 	}
 	return plan.Note{Code: "EARLY_STOP", Message: msg, File: e.wf.file, Line: line}
 }
 
+// builtIn names what gate g scans that split step s builds, which is missing when the step stops
+// early: "the image" for an image target whose image the step builds, "its artifact" for a file
+// target whose file it builds, "" when the gate scans neither.
+func builtIn(g plan.Gate, s int) string {
+	if slices.ContainsFunc(g.Images, func(iv plan.ImageVar) bool { return iv.Build.Pos.Step == s }) {
+		return "the image"
+	}
+	if slices.ContainsFunc(g.Files, func(f plan.FileTarget) bool { return f.Build.Pos.Step == s }) {
+		return "its artifact"
+	}
+	return ""
+}
+
 // advice is what the running form of EARLY_STOP asks the user to do about reason: fix the gate
-// for the reasons that are about the gate itself, otherwise drop targets that do not ship or move
-// the early stop out of the step.
+// for the reasons that are about the gate itself, move the early stop out of the step when no
+// target can be dropped to let the gate skip (a later push, builds in other steps), otherwise
+// drop targets that do not ship or move the early stop.
 func advice(reason string) string {
 	switch reason {
+	case reasonLaterPush, reasonOtherSteps:
+		return "Move the early stop into the job's if: to skip the gate as well."
 	case reasonNotNext:
 		return "Move the shearbolt gate directly after this step and run setup again."
 	case reasonRunStep:
@@ -248,7 +276,7 @@ func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 			if skip, why := e.gateMaySkip(g, s); !skip {
 				reason = why
 			}
-			e.notes = append(e.notes, e.earlyStopNote(s, false, reason))
+			e.notes = append(e.notes, e.earlyStopNote(g, s, false, reason))
 		}
 		return nil
 	}
@@ -297,7 +325,7 @@ func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 		}
 	}
 	if changed || split {
-		e.notes = append(e.notes, e.earlyStopNote(s, skip, reason))
+		e.notes = append(e.notes, e.earlyStopNote(g, s, skip, reason))
 	}
 	return nil
 }

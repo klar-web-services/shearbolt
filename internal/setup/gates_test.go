@@ -1693,6 +1693,10 @@ func TestGatesScans(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("subsets: got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	// The binary's file target names its build, so a plugin can tell which build writes it.
+	if f := gates[0].Files; len(f) != 1 || f[0].Target != "demo" || f[0].Build.Pos != jobs[0].Steps[0].Builds[0].Pos || len(gates[1].Files) != 0 {
+		t.Fatalf("files: %+v, %+v", gates[0].Files, gates[1].Files)
+	}
 }
 
 // scansOf shows what gate g scans: its Targets when it scans a subset, Scans ("nil" when

@@ -194,12 +194,20 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
   A block fails the job and the job summary explains it.
 - Repeat what the notes ask the user to add or change by hand. Until they do, those jobs
   or artifacts are not gated.
-- An `EARLY_STOP` note whose gate still runs on early stops means those runs fail,
-  although nothing ships. When the reason names targets, ask the user whether each one
-  ships. For one that does not, such as a test compose file, offer to remove its target
-  from `shearbolt.yaml` and run setup again (3.1 to 3.6), so the gate can skip on early
-  stops. Edit `shearbolt.yaml` only when the user agrees. For the other reasons, pass on
-  the note's advice.
+- An `EARLY_STOP` note whose gate still runs on early stops and fails when the image or
+  its artifact was not built means those runs fail, although nothing ships.
+  - When it asks to remove targets that do not ship, ask the user whether each target it
+    names ships. For one that does not, such as a test compose file, offer to remove its
+    target from `shearbolt.yaml` and run setup again (3.1 to 3.6), so the gate can skip
+    on early stops. Edit `shearbolt.yaml` only when the user agrees. Never suggest
+    removing a `source` target: it checks the lockfiles of what ships.
+  - When it advises moving the early stop into the job's `if:` (a later step pushes or
+    deploys, or the gate follows builds in other steps), you may suggest that change.
+    Removing targets would not help.
+  - For the reasons about the gate itself, pass on the note's advice.
+- An `EARLY_STOP` note saying the gate still runs on early stops and checks some targets,
+  without saying it fails, needs nothing: those targets do not need the build. Do not
+  offer to change anything for it.
 - `shearbolt scan` in a project directory runs the same check locally (section 4).
 
 **Never commit, push or open a pull request unless the user asks.**

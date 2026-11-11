@@ -38,7 +38,8 @@ func skipping(stop string, line int) string {
 	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping.", stop, line)
 }
 
-// running is the running form with the advice for the reasons about targets and later pushes.
+// running is the running form with the advice for the reasons about targets: the gate fails on
+// early stops when the image built in the split step is missing.
 func running(stop string, line int, reason string) string {
 	return runningAdvice(stop, line, reason, "Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:.")
 }
@@ -190,7 +191,7 @@ func TestGitHubEarlyStopLaterPushKeepsGate(t *testing.T) {
 	later := lines("      - run: docker push other")
 	p, got := result(t, rootRepo(head+earlyStop+later, nil))
 	wantWorkflow(t, got, head+earlyStopEdited+lines("        if: "+reached)+continuedRun+later)
-	wantEarlyStop(t, p, running("exit", 11, "a later step pushes or deploys"), 11)
+	wantEarlyStop(t, p, runningAdvice("exit", 11, "a later step pushes or deploys", adviceLater), 11)
 }
 
 // A later push step that runs only when the build ran, by setup's marker form, does not count.
@@ -272,7 +273,7 @@ func TestGitHubEarlyStopReRunRemovesTerm(t *testing.T) {
 	later := lines("      - run: docker push other")
 	p, got := recompute(t, root, wf, func(s string) string { return s + later })
 	wantWorkflow(t, got, strings.Replace(before, "        if: "+reached+"\n        uses:", "        uses:", 1)+later)
-	wantEarlyStop(t, p, running("exit", 12, "a later step pushes or deploys"), 12)
+	wantEarlyStop(t, p, runningAdvice("exit", 12, "a later step pushes or deploys", adviceLater), 12)
 
 	// With a condition of its own, the gate keeps it.
 	const cond = "github.event_name == 'push'"
@@ -284,7 +285,7 @@ func TestGitHubEarlyStopReRunRemovesTerm(t *testing.T) {
 	}
 	p, got = recompute(t, root, wf, func(s string) string { return s + later })
 	wantWorkflow(t, got, strings.Replace(before, "        if: ("+cond+") && "+reached+"\n        uses:", "        if: "+cond+"\n        uses:", 1)+later)
-	wantEarlyStop(t, p, running("exit", 13, "a later step pushes or deploys"), 13)
+	wantEarlyStop(t, p, runningAdvice("exit", 13, "a later step pushes or deploys", adviceLater), 13)
 }
 
 // A marker term the user reformatted is setup's term all the same: nothing is rewritten, and
@@ -493,7 +494,7 @@ func TestGitHubEarlyStopStaleTermDeletedID(t *testing.T) {
 	})
 	want := strings.Replace(edited, "      - name: Ship\n", "      - name: Ship\n        id: shearbolt-build\n", 1)
 	wantWorkflow(t, got, strings.Replace(want, gateTermLine, "      - name: shearbolt\n", 1))
-	wantEarlyStop(t, p, running("exit", 11, "a later step pushes or deploys"), 11)
+	wantEarlyStop(t, p, runningAdvice("exit", 11, "a later step pushes or deploys", adviceLater), 11)
 }
 
 // (H) The marker line deleted and a later push added: nothing sets the marker any more, so the
@@ -515,5 +516,68 @@ func TestGitHubEarlyStopDashLineIf(t *testing.T) {
 		return strings.Replace(s, gateTermLine, "      - if: "+reached+"\n        name: shearbolt\n", 1) + later
 	})
 	wantWorkflow(t, got, strings.Replace(edited, "      - if: "+reached+"\n", "      - if: success()\n", 1))
-	wantEarlyStop(t, p, running("exit", 12, "a later step pushes or deploys"), 12)
+	wantEarlyStop(t, p, runningAdvice("exit", 12, "a later step pushes or deploys", adviceLater), 12)
+}
+
+// still is the running form of EARLY_STOP for a gate that scans nothing built in the split step:
+// it passes on early stops, so the note gives no advice.
+func still(stop string, line int, targets string) string {
+	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step runs only when the build ran, and the shearbolt gate still runs on early stops and checks %s.", stop, line, targets)
+}
+
+// adviceLater is the running form's advice when a later step pushes or deploys, or the gate
+// follows builds in other steps: removing targets would not let it skip.
+const adviceLater = "Move the early stop into the job's if: to skip the gate as well."
+
+// An npm build that is not an image: the gate checks only source, which does not need the build,
+// so it passes on early stops and the note neither blames a missing image nor asks to remove
+// targets.
+func TestGitHubEarlyStopNoImage(t *testing.T) {
+	step := lines(
+		"      - name: Deploy",
+		"        run: |",
+		`          if [ -n "$SKIP" ]; then exit 0; fi`,
+		"          npm ci",
+		"          npm run build",
+		"          npx wrangler deploy",
+	)
+	p, got := result(t, npmRepo("edge", head+step, nil))
+	wantWorkflow(t, got, head+lines(
+		"      - name: Deploy",
+		"        id: shearbolt-build",
+		"        run: |",
+		`          if [ -n "$SKIP" ]; then exit 0; fi`,
+		"          npm ci",
+		"          npm run build",
+		`          echo shearbolt-reached=true >> "$GITHUB_OUTPUT"`,
+		"      - name: shearbolt",
+		"        uses: klar-web-services/shearbolt@v1",
+		"      - name: Deploy (continued)",
+		"        if: "+reached,
+		"        run: |",
+		"          npx wrangler deploy",
+	))
+	wantEarlyStop(t, p, still("exit", 10, "source"), 10)
+}
+
+// A Rust binary built in the split step: its file target fails the gate when the build did not
+// run, so the note blames the missing artifact.
+func TestGitHubEarlyStopArtifact(t *testing.T) {
+	files := map[string]string{
+		"Cargo.toml":  "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+		"Cargo.lock":  "version = 3\n",
+		"src/main.rs": "fn main() {}\n",
+		wf: head + lines(
+			"      - name: Release",
+			"        run: |",
+			`          if [ -n "$SKIP" ]; then exit 0; fi`,
+			"          cargo build --release --locked",
+			"          gh release upload v1 target/release/demo",
+		),
+	}
+	p, got := result(t, files)
+	if !strings.Contains(got, `          echo shearbolt-reached=true >> "$GITHUB_OUTPUT"`) || !strings.Contains(got, "        if: "+reached+"\n        run: |\n          gh release upload") {
+		t.Fatalf("workflow:\n%s", got)
+	}
+	wantEarlyStop(t, p, "this step can stop before its build (exit at line 10); the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when its artifact was not built, because it also checks source. Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:.", 10)
 }
