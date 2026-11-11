@@ -277,3 +277,82 @@ func TestGitHubInheritedAssignmentsRefused(t *testing.T) {
 	stepEnv := strings.Replace(shipWith("foo=$(date)", pushLatest), "        run: |\n", "        env:\n          foo: x\n        run: |\n", 1)
 	wantUnsupported(t, npmRepo("edge", head+stepEnv, nil), "foo in step env:", substMsg)
 }
+
+const hiddenMsg = "assigns a variable inside an expansion or arithmetic, which a split step cannot re-create"
+
+// A command before the split point that assigns a variable inside an expansion, in arithmetic
+// or through a builtin fails the split, whatever command it is and whether or not the rest reads
+// the name: the split step would neither carry nor re-create the assignment.
+func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
+	for _, pre := range []string{
+		"x=${y:=v}",
+		"x=${y=v}",
+		": ${n:=5}",
+		`echo "${a[0]:=v}"`,
+		"x=$(( y = 5 ))",
+		"echo $((i++))",
+		"echo $((i--))",
+		"echo $(( n += 2 ))",
+		"echo $(( n <<= 1 ))",
+		"echo $[n=1]",
+		"(( n = 5 ))",
+		"for ((i = 0; i < 3; i++)); do echo $i; done",
+		`echo "${a[i++]}"`,
+		`echo "${s:i++:1}"`,
+		"a[i++]=5",
+		"let n=5",
+		"printf -v n '%s' x",
+		"getopts ab opt",
+		"wait -p pid",
+		`if [ -n "$X" ]; then echo $((i++)); fi`,
+		"cat <<EOF\n$((i++))\nEOF",
+	} {
+		wantUnsupported(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil), pre, hiddenMsg)
+	}
+	// The build itself is before the split point too.
+	step := strings.Replace(shipWith("echo pre", pushLatest), "-t ghcr.io/acme/edge:latest", `-t "ghcr.io/acme/edge:${TAG:=latest}"`, 1)
+	wantUnsupported(t, npmRepo("edge", head+step, nil), "assignment in the build", hiddenMsg)
+}
+
+// Arithmetic and expansions that only read are fine, and an unread $((…)) assignment is still
+// left out.
+func TestGitHubReadOnlyArithmeticSplits(t *testing.T) {
+	for _, pre := range []string{
+		"echo $((a+1))",
+		`echo "$((a == 1)) $((a != 1)) $((a <= 1)) $((a >= 1)) $[a+1] ${a[1]} ${x:-y} ${s:1:2} ${s: -1}"`,
+		"x=$((a+1))",
+	} {
+		_, got := result(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil))
+		wantWorkflow(t, got, head+shipEdited(pre)+pushRun)
+	}
+}
+
+// A lowercase name may be inherited too: from an env: setup cannot read, the job's container
+// env:, a $GITHUB_ENV write of an earlier step, or as a proxy variable.
+func TestGitHubMoreInheritedNamesRefused(t *testing.T) {
+	ship := shipWith(pulled, pushLatest)
+	withJobEnv := func(env string) string {
+		return strings.Replace(head, "    steps:\n", env+"    steps:\n", 1)
+	}
+	for why, workflow := range map[string]string{
+		"job env: merge key":       strings.Replace(withJobEnv("    env:\n      <<: *base\n      FOO: x\n"), "on: push\n", "on: push\nenv: &base\n  BAR: y\n", 1) + ship,
+		"job env: alias":           strings.Replace(withJobEnv("    env: *base\n"), "on: push\n", "on: push\nenv: &base\n  BAR: y\n", 1) + ship,
+		"step env: expression":     head + strings.Replace(ship, "        run: |\n", "        env: ${{ fromJSON(vars.STEP_ENV) }}\n        run: |\n", 1),
+		"workflow env: expression": strings.Replace(head, "on: push\n", "on: push\nenv: ${{ fromJSON(vars.ENV) }}\n", 1) + ship,
+		"container env:":           withJobEnv("    container:\n      image: node:22\n      env:\n        live: x\n") + ship,
+		"container expression":     withJobEnv("    container: ${{ fromJSON(vars.CONTAINER) }}\n") + ship,
+		"$GITHUB_ENV write":        head + lines(`      - run: echo "live=1" >> "$GITHUB_ENV"`) + ship,
+		"unreadable $GITHUB_ENV":   head + lines(`      - run: cat vars.env >> "$GITHUB_ENV"`) + ship,
+		"$GITHUB_ENV in part 1":    head + shipWith(`echo "live=1" >> "$GITHUB_ENV"`+"\n"+pulled, pushLatest),
+		"proxy variable":           head + shipWith("https_proxy=$(cat proxy.txt)", pushLatest),
+	} {
+		wantUnsupported(t, npmRepo("edge", workflow, map[string]string{"vars.env": "A=1\n"}), why, substMsg)
+	}
+	// A container with only an image, and a $GITHUB_ENV write of another name, change nothing.
+	image := strings.Replace(head, "    steps:\n", "    container: node:22\n    steps:\n", 1)
+	_, got := result(t, npmRepo("edge", image+ship, nil))
+	wantWorkflow(t, got, image+shipEdited(pulled)+pushRun)
+	other := head + lines(`      - run: echo "other=1" >> "$GITHUB_ENV"`)
+	_, got = result(t, npmRepo("edge", other+ship, nil))
+	wantWorkflow(t, got, other+shipEdited(pulled)+pushRun)
+}

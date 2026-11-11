@@ -57,7 +57,7 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	if err := shelledit.Insertable(cmd, line, "split the step after it"); err != nil {
 		return err
 	}
-	state, dropped, err := carriedState(st.script, st.cmds[:last], st)
+	state, dropped, err := carriedState(st.script, st.cmds[:last+1], st)
 	if err != nil {
 		return err
 	}
@@ -83,15 +83,17 @@ var uncarried = []string{"source", ".", "pushd", "popd", "alias", "unalias", "ev
 
 // Why carriedState cannot re-create a command's state; %s is the command.
 const (
-	condMsg  = "%s changes the shell state inside a conditional or loop, which a split step cannot re-create"
-	underMsg = "%s runs only under a condition or in a pipeline, so a split step cannot re-create its state"
-	substMsg = "%s uses command substitution, so a split step cannot re-create it"
+	condMsg   = "%s changes the shell state inside a conditional or loop, which a split step cannot re-create"
+	underMsg  = "%s runs only under a condition or in a pipeline, so a split step cannot re-create its state"
+	substMsg  = "%s uses command substitution, so a split step cannot re-create it"
+	hiddenMsg = "%s assigns a variable inside an expansion or arithmetic, which a split step cannot re-create"
 )
 
 // droppedAssign is an assignment before the split point that the split step cannot re-create
 // and leaves out (design §4). renderStep fails the split with reason when the continued step
 // may read one of its names (assignRead), so only shell-local names, like live, are ever left
-// out: a name with no lowercase letter, or one in an env:, may be an inherited variable.
+// out: a name with no lowercase letter, a proxy variable, or a name that an env: or a
+// $GITHUB_ENV write may set, may be an inherited variable.
 type droppedAssign struct {
 	names  []string
 	line   int
@@ -100,13 +102,15 @@ type droppedAssign struct {
 	cmd    int    // the command's index in the step
 }
 
-// carriedState returns the commands before the split point that set shell state, to be copied
-// in front of the remainder: cd, set, export and bare assignments without command substitution,
-// and the like. Anything that cannot be carried, or a state change inside a conditional or
-// loop, fails the split, except a command made up only of assignments that is not in a pipeline
-// or in the background: it is returned in dropped, and fails the split only when the continued
-// step may read one of its names (renderStep, assignRead), which includes every name that may
-// be inherited from the environment.
+// carriedState returns the commands up to the split point (cmds, the last gated build included)
+// that set shell state, to be copied in front of the remainder: cd, set, export and bare
+// assignments without command substitution, and the like. Anything that cannot be carried, or a
+// state change inside a conditional or loop, fails the split, except a command made up only of
+// assignments that is not in a pipeline or in the background: it is returned in dropped, and
+// fails the split only when the continued step may read one of its names (renderStep,
+// assignRead), which includes every name that may be inherited from the environment. Any
+// command that may assign a variable inside an expansion, in arithmetic or through a builtin
+// fails the split (hiddenAssign): the split step would neither carry nor re-create it.
 func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
 	for i, c := range cmds {
 		line := st.cmdLine(c)
@@ -119,6 +123,9 @@ func carriedState(script string, cmds []shell.Command, st *step) (state []string
 		}
 		if isFunction(c) {
 			return nil, nil, failAt(line, "the step defines a shell function (%s), which a split step would not have", shelledit.CommandText(c))
+		}
+		if hiddenAssign(script, cmds, i) {
+			return nil, nil, failAt(line, hiddenMsg, shelledit.CommandText(c))
 		}
 		if !bare && !slices.Contains(carried, name) && !slices.Contains(uncarried, name) && !(name == "exec" && len(argv) == 1) {
 			continue
@@ -156,44 +163,335 @@ func carriedState(script string, cmds []shell.Command, st *step) (state []string
 	return state, dropped, nil
 }
 
-// assignRead reports whether a split step's continued text rem may read one of names, which an
-// assignment that the split step leaves out sets (design §4). A name counts as read when it may
-// be an inherited environment variable, which every child process of rem reads without naming
-// it: when it is one of env, the env: keys of the workflow, the job and the step, or has no
-// lowercase letter, since the runner, $GITHUB_ENV from an earlier step or the shell (PATH, IFS)
-// can set such a name and setup cannot tell. It also counts as read when it is a whole word
-// anywhere in rem, which covers arithmetic, [[ -v ]] and comments; and every name does when rem
-// uses indirect or prefix expansion, or runs eval, source, ., a nameref or a command that
-// prints variables (also inside a substitution), when script exports the name or makes it
-// readonly, or when allexport is set by one of before, the commands ahead of the assignment. A
-// false match only fails the split.
-func assignRead(names []string, rem, script string, before []shell.Command, env []string) bool {
-	for _, n := range names {
-		if slices.Contains(env, n) || !strings.ContainsFunc(n, unicode.IsLower) {
+var (
+	// defaultAssign is a ${NAME=word} or ${NAME:=word} expansion, which assigns NAME.
+	defaultAssign = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?:?=`)
+	// offsetExpr matches the contents of a ${NAME:offset:length} expansion; its offset and
+	// length are arithmetic.
+	offsetExpr = regexp.MustCompile(`(?s)^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?:([^-=?+].*)$`)
+	// subscriptAssign is a word that assigns NAME[subscript]; an indexed array's subscript is
+	// arithmetic.
+	subscriptAssign = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\[([^\]]*)\]\+?=`)
+)
+
+// hiddenAssign reports whether command i of cmds, commands of script, may assign a variable
+// other than through its leading NAME=… words (design §4): a ${NAME=…} or ${NAME:=…} expansion;
+// arithmetic ($((…)), $[…], ((…)), and offsets in ${…}) with ++, -- or an assignment operator; a
+// subscript in ${…} or of an assigned array element with ++, -- or =; or let, getopts, printf -v
+// or wait -p. The check is textual, and runs on the text from the end of the previous command,
+// so it also sees the (( of an arithmetic command or a C-style for, which are not words. A false
+// match only fails the split.
+func hiddenAssign(script string, cmds []shell.Command, i int) bool {
+	c := cmds[i]
+	if argv := builtinArgv(c); len(argv) > 0 {
+		opts, _ := options(argv[1:])
+		switch argv[0] {
+		case "let", "getopts":
 			return true
+		case "printf":
+			if strings.Contains(opts, "v") {
+				return true
+			}
+		case "wait":
+			if strings.Contains(opts, "p") {
+				return true
+			}
 		}
-		if regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(n) + `([^A-Za-z0-9_]|$)`).MatchString(rem) {
+	}
+	steps := func(s string) bool {
+		return strings.Contains(s, "++") || strings.Contains(s, "--") || strings.Contains(s, "=")
+	}
+	for _, w := range c.Words {
+		if m := subscriptAssign.FindStringSubmatch(w.Raw); m != nil && steps(m[1]) {
 			return true
 		}
 	}
-	if strings.Contains(rem, "${!") || slices.ContainsFunc(commandsIn(rem, 0), readsAny) {
+	from := 0
+	if i > 0 {
+		from = min(cmds[i-1].End, c.Start)
+	}
+	text := script[from:c.End]
+	if defaultAssign.MatchString(text) {
 		return true
 	}
-	cmds, _ := shell.Parse(script, shell.State{})
-	if slices.ContainsFunc(cmds, func(c shell.Command) bool { return exportsName(c, names) }) {
+	for k := 0; k+1 < len(text); k++ {
+		switch {
+		case text[k] == '$' && text[k+1] == '[':
+			if arithAssign(closing(text[k+2:], '[', ']')) {
+				return true
+			}
+		case text[k] == '(' && text[k+1] == '(':
+			if arithAssign(closing(text[k+2:], '(', ')')) {
+				return true
+			}
+		case text[k] == '$' && text[k+1] == '{' && !strings.HasPrefix(text[k+2:], "{"): // not ${{ }}
+			body := closing(text[k+2:], '{', '}')
+			if j := strings.IndexByte(body, '['); j >= 0 && steps(body[j:]) {
+				return true
+			}
+			if m := offsetExpr.FindStringSubmatch(body); m != nil && arithAssign(m[1]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// closing returns s up to the close that ends the construct s starts inside of (nested
+// open/close pairs skipped), or all of s when it never closes.
+func closing(s string, open, close byte) string {
+	depth := 0
+	for j := 0; j < len(s); j++ {
+		switch s[j] {
+		case open:
+			depth++
+		case close:
+			if depth == 0 {
+				return s[:j]
+			}
+			depth--
+		}
+	}
+	return s
+}
+
+// arithAssign reports whether arithmetic text s may assign: ++, --, or an = that is not part of
+// ==, !=, <= or >= (so =, +=, -=, *=, /=, %=, <<=, >>=, &=, ^= and |=).
+func arithAssign(s string) bool {
+	if strings.Contains(s, "++") || strings.Contains(s, "--") {
+		return true
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != '=' {
+			continue
+		}
+		if i+1 < len(s) && s[i+1] == '=' {
+			i++ // ==
+			continue
+		}
+		if i > 0 {
+			switch p := s[i-1]; p {
+			case '!':
+				continue
+			case '<', '>':
+				if i < 2 || s[i-2] != p {
+					continue // <= or >=, but not <<= or >>=
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// proxyVars are lowercase variables that tools read from the environment.
+var proxyVars = []string{"http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy"}
+
+// continued is what a split step's continued step runs and inherits, for assignRead.
+type continued struct {
+	text      string          // its script
+	cmds      []shell.Command // its commands, with those inside substitutions (commandsIn)
+	step      []shell.Command // the split step's own commands
+	inherited []string        // names it may inherit: env: keys and $GITHUB_ENV writes (inheritedNames)
+	anyName   bool            // setup cannot read an env: or a $GITHUB_ENV write: any name may be inherited
+}
+
+// assignRead reports whether a split step's continued step ct may read one of names, which an
+// assignment that the split step leaves out sets (design §4). A name counts as read when it may
+// be an inherited environment variable, which every child process reads without naming it: one
+// of ct.inherited (env: keys of the workflow, the job, its container and the step, and names
+// written to $GITHUB_ENV before the continued step), any name when setup cannot read one of
+// those, a proxy variable, or a name with no lowercase letter, since the runner, the shell (PATH,
+// IFS) or $GITHUB_ENV can set such a name and setup cannot tell. It also counts as read when it
+// is a whole word anywhere in ct.text, which covers arithmetic, [[ -v ]] and comments; and every
+// name does when the continued step uses indirect or prefix expansion, or runs eval, source, .,
+// a nameref or a command that prints variables (also inside a substitution), when the step
+// exports the name or makes it readonly, or when allexport is set by one of before, the commands
+// ahead of the assignment. A false match only fails the split.
+func assignRead(names []string, ct *continued, before []shell.Command) bool {
+	for _, n := range names {
+		if ct.anyName || slices.Contains(ct.inherited, n) || slices.Contains(proxyVars, n) || !strings.ContainsFunc(n, unicode.IsLower) {
+			return true
+		}
+		if regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(n) + `([^A-Za-z0-9_]|$)`).MatchString(ct.text) {
+			return true
+		}
+	}
+	if strings.Contains(ct.text, "${!") || slices.ContainsFunc(ct.cmds, readsAny) {
+		return true
+	}
+	if slices.ContainsFunc(ct.step, func(c shell.Command) bool { return exportsName(c, names) }) {
 		return true
 	}
 	return slices.ContainsFunc(before, allexport)
 }
 
-// commandsIn parses text into commands, adding the commands of the command and process
-// substitutions in their words, to a few levels. The text after an opening $(, ` or <( is
-// parsed to the word's end, so what follows the substitution can only add commands.
-func commandsIn(text string, depth int) []shell.Command {
+// inheritedNames returns the names a split step's continued step may inherit from its
+// environment, besides those assignRead assumes anyway: the env: keys of the workflow, the job,
+// its container and the step, and the names written to $GITHUB_ENV by the job's earlier steps
+// and by the split step's part 1, which the continued step follows. all is true when setup
+// cannot read one of them.
+func (e *jobEditor) inheritedNames(sp *stepPlan) (names []string, all bool) {
+	maps := []*yaml.Node{e.d.Root(), e.j.node, sp.st.m}
+	switch c := rawValue(e.j.node, "container"); {
+	case c == nil, c.Kind == yaml.ScalarNode && !strings.Contains(c.Value, "${{"): // an image only
+	case c.Kind == yaml.MappingNode && !slices.Contains(keys(c), "<<"):
+		maps = append(maps, c)
+	default:
+		return nil, true
+	}
+	for _, m := range maps {
+		ks, ok := envNames(m)
+		if !ok {
+			return nil, true
+		}
+		names = append(names, ks...)
+	}
+	for k, o := range e.j.steps[:sp.s+1] {
+		if o.run == nil || !strings.Contains(o.script, "GITHUB_ENV") {
+			continue
+		}
+		if !o.posix {
+			return nil, true
+		}
+		cmds := o.cmds
+		if k == sp.s {
+			cmds = cmds[:sp.last+1]
+		}
+		ws, all := envWrites(o.script, cmds)
+		if all {
+			return nil, true
+		}
+		names = append(names, ws...)
+	}
+	return names, false
+}
+
+// envNames returns the keys of mapping m's env:, and false when setup cannot read them: the env:
+// is an alias, an expression or anything else but a plain mapping, or uses a merge key.
+func envNames(m *yaml.Node) ([]string, bool) {
+	n := rawValue(m, "env")
+	if n == nil || n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
+		return nil, true
+	}
+	if n.Kind != yaml.MappingNode {
+		return nil, false
+	}
+	var out []string
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		k := n.Content[i]
+		if k.Kind != yaml.ScalarNode || k.Value == "<<" || k.Tag == "!!merge" {
+			return nil, false
+		}
+		out = append(out, k.Value)
+	}
+	return out, true
+}
+
+// envLine is a line of a $GITHUB_ENV file: NAME=value, or NAME<<DELIMITER for a value on the
+// lines up to DELIMITER.
+var envLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)(?:=|<<(.*))`)
+
+// envWrites returns the names that cmds, commands of script, write to $GITHUB_ENV: the literal
+// NAME= lines that echo, printf or cat with a heredoc append to it. all is true when a command
+// that mentions $GITHUB_ENV writes anything else, or in a way setup cannot read.
+func envWrites(script string, cmds []shell.Command) (names []string, all bool) {
+	for _, c := range cmds {
+		mentions := slices.ContainsFunc(c.Words, func(w shell.Word) bool { return strings.Contains(w.Raw, "GITHUB_ENV") })
+		target := false
+		var docs []shell.Redir
+		for _, r := range c.Redirs {
+			if strings.Contains(r.Target.Raw, "GITHUB_ENV") {
+				mentions = true
+				target = target || strings.Contains(r.Op, ">")
+			}
+			if strings.Contains(r.Op, "<<") {
+				docs = append(docs, r)
+			}
+		}
+		if !mentions {
+			continue
+		}
+		argv := c.Argv()
+		if !target || len(argv) == 0 {
+			return nil, true
+		}
+		var text string
+		switch argv[0] {
+		case "echo":
+			args := argv[1:]
+			for len(args) > 0 && len(args[0]) > 1 && strings.Trim(args[0], "neE") == "-" {
+				args = args[1:]
+			}
+			text = strings.Join(args, " ")
+		case "printf":
+			opts, args := options(argv[1:])
+			if opts != "" || len(args) == 0 {
+				return nil, true
+			}
+			text = args[0]
+		case "cat":
+			if len(argv) > 1 || len(docs) != 1 || strings.Contains(docs[0].Op, "<<<") {
+				return nil, true
+			}
+			text = heredocBody(script, docs[0])
+		default:
+			return nil, true
+		}
+		delim := ""
+		for _, l := range strings.Split(strings.ReplaceAll(text, `\n`, "\n"), "\n") {
+			l = strings.TrimSpace(l)
+			switch m := envLine.FindStringSubmatch(l); {
+			case delim != "":
+				if l == delim {
+					delim = ""
+				}
+			case l == "":
+			case m == nil:
+				return nil, true
+			default:
+				names = append(names, m[1])
+				if l[len(m[1])] == '<' {
+					delim = strings.TrimSpace(m[2])
+				}
+			}
+		}
+	}
+	return names, false
+}
+
+// heredocBody returns the body of heredoc r in script: the lines after the one that holds r, up
+// to its delimiter line (tabs stripped for <<-) or the end of script.
+func heredocBody(script string, r shell.Redir) string {
+	nl := strings.IndexByte(script[r.Start:], '\n')
+	if nl < 0 {
+		return ""
+	}
+	var body []string
+	for _, l := range strings.Split(script[r.Start+nl+1:], "\n") {
+		t := l
+		if strings.HasSuffix(r.Op, "<<-") {
+			t = strings.TrimLeft(l, "\t")
+		}
+		if t == r.Target.Value {
+			break
+		}
+		body = append(body, l)
+	}
+	return strings.Join(body, "\n")
+}
+
+// commandsIn parses text into commands, adding the commands inside the command and process
+// substitutions of their words. Each opening $(, <(, >( or ` is parsed once, to the end of its
+// word: a substitution nested in it is a later opener of the same word, parsed on its own, and
+// what follows the substitution can only add commands. A closing backtick opens nothing; an
+// escaped one, as backticks nested in backticks are written, is parsed as an opener too.
+func commandsIn(text string) []shell.Command {
 	cmds, _ := shell.Parse(text, shell.State{})
 	out := slices.Clone(cmds)
-	if depth >= 4 {
-		return out
+	sub := func(s string) {
+		more, _ := shell.Parse(s, shell.State{})
+		out = append(out, more...)
 	}
 	for _, c := range cmds {
 		words := slices.Clone(c.Words)
@@ -201,15 +499,22 @@ func commandsIn(text string, depth int) []shell.Command {
 			words = append(words, r.Target)
 		}
 		for _, w := range words {
+			open := false
 			for i := 0; i < len(w.Raw); i++ {
 				rest := w.Raw[i:]
 				switch {
 				case strings.HasPrefix(rest, "$(("):
 					i += 2 // arithmetic, not a command
 				case strings.HasPrefix(rest, "$("), strings.HasPrefix(rest, "<("), strings.HasPrefix(rest, ">("):
-					out = append(out, commandsIn(rest[2:], depth+1)...)
+					sub(rest[2:])
+				case strings.HasPrefix(rest, "\\`"):
+					sub(rest[2:])
+					i++
 				case rest[0] == '`':
-					out = append(out, commandsIn(rest[1:], depth+1)...)
+					if !open {
+						sub(rest[1:])
+					}
+					open = !open
 				}
 			}
 		}

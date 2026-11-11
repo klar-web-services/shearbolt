@@ -558,9 +558,13 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 		if strings.Contains(rem, "\n") && !strings.HasSuffix(rem, "\n") {
 			rem += "\n"
 		}
-		for _, d := range sp.dropped {
-			if assignRead(d.names, rem, st.script, st.cmds[:d.cmd], slices.Concat(e.wf.env, e.j.env, st.env)) {
-				return failAt(d.line, d.reason, d.text)
+		if len(sp.dropped) > 0 {
+			ct := &continued{text: rem, cmds: commandsIn(rem), step: st.cmds}
+			ct.inherited, ct.anyName = e.inheritedNames(sp)
+			for _, d := range sp.dropped {
+				if assignRead(d.names, ct, st.cmds[:d.cmd]) {
+					return failAt(d.line, d.reason, d.text)
+				}
 			}
 		}
 		if st.id != "" && strings.Contains(rem, "GITHUB_OUTPUT") {
