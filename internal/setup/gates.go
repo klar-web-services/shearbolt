@@ -1002,10 +1002,12 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 			used[g.Job] = map[string]bool{}
 		}
 		usedTags := used[g.Job]
+		own := map[string]bool{} // image targets with a variable that the gate's own builds fill
 		for k, b := range gp.images {
 			n := name(pp.slots[k])
 			set[n] = true
 			if v := vars[n]; v != "" {
+				own[n] = true
 				tag := scanTag(*b.Image, commit(gp.file), dockerRepoName(pp.slots[k]))
 				// The same repository as an earlier image of the job: a shared tag would scan one
 				// image twice, so this one gets a number.
@@ -1017,7 +1019,7 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 					tag = next
 				}
 				usedTags[tagValue(*b.Image, tag)] = true
-				g.Images = append(g.Images, plan.ImageVar{Var: v, Build: b, ScanTag: tag})
+				g.Images = append(g.Images, plan.ImageVar{Var: v, Build: b, ScanTag: tag, Target: n})
 			}
 		}
 		for _, b := range gp.binaries {
@@ -1044,6 +1046,18 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 			}
 			slices.Sort(g.Targets)
 		}
+		// What the gate scans (P7): unknown without a merged config.
+		switch {
+		case merged == nil:
+		case g.Targets == nil:
+			for _, t := range merged {
+				g.Scans = append(g.Scans, t.Name)
+			}
+		default:
+			g.Scans = slices.Clone(g.Targets)
+		}
+		slices.Sort(g.Scans)
+		g.OnlyOwnImages = merged != nil && len(g.Scans) > 0 && !slices.ContainsFunc(g.Scans, func(n string) bool { return !own[n] })
 		out = append(out, g)
 	}
 	return out

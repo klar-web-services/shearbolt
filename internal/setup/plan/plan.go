@@ -211,6 +211,13 @@ type Gate struct {
 	Builds   []Build    // gated builds (the plugin adds tags, --load, splits, converts)
 	Existing *GateCmd   // update this gate instead of inserting one
 	Version  string     // "dev" = unpinned
+	// Scans is the sorted names of every target the gate scans, resolved also when Targets is nil;
+	// nil when the config could not be read or edited, so what the gate scans is unknown (P7).
+	Scans []string
+	// OnlyOwnImages: the gate scans something, and every target it scans is an image target with
+	// a variable that one of its own builds fills (in Images). A source or compose target, an
+	// image target with a fixed reference, or a target setup did not plan makes it false (P7).
+	OnlyOwnImages bool
 }
 
 // ImageVar passes one scanned image to the gate.
@@ -218,6 +225,7 @@ type ImageVar struct {
 	Var     string // SHEARBOLT_IMAGE, SHEARBOLT_IMAGE_<NAME>
 	Build   Build  // which build provides the tag
 	ScanTag string // R5: the local shearbolt-<commit> tag setup adds and the gate scans, in the CI's syntax
+	Target  string // the name of its image target, as Scans and Targets name it (P7)
 }
 
 // Prep is what a build needs before it can be gated (Rust: the auditable rewrite and its install).

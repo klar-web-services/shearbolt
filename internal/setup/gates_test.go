@@ -1597,3 +1597,94 @@ func TestGatesRootNoteWording(t *testing.T) {
 		t.Fatalf("gate after, compose: %s, %q", dumpGate(g), msg)
 	}
 }
+
+// P7: every gate carries the sorted names of the targets it scans, also when it scans every
+// target, and each image variable the name of its image target. OnlyOwnImages is true only when
+// every scanned target is an image target with a variable that one of the gate's own builds
+// fills; when the config cannot be read or edited, what the gate scans is unknown.
+func TestGatesScans(t *testing.T) {
+	const fixedImage = "version: 1\nproject: repo\ntargets:\n  - name: repo\n    image: ghcr.io/acme/edge:latest\n"
+	const handAdded = "version: 1\nproject: repo\ntargets:\n  - name: repo\n    image: ${SHEARBOLT_IMAGE:-repo:local}\n  - name: extra\n    dir: public\n"
+	const notEditable = "version: 1\nproject: repo\ntargets: [{name: repo, image: '${SHEARBOLT_IMAGE:-repo:local}'}]\n"
+	buildPush := []fstep{run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1")}
+	both := []fstep{run("docker build -t ghcr.io/acme/edge:1 .\ndocker build -f worker.Dockerfile -t ghcr.io/acme/worker:1 ."), run("docker push ghcr.io/acme/edge:1")}
+	for _, c := range []struct {
+		name    string
+		project plan.Project
+		config  string // shearbolt.yaml, "" = none
+		jobs    [][]fstep
+		want    []string // per gate
+	}{
+		{"root project, one image", rootDocker(), "", [][]fstep{buildPush},
+			[]string{`scans=["repo"] images=["repo"] own=true`}},
+		{"root project, two images in one job", rootDocker(), "", [][]fstep{both},
+			[]string{`scans=["repo" "worker"] images=["repo" "worker"] own=true`}},
+		{"root project, a subset of its images", rootDocker(), "", [][]fstep{both, buildPush},
+			[]string{`scans=["repo" "worker"] images=["repo" "worker"] own=true`, `targets=["repo"] scans=["repo"] images=["repo"] own=true`}},
+		{"root project with a compose file", rootDocker("test/compose.yml"), "", [][]fstep{buildPush},
+			[]string{`scans=["repo" "test-compose"] images=["repo"] own=false`}},
+		{"npm project with an image", npmProject(".", "web"), "", [][]fstep{buildPush},
+			[]string{`scans=["source" "web"] images=["web"] own=false`}},
+		{"fixed image reference", rootDocker(), fixedImage, [][]fstep{buildPush},
+			[]string{`scans=["repo"] images=[] own=false`}},
+		{"hand-added target", rootDocker(), handAdded, [][]fstep{buildPush},
+			[]string{`scans=["extra" "repo"] images=["repo"] own=false`}},
+		{"config not editable", rootDocker(), notEditable, [][]fstep{buildPush},
+			[]string{`scans=nil images=["repo"] own=false`}},
+	} {
+		files := map[string]string{"Dockerfile": "FROM x\n", "worker.Dockerfile": "FROM x\n", "test/compose.yml": composeImage}
+		if c.config != "" {
+			files["shearbolt.yaml"] = c.config
+		}
+		r := repo(t, files)
+		var jobs []plan.Job
+		for i, steps := range c.jobs {
+			jobs = append(jobs, mkJob(t, r, fmt.Sprintf("job%d", i), steps...))
+		}
+		gates, _, _ := planGates(t, r, []plan.Project{c.project}, jobs, nil)
+		var got []string
+		for _, g := range gates {
+			got = append(got, scansOf(g))
+		}
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: got\n%s\nwant\n%s", c.name, strings.Join(got, "\n"), strings.Join(c.want, "\n"))
+		}
+	}
+
+	// A gate that scans a subset: Scans is its Targets.
+	r := demoRepo(t, map[string]string{"Dockerfile": "FROM x\n"})
+	projects := []plan.Project{{Ecosystem: "rust", Dir: ".", Name: "web", Binaries: []string{"demo"}}}
+	jobs := []plan.Job{
+		mkJob(t, r, "x", run("cargo build --release --locked")),
+		mkJob(t, r, "y", run("docker build -t ghcr.io/acme/web:1 .")),
+	}
+	gates, _, _ := planGates(t, r, projects, jobs, nil)
+	want := []string{`targets=["demo" "source"] scans=["demo" "source"] images=[] own=false`, `targets=["source" "web"] scans=["source" "web"] images=["web"] own=false`}
+	var got []string
+	for _, g := range gates {
+		got = append(got, scansOf(g))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("subsets: got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// scansOf shows what gate g scans: its Targets when it scans a subset, Scans ("nil" when
+// unknown), the Target of each image variable, and OnlyOwnImages.
+func scansOf(g plan.Gate) string {
+	var b strings.Builder
+	if g.Targets != nil {
+		fmt.Fprintf(&b, "targets=%q ", g.Targets)
+	}
+	if g.Scans == nil {
+		b.WriteString("scans=nil ")
+	} else {
+		fmt.Fprintf(&b, "scans=%q ", g.Scans)
+	}
+	ts := []string{}
+	for _, i := range g.Images {
+		ts = append(ts, i.Target)
+	}
+	fmt.Fprintf(&b, "images=%q own=%v", ts, g.OnlyOwnImages)
+	return b.String()
+}
