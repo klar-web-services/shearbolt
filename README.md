@@ -11,7 +11,7 @@ cd your-project && shearbolt setup
 
 `shearbolt: command not found`? The installer put it in `~/.local/bin`, which may not be on your `PATH` yet (the installer says so). Run `export PATH="$HOME/.local/bin:$PATH"`, add that line to your shell profile, then run setup again.
 
-Setup finds your npm or Rust project (or Docker Compose files) and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
+Setup finds your npm or Rust project, your Docker Compose files and the images your CI builds from a Dockerfile, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
 
 With Claude Code: `shearbolt skill install`, then type `/shearbolt setup`.
 
@@ -37,7 +37,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 | Where | What setup does |
 |---|---|
-| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, plus a target for each image or Rust binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
+| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, if the project has any, plus a target for each image or Rust binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
 | GitHub Actions | Adds a `shearbolt` step (`uses: klar-web-services/shearbolt@v1`) after the build. A `docker/build-push-action` step that pushes is split: it builds with `push: false` and `load: true`, `shearbolt` scans, then a new step runs `docker push` for the same tags, so you push exactly what was scanned. Other repositories can use the Action only while this repository is public ([note](#supported-projects-and-ci)). |
 | Bitbucket Pipelines, GitLab CI | Adds two commands to the step or job that builds, between the build and the push: install a pinned Shearbolt, then run `shearbolt scan --ci`. A combined `docker build … && docker push …` line is split around them. Adds a CI cache for the vulnerability database. |
 | Image builds | Adds a local tag, `<image>:shearbolt-<commit>`, and passes it to the gate. The gate scans that tag, and it is never pushed. |
@@ -47,6 +47,7 @@ Run setup from your repository root: it treats the current directory as the root
 - In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
 - If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
 - What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (the gate goes before it and checks the lockfiles), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
+- A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
 - Running setup again is safe. It never overwrites an existing `shearbolt.yaml` (it only adds missing targets), and a second run changes nothing.
 - Without a terminal, use `shearbolt setup --yes` to accept the defaults, or `--plan --json` and `--apply --answer` (see [CLI](#cli)).
@@ -168,6 +169,7 @@ The first scan downloads the pinned Grype release, verified by its SHA-256, and 
 |---|---|
 | npm | npm, pnpm, Yarn and Bun lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, text `bun.lock`); Next.js apps |
 | Rust | Cargo projects with a `Cargo.lock`; release binaries built with cargo-auditable |
+| Docker images | Images that CI builds from a Dockerfile (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`), in any repository, including one with no npm or Rust project. The gate runs between the build and the push. |
 | Docker Compose | Repositories that deploy with Docker Compose: the images their compose files pull |
 | CI | GitHub Actions, Bitbucket Pipelines, GitLab CI |
 | Targets | Container images (local Docker or registry), images pulled by Docker Compose files, binaries and other single files, directories, source trees |
@@ -238,7 +240,18 @@ targets:
 - A blocked image gets a "Re-pin" line in the report with the file, line and services. Move the pin to a newer build of the tag, or a newer tag, then scan again. A digest pin stays a digest pin.
 - Setup finds compose files named `compose.yaml`, `compose.yml`, `docker-compose.yaml` and `docker-compose.yml`, and variants such as `docker-compose.prod.yml`, `docker-compose-prod.yml` and `compose-dev.yaml`. A compose file under any other name must be added as a target by hand.
 - Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests. After you add or remove a compose target by hand, run `shearbolt setup` again, so every gate scans it (or stops naming it).
-- Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`, and, in a repository with only compose files, at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
+- Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`. In a repository with only compose files and no image build in CI, it places the gate at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
+
+### Upgrading from 1.1
+
+Setup 1.1 gated a repository with only Docker Compose files at the start of a job. Running setup again keeps that gate where it is, but since 1.2 setup also gates the images your CI builds there, right after the build:
+
+- If a build follows the old gate in its job, the build gets `BUILD_AFTER_GATE`, because the old gate does not scan its image.
+- If the old gate sits in a job that builds nothing, such as a deploy job, it now also scans the new image target, which that job never built, so it fails on every run.
+
+Either way, remove the old gate step and run `shearbolt setup` again; the new gate then goes between the build and the push.
+
+On GitLab and Bitbucket, running setup again on a job where an early stop (such as `exit 0`) comes before a gate that checks the lockfiles or compose files now gives `UNSUPPORTED_EDIT`. That job is left as it is, so its install pin is no longer updated. Move the early stop into the job's rules or condition, as the note says, and run setup again.
 
 ### CLI
 
