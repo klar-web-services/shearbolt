@@ -689,7 +689,11 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		case !gateable(b):
 			note(b, "MULTI_PLATFORM", "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image"+still)
 		case !b.at().less(firstPush) && !slices.ContainsFunc(b.Notes, func(n plan.Note) bool { return n.Code == "BUILD_AFTER_PUSH" }):
-			note(b, "BUILD_AFTER_PUSH", where(b)+" runs after a push or deploy in the same job, so the gate, which runs before that push, does not scan it; build before you push, or in a separate job, to scan it")
+			unscanned := "so the gate, which runs before that push, does not scan it"
+			if drop {
+				unscanned = "so no gate can run between it and that push and its image is not scanned"
+			}
+			note(b, "BUILD_AFTER_PUSH", where(b)+" runs after a push or deploy in the same job, "+unscanned+"; build before you push, or in a separate job, to scan it")
 		}
 	}
 	if !drop {

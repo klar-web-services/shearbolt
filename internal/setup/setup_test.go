@@ -730,7 +730,7 @@ func TestComputeNoGateableImage(t *testing.T) {
 		// a build that pushes.
 		{"after a push", map[string]string{fakeCIFile: "deploy: docker buildx build -o type=registry -t ghcr.io/acme/edge:cache .; docker build -t ghcr.io/acme/edge:1 .\n"},
 			fakeCIFile + ":1: this image build pushes through its output, so no gate can run between the build and the push and its image is not scanned; no gate is placed for it in this job. Build with --load (or load: true) and push in a later step to scan the image\n" +
-				fakeCIFile + ":1: this build runs after a push or deploy in the same job, so the gate, which runs before that push, does not scan it; build before you push, or in a separate job, to scan it"},
+				fakeCIFile + ":1: this build runs after a push or deploy in the same job, so no gate can run between it and that push and its image is not scanned; build before you push, or in a separate job, to scan it"},
 		{"after the gate", map[string]string{fakeCIFile: `deploy: "$HOME/.local/bin/shearbolt" scan --ci; docker build -t ghcr.io/acme/edge:1 .; docker push ghcr.io/acme/edge:1` + "\n"},
 			fakeCIFile + ":1: this build runs after the existing Shearbolt gate in this job, so that gate does not scan it"},
 	} {

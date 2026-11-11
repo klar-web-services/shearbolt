@@ -1494,7 +1494,9 @@ func TestGatesRootDropsGateAfterPush(t *testing.T) {
 			if got := codes(pl.notes); !slices.Equal(got, tc.codes) {
 				t.Fatalf("notes: %v", pl.notes)
 			}
-			if n := noteOf(t, pl.notes, "BUILD_AFTER_PUSH"); n.File != ciFile || n.Line != 200 {
+			// No gate is placed in b, so the note names none.
+			if n := noteOf(t, pl.notes, "BUILD_AFTER_PUSH"); n.File != ciFile || n.Line != 200 || strings.Contains(n.Message, "the gate, which runs before") ||
+				n.Message != "this build runs after a push or deploy in the same job, so no gate can run between it and that push and its image is not scanned; build before you push, or in a separate job, to scan it" {
 				t.Fatalf("BUILD_AFTER_PUSH: %+v", n)
 			}
 		})
