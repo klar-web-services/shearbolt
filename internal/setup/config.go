@@ -122,21 +122,9 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 	if err != nil {
 		return unsupported("it cannot be read: " + err.Error())
 	}
-	doc, err := yamledit.Parse(src)
-	if err != nil {
-		return unsupported("it is not valid YAML: " + err.Error())
-	}
-	root := doc.Root()
-	if root == nil || root.Kind != yaml.MappingNode {
-		return unsupported("it is not a YAML mapping")
-	}
-	seq := doc.Get(root, "targets")
-	if seq == nil || seq.Kind != yaml.SequenceNode || seq.Style&yaml.FlowStyle != 0 || len(seq.Content) == 0 {
-		return unsupported("it has no block-style targets list")
-	}
-	var existing []config.Target
-	if err := seq.Decode(&existing); err != nil {
-		return unsupported("its targets cannot be read: " + err.Error())
+	doc, seq, existing, reason := editableTargets(src)
+	if reason != "" {
+		return unsupported(reason)
 	}
 
 	names, vars = map[string]string{}, map[string]string{}
@@ -228,6 +216,47 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 		Diff:    plan.UnifiedDiff(file, src, out),
 		Base:    src,
 	}, merged, names, vars, notes
+}
+
+// editableTargets parses an existing shearbolt.yaml the way configChange edits it: the document,
+// its block-style targets list and the targets in that list. reason says why configChange cannot
+// edit the file, and is "" when it can.
+func editableTargets(src []byte) (doc *yamledit.Doc, seq *yaml.Node, existing []config.Target, reason string) {
+	doc, err := yamledit.Parse(src)
+	if err != nil {
+		return nil, nil, nil, "it is not valid YAML: " + err.Error()
+	}
+	root := doc.Root()
+	if root == nil || root.Kind != yaml.MappingNode {
+		return nil, nil, nil, "it is not a YAML mapping"
+	}
+	seq = doc.Get(root, "targets")
+	if seq == nil || seq.Kind != yaml.SequenceNode || seq.Style&yaml.FlowStyle != 0 || len(seq.Content) == 0 {
+		return nil, nil, nil, "it has no block-style targets list"
+	}
+	if err := seq.Decode(&existing); err != nil {
+		return nil, nil, nil, "its targets cannot be read: " + err.Error()
+	}
+	return doc, seq, existing, ""
+}
+
+// keptCompose reports, per project dir, whether the project's merged config (configChange) holds
+// a compose target, for the projects with an existing shearbolt.yaml that configChange can edit.
+// Setup adds no compose target to an existing file (a removed one stays removed), so only the
+// file's own compose targets count. A project without an entry has no config yet, and every
+// compose file it has becomes a target, or configChange cannot edit its config (merged nil).
+func keptCompose(r plan.Repo, projects []plan.Project) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range projects {
+		src, err := r.Read(configFile(p))
+		if err != nil {
+			continue
+		}
+		if _, _, existing, reason := editableTargets(src); reason == "" {
+			out[p.Dir] = slices.ContainsFunc(existing, func(t config.Target) bool { return t.Kind() == "compose" })
+		}
+	}
+	return out
 }
 
 // normalizeTargets returns a copy of ts whose source excludes are sorted, deduplicated and free

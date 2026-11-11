@@ -319,12 +319,15 @@ Every note here except the informational ones listed in the intro above counts a
 
 **Jobs a `docker` project cannot scan.** A `docker` project has no lockfiles. In a job
 where none of its image builds can be scanned (multi-platform, pushing through outputs, or
-after a push) and it has no compose file, setup places no gate: the gate would scan images
-that job never built. `MULTI_PLATFORM`, `PUSH_IN_BUILD` and `BUILD_AFTER_PUSH` then say
-that no gate is placed there. If that job already holds a Shearbolt gate, setup leaves it
-alone, but it now scans images the job does not build and fails on every run. The build
-notes, or `GATE_AFTER_PUSH` for a gate after a push, ask the user to remove that gate and
-run setup again.
+after a push) and its `shearbolt.yaml` has no compose target, setup places no gate: the
+gate would scan images that job never built. A compose file counts only while its target
+is in `shearbolt.yaml`, so after the user removes a test compose target, a re-run can take
+the gate out of such a job. `MULTI_PLATFORM`, `PUSH_IN_BUILD` and `BUILD_AFTER_PUSH` then
+say that no gate is placed there. If that job already holds a Shearbolt gate, setup leaves
+it alone and does not edit it, but that gate now scans images the job does not build, or
+names a target `shearbolt.yaml` no longer has, and fails on every run. The build notes, or
+`GATE_AFTER_PUSH` for a gate after a push, ask the user to remove that gate and run setup
+again.
 
 ### Changes setup made that the user should know about
 

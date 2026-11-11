@@ -162,6 +162,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 
 	// 4. Questions (R3).
 	m := newGateModel(projects, jobs, paths)
+	m.compose = keptCompose(r, projects)
 	p.Questions = m.questions()
 	for i := range p.Questions {
 		p.Questions[i].Answer = o.Answers[p.Questions[i].ID]
@@ -182,8 +183,9 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	snippet := func(file string, g plan.Gate) string { return byPath[file].ci.Snippet(r, file, g) }
 	pl := m.place(values, o.Version, snippet)
 	// A root project that owns the image builds needs a target it will scan: without a compose
-	// file, a gated image (§2.2, error 3).
-	if pp := pl.projects["."]; m.rootOwns && pp != nil && len(pp.project.Compose) == 0 && len(pp.targets) == 0 {
+	// target its config keeps, a gated image (§2.2, error 3).
+	if pp := pl.projects["."]; m.rootOwns && pp != nil && !m.hasCompose(pp.project) &&
+		!slices.ContainsFunc(pp.targets, func(t config.Target) bool { return t.Kind() == "image" }) {
 		msg := noGateableMessage
 		for _, n := range dedupeNotes(pl.notes) {
 			if slices.Contains(noGateableCodes, n.Code) {

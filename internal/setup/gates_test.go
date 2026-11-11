@@ -99,12 +99,13 @@ func resolve(t *testing.T, qs []plan.Question, answers map[string]string) map[st
 	return values
 }
 
-// planGates runs the gate steps with the given answers (defaults for the rest), an empty
-// repository config, and GitHub's commit expression. It returns the gates and the planned
+// planGates runs the gate steps with the given answers (defaults for the rest), the repository's
+// config (none when r has no shearbolt.yaml), and GitHub's commit expression. It returns the gates and the planned
 // targets per project.
 func planGates(t *testing.T, r plan.Repo, projects []plan.Project, jobs []plan.Job, answers map[string]string) ([]plan.Gate, map[string][]config.Target, *placement) {
 	t.Helper()
 	m := newGateModel(projects, jobs, []string{ciFile})
+	m.compose = keptCompose(r, projects)
 	pl := m.place(resolve(t, m.questions(), answers), "1.2.3", fakeSnippet)
 	var gates []plan.Gate
 	planned := map[string][]config.Target{}
@@ -1465,6 +1466,18 @@ func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 	if n := noteOf(t, pl.notes, "MULTI_PLATFORM"); !strings.HasSuffix(n.Message, "scanned before it is pushed; the gate runs before it and checks its compose images") {
 		t.Fatalf("MULTI_PLATFORM: %+v", n)
 	}
+
+	// The compose file counts only while the config keeps its target: once the user removes it,
+	// b gets no gate again.
+	r = repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage,
+		"shearbolt.yaml": "version: 1\nproject: repo\ntargets:\n  - name: repo\n    image: ${SHEARBOLT_IMAGE:-repo:local}\n"})
+	gates, _, pl = planGates(t, r, []plan.Project{rootDocker("compose.yml")}, jobs, nil)
+	if len(gates) != 1 || gates[0].Job != jobs[0].ID || gates[0].Targets != nil {
+		t.Fatalf("compose target removed: gates %+v", gates)
+	}
+	if n := noteOf(t, pl.notes, "MULTI_PLATFORM"); !strings.HasSuffix(n.Message, "scanned before it is pushed; no gate is placed for it in this job") {
+		t.Fatalf("compose target removed: MULTI_PLATFORM %+v", n)
+	}
 }
 
 // A job whose only root build runs after a push (BUILD_AFTER_PUSH) gets no gate when the root
@@ -1523,44 +1536,57 @@ func releaseAction(tag string) fstep {
 	}}
 }
 
-// An existing root gate before the push, in a job with no gateable image and no compose file,
-// is kept as it is (drop needs e == nil), and every note on the builds it does not scan asks for
-// its removal: it scans no image built here, and its target list now covers the other jobs'
-// images.
+// An existing root gate before the push, in a job with no gateable image and no compose target,
+// is stale: setup leaves it alone (it is not in the plan, so its targets are not edited), and
+// every note on the builds it does not scan asks for its removal. It scans no image built here,
+// and its target list now covers the other jobs' images, or names a removed compose target. A
+// compose file counts only while the config keeps its target, so the gate is also stale once
+// the user removes that target.
 func TestGatesRootExistingGateWithNothingToScan(t *testing.T) {
-	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
-	a := mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1"))
+	const remove = "setup places no gate in this job and leaves that gate alone, but it now scans images this job does not build, or names a target shearbolt.yaml no longer has, so remove it and run setup again"
+	const noCompose = "version: 1\nproject: repo\ntargets:\n  - name: repo\n    image: ${SHEARBOLT_IMAGE:-repo:local}\n"
 	for _, tc := range []struct {
-		name     string
-		steps    []fstep // job b
-		gateStep int     // the step of b's existing gate
-		note     plan.Note
+		name    string
+		project plan.Project
+		config  string  // shearbolt.yaml, "" = none
+		steps   []fstep // job b
+		note    plan.Note
 	}{
-		{"multi-platform after the gate", []fstep{scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")}, 0,
+		{"multi-platform after the gate", rootDocker(), "", []fstep{scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")},
 			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
-				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}},
-		{"build after a push", []fstep{scanStep, run("docker push ghcr.io/acme/old:1"), releaseAction("ghcr.io/acme/edge:2")}, 0,
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; " + remove}},
+		{"build after a push", rootDocker(), "", []fstep{scanStep, run("docker push ghcr.io/acme/old:1"), releaseAction("ghcr.io/acme/edge:2")},
 			plan.Note{Code: "BUILD_AFTER_PUSH", File: ciFile, Line: 300,
-				Message: "this build runs after a push or deploy in the same job, so the existing gate in this job, which runs before that push, does not scan it; that gate now also scans images this job does not build, so remove it and run setup again; build before you push, or in a separate job, to scan it"}},
-		{"multi-platform before the gate", []fstep{run("docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/edge:multi ."), scanStep, run("docker push ghcr.io/acme/edge:multi")}, 1,
+				Message: "this build runs after a push or deploy in the same job, so the existing gate in this job, which runs before that push, does not scan it; " + remove + "; build before you push, or in a separate job, to scan it"}},
+		{"multi-platform before the gate", rootDocker(), "", []fstep{run("docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/edge:multi ."), scanStep, run("docker push ghcr.io/acme/edge:multi")},
 			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 100,
-				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}},
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image; " + remove}},
+		// The compose file is found, but the config no longer has its target.
+		{"compose target removed", rootDocker("test/compose.yml"), noCompose, []fstep{scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")},
+			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; " + remove}},
+		{"compose target removed, gate after", rootDocker("test/compose.yml"), noCompose, []fstep{run("docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/edge:multi ."), scanStep, run("docker push ghcr.io/acme/edge:multi")},
+			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 100,
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image; " + remove}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			files := map[string]string{"Dockerfile": "FROM x\n", "test/compose.yml": composeImage}
+			if tc.config != "" {
+				files["shearbolt.yaml"] = tc.config
+			}
+			r := repo(t, files)
+			a := mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1"))
 			jobs := []plan.Job{a, mkJob(t, r, "b", tc.steps...)}
-			gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
-			if len(gates) != 2 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
+			gates, _, pl := planGates(t, r, []plan.Project{tc.project}, jobs, nil)
+			// Setup leaves b's gate alone: no gate of b is planned.
+			if len(gates) != 1 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 || gates[0].Targets != nil {
 				t.Fatalf("gates: %+v", gates)
-			}
-			// Setup leaves the gate alone; with no target of its own, it scans every target.
-			if g := gates[1]; g.Job != jobs[1].ID || g.Existing == nil || g.At.Step != tc.gateStep || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
-				t.Fatalf("b's gate: %s", dumpGate(g))
-			}
-			if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
-				t.Fatalf("planned: %v", got)
 			}
 			if got := noteCodes(pl.notes, tc.note.Code); !slices.Equal(got, []plan.Note{tc.note}) {
 				t.Fatalf("%s: %+v", tc.note.Code, got)
+			}
+			if hasCode(pl.notes, "PUSH_BEFORE_GATE") || hasCode(pl.notes, "COMMANDS_BEFORE_GATE") {
+				t.Fatalf("notes: %v", pl.notes)
 			}
 		})
 	}

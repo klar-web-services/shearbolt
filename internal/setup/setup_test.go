@@ -878,3 +878,121 @@ func TestComputeNoDeploySeenImage(t *testing.T) {
 		})
 	}
 }
+
+// removeTarget deletes the target named name, two lines, from the shearbolt.yaml at root.
+func removeTarget(t *testing.T, root, name string) {
+	t.Helper()
+	file := filepath.Join(root, "shearbolt.yaml")
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitAfter(string(b), "\n")
+	i := slices.Index(lines, "  - name: "+name+"\n")
+	if i < 0 || i+1 >= len(lines) {
+		t.Fatalf("no target %s:\n%s", name, b)
+	}
+	if err := os.WriteFile(file, []byte(strings.Join(slices.Delete(lines, i, i+2), "")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A root gate counts only the compose targets the config keeps. Job a builds and pushes; job b
+// only builds a multi-platform image, so its gate scans the compose images alone. Once the user
+// removes the compose target, setup places no gate in b on a re-run: one with nothing to scan
+// would scan a's image, which b never builds. The fake CI's gates are comments, so b holds no
+// gate on the re-run.
+func TestComputeRootGateCountsKeptComposeTargets(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Dockerfile":       "FROM nginx:1.27\n",
+		"test/compose.yml": composeImage,
+		fakeCIFile: "a: docker build -t ghcr.io/acme/edge:1 .; docker push ghcr.io/acme/edge:1\n" +
+			"b: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .\n",
+	})
+	ci := &fakeCI{files: []string{fakeCIFile}}
+	p := computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if len(ci.gates) != 2 || !slices.Equal(ci.gates[1].Targets, []string{"test-compose"}) {
+		t.Fatalf("first run: gates %+v", ci.gates)
+	}
+	if err := Write(root, p); err != nil {
+		t.Fatal(err)
+	}
+	removeTarget(t, root, "test-compose")
+
+	ci = &fakeCI{files: []string{fakeCIFile}}
+	p = computeWith(t, root, ci, nil)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if len(ci.gates) != 1 || ci.gates[0].Job != fakeCIFile+"#a" {
+		t.Fatalf("re-run: gates %+v", ci.gates)
+	}
+	want := []plan.Note{{Code: "MULTI_PLATFORM", File: fakeCIFile, Line: 2,
+		Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; no gate is placed for it in this job"}}
+	if got := noteCodes(p.Notes, "MULTI_PLATFORM"); !slices.Equal(got, want) {
+		t.Fatalf("MULTI_PLATFORM: %+v", got)
+	}
+}
+
+// The reviewer's probe with the GitHub plugin: after setup is applied and the compose target
+// removed, job b holds setup's gate, which names the removed target. Setup leaves that gate alone
+// instead of stripping its targets (which would scan a's image), and the note asks for its
+// removal.
+func TestComputeRootGateStaleAfterComposeTargetRemoved(t *testing.T) {
+	const workflow = `on: push
+jobs:
+  a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker build -t ghcr.io/acme/edge:latest .
+      - run: docker push ghcr.io/acme/edge:latest
+  b:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .
+`
+	p, root := computeRepo(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", "test/compose.yml": composeImage, ".github/workflows/ci.yml": workflow})
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if ci := change(p, ".github/workflows/ci.yml"); ci == nil || !strings.Contains(ci.Content, "targets: test-compose") {
+		t.Fatalf("first run: %v", changePaths(p))
+	}
+	if err := Write(root, p); err != nil {
+		t.Fatal(err)
+	}
+	removeTarget(t, root, "test-compose")
+
+	p = Compute(Options{Root: root, Yes: true, Version: "1.2.3"})
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if ci := change(p, ".github/workflows/ci.yml"); ci != nil {
+		t.Fatalf("re-run edits ci.yml:\n%s", ci.Diff)
+	}
+	n := noteOf(t, p.Notes, "MULTI_PLATFORM")
+	if !strings.Contains(n.Message, "the existing gate in this job runs before it and does not scan its image; setup places no gate in this job") ||
+		!strings.HasSuffix(n.Message, "so remove it and run setup again") || strings.Contains(n.Message, "compose images") {
+		t.Fatalf("MULTI_PLATFORM: %+v", n)
+	}
+}
+
+// Without a gateable image, a root project whose compose target was removed has nothing to scan:
+// NO_PROJECT (§2.2, error 3), although setup still finds the compose file.
+func TestComputeNoGateableImageComposeTargetRemoved(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Dockerfile":       "FROM nginx:1.27\n",
+		"test/compose.yml": composeImage,
+		"shearbolt.yaml":   "version: 1\nproject: repo\ntargets:\n  - name: site\n    image: nginx:1.27\n",
+		fakeCIFile:         "b: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .\n",
+	})
+	p := computeWith(t, root, &fakeCI{files: []string{fakeCIFile}}, nil)
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" || !strings.HasPrefix(p.Error.Message, wantNoGateable+"\n") {
+		t.Fatalf("error = %+v, notes = %v", p.Error, codes(p.Notes))
+	}
+}
