@@ -56,6 +56,13 @@ func npmRepo(ci string) map[string]string {
 // unchanged). The result must be valid YAML, and a second run on it must change nothing.
 func result(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	t.Helper()
+	p, out, _ := rerun(t, files)
+	return p, out
+}
+
+// rerun is result that also returns the second run's plan.
+func rerun(t *testing.T, files map[string]string) (*plan.Plan, string, *plan.Plan) {
+	t.Helper()
 	root := tree(t, files)
 	p := setup.Compute(setup.Options{Root: root, Yes: true, Version: "1.2.3"})
 	if p.Error != nil {
@@ -80,7 +87,7 @@ func result(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	for _, c := range again.Changes {
 		t.Errorf("a second run changes %s:\n%s", c.Path, c.Diff)
 	}
-	return p, out
+	return p, out, again
 }
 
 func lines(s ...string) string { return strings.Join(s, "\n") + "\n" }
@@ -1028,7 +1035,7 @@ func TestGitLabEarlyStop(t *testing.T) {
 
 	// A root project whose gate scans only the image built after the stop in before_script: the
 	// gate follows the build as usual.
-	p, got := result(t, map[string]string{"Dockerfile": "FROM alpine\n", file: lines(
+	p, got, again := rerun(t, map[string]string{"Dockerfile": "FROM alpine\n", file: lines(
 		"deploy:",
 		"  before_script:",
 		`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
@@ -1036,7 +1043,49 @@ func TestGitLabEarlyStop(t *testing.T) {
 		"    - docker build -t web:$CI_COMMIT_SHA .",
 		"    - docker push web:$CI_COMMIT_SHA",
 	)})
-	if !strings.Contains(got, "    - "+install+"\n    - "+scanWeb+"\n    - docker push web:$CI_COMMIT_SHA\n") || len(notes(p, "UNSUPPORTED_EDIT")) != 0 {
-		t.Errorf("%s:\n%s\nnotes %v", file, got, noteCodes(p))
+	if !strings.Contains(got, "    - "+install+"\n    - "+scanWeb+"\n    - docker push web:$CI_COMMIT_SHA\n") || len(notes(p, "UNSUPPORTED_EDIT")) != 0 || len(notes(again, "UNSUPPORTED_EDIT")) != 0 {
+		t.Errorf("%s:\n%s\nnotes %v\nsecond run %v", file, got, noteCodes(p), noteCodes(again))
+	}
+}
+
+// P12 on a re-run: an exit added before a gate already in the job (here setup's own from a first
+// run) fails the job on the exit's line, and nothing changes.
+func TestGitLabEarlyStopRerun(t *testing.T) {
+	root := tree(t, npmRepo(lines(
+		"build:",
+		"  script:",
+		"    - npm ci",
+		"    - npm run build",
+		"    - ./deploy.sh",
+	)))
+	o := setup.Options{Root: root, Yes: true, Version: "1.2.3"}
+	p := setup.Compute(o)
+	if p.Error != nil {
+		t.Fatal(p.Error)
+	}
+	if err := setup.Write(root, p); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, after, ok := strings.Cut(string(src), "  script:\n")
+	if !ok || !strings.Contains(after, "scan --ci") {
+		t.Fatalf("%s after the first run:\n%s", file, src)
+	}
+	line := strings.Count(before, "\n") + 2
+	stopped := before + "  script:\n" + `    - if [ -z "$CHANGED" ]; then exit 0; fi` + "\n" + after
+	if err := os.WriteFile(filepath.Join(root, file), []byte(stopped), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	again := setup.Compute(o)
+	if again.Error != nil {
+		t.Fatal(again.Error)
+	}
+	n := notes(again, "UNSUPPORTED_EDIT")
+	msg := fmt.Sprintf("job build was left unchanged: the job can stop before the shearbolt gate (exit at line %d), which would skip its check of source while later jobs still run", line)
+	if len(again.Changes) != 0 || len(n) != 1 || !strings.Contains(n[0].Message, msg) || n[0].Line != line {
+		t.Errorf("changes %+v\nnotes %v\nwant %q", again.Changes, noteCodes(again), msg)
 	}
 }

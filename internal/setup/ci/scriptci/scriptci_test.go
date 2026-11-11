@@ -150,6 +150,13 @@ func run(t *testing.T, root, version string) (*plan.Plan, string) {
 // result runs setup on files, writes the result, and checks that a second run changes nothing.
 func result(t *testing.T, files map[string]string, version string) (*plan.Plan, string) {
 	t.Helper()
+	p, out, _ := rerun(t, files, version)
+	return p, out
+}
+
+// rerun is result that also returns the second run's plan.
+func rerun(t *testing.T, files map[string]string, version string) (*plan.Plan, string, *plan.Plan) {
+	t.Helper()
 	root := tree(t, files)
 	p, out := run(t, root, version)
 	if err := setup.Write(root, p); err != nil {
@@ -159,7 +166,7 @@ func result(t *testing.T, files map[string]string, version string) (*plan.Plan, 
 	for _, c := range again.Changes {
 		t.Errorf("a second run changes %s:\n%s", c.Path, c.Diff)
 	}
-	return p, out
+	return p, out, again
 }
 
 func lines(s ...string) string { return strings.Join(s, "\n") + "\n" }
@@ -1198,7 +1205,7 @@ func stopMessage(cmd string, line int, what string) string {
 func stopRefused(t *testing.T, files map[string]string, cmd string, line int, what string) {
 	t.Helper()
 	p, got := result(t, files, "1.2.3")
-	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" })
+	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" && n.File == file })
 	if got != "" || i < 0 {
 		t.Fatalf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
 	}
@@ -1250,7 +1257,7 @@ func TestScriptEarlyStop(t *testing.T) {
 	root := func(items ...string) map[string]string {
 		return map[string]string{"Dockerfile": "FROM alpine\n", file: lines(append([]string{"deploy:", "  script:"}, items...)...)}
 	}
-	p, got = result(t, root(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - docker build -t web:$CI_COMMIT_SHA .", "    - docker push web:$CI_COMMIT_SHA"), "1.2.3")
+	p, got, again := rerun(t, root(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - docker build -t web:$CI_COMMIT_SHA .", "    - docker push web:$CI_COMMIT_SHA"), "1.2.3")
 	want(t, got, lines(
 		"deploy:",
 		"  script:",
@@ -1260,8 +1267,8 @@ func TestScriptEarlyStop(t *testing.T) {
 		`    - SHEARBOLT_IMAGE=web:shearbolt-$CI_COMMIT_SHA "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"`,
 		"    - docker push web:$CI_COMMIT_SHA",
 	))
-	if hasNote(p, "UNSUPPORTED_EDIT") {
-		t.Errorf("notes %v", noteCodes(p))
+	if hasNote(p, "UNSUPPORTED_EDIT") || hasNote(again, "UNSUPPORTED_EDIT") {
+		t.Errorf("notes %v\nsecond run %v", noteCodes(p), noteCodes(again))
 	}
 
 	// An image built before the stop would go unchecked: the job is refused, and the message
@@ -1283,4 +1290,58 @@ func TestScriptEarlyStop(t *testing.T) {
 	if len(cfg.Targets) != 2 || cfg.Targets[1].Name != "b" || m == nil || m[1] != cfg.Targets[0].Name {
 		t.Errorf("note %q\ntargets %+v", p.Notes[i].Message, cfg.Targets)
 	}
+}
+
+// P12 on re-runs and in the rarer shapes: a gate already in the job (here one added by hand)
+// after an early stop fails the job too, as does a second project's gate after a stop between
+// the two; when the config cannot be read, the message names every target; a stop the plan places
+// outside its item fails the job.
+func TestScriptEarlyStopMore(t *testing.T) {
+	npm := func(items ...string) map[string]string {
+		return npmRepo(".", lines(append([]string{"build:", "  script:"}, items...)...))
+	}
+	stopRefused(t, npm(
+		`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+		"    - npm ci",
+		"    - npm run build",
+		"    - "+install,
+		`    - '"$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"'`,
+		"    - ./deploy.sh",
+	), "exit", 3, "source")
+
+	// Two projects: the first gate runs before the stop, the second after it.
+	stopRefused(t, map[string]string{
+		"apps/a/package.json": `{"name":"a"}`, "apps/a/package-lock.json": "{}", "apps/a/Dockerfile": "FROM node:22\n",
+		"apps/b/package.json": `{"name":"b"}`, "apps/b/package-lock.json": "{}", "apps/b/Dockerfile": "FROM node:22\n",
+		file: lines(
+			"build:",
+			"  script:",
+			"    - docker build -t a:1 apps/a",
+			`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+			"    - docker build -t b:1 apps/b",
+			"    - docker push a:1 && docker push b:1",
+		),
+	}, "exit", 4, "source")
+
+	// A config whose targets setup cannot read: the gate scans every target it has.
+	files := npm(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - npm ci", "    - npm run build", "    - ./deploy.sh")
+	files["shearbolt.yaml"] = "version: 1\ntargets: [{name: source, source: .}]\n"
+	stopRefused(t, files, "exit", 3, "every target in shearbolt.yaml")
+
+	p := setup.ComputeWith(setup.Options{Root: tree(t, npm("    - npm ci", "    - npm run build", "    - ./deploy.sh")), Yes: true, Version: "1.2.3"}, badStops{})
+	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" })
+	if p.Error != nil || slices.ContainsFunc(p.Changes, func(c plan.FileChange) bool { return c.Path == file }) || i < 0 || !strings.Contains(p.Notes[i].Message, "a command that can stop the job early is not in the job") {
+		t.Errorf("error %v, changes %+v, notes %v", p.Error, p.Changes, noteCodes(p))
+	}
+}
+
+// badStops is listCI with a stop index past the end of each job's first item.
+type badStops struct{ listCI }
+
+func (b badStops) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
+	js, ns, err := b.listCI.Jobs(r, f, src, classify)
+	for i := range js {
+		js[i].Steps[0].Stops = append(js[i].Steps[0].Stops, len(js[i].Steps[0].Commands))
+	}
+	return js, ns, err
 }
