@@ -1040,7 +1040,7 @@ func TestGatesBuildProjectDefaultFollowsExistingGate(t *testing.T) {
 // composeOnly is the compose-only project attachCompose makes for compose files that no npm or
 // Rust project contains.
 func composeOnly(files ...string) plan.Project {
-	return plan.Project{Ecosystem: "compose", Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
+	return plan.Project{Ecosystem: "docker", Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
 }
 
 // A compose-only project never owns builds. With an npm project in web/ and a root compose file,
@@ -1060,7 +1060,7 @@ func TestGatesComposeOnlyOwnsNoBuilds(t *testing.T) {
 	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:."}) {
 		t.Fatalf("questions: %v", got)
 	}
-	if qs[0].Default != ".,web" || qs[0].Options[0].Label != ". (compose)" {
+	if qs[0].Default != ".,web" || qs[0].Options[0].Label != ". (docker)" {
 		t.Fatalf("projects: %+v", qs[0])
 	}
 	if gj := qs[1]; gj.Prompt != "Which job should check the compose images of repo?" || gj.UnlessChosen != nil || gj.Project != "." || gj.Default != jobs[0].ID {

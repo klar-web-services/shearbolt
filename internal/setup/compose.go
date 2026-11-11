@@ -91,7 +91,7 @@ func attachCompose(projects []plan.Project, files []string, root string) []plan.
 	}
 	if len(rest) > 0 {
 		projects = append(projects, plan.Project{
-			Ecosystem: "compose",
+			Ecosystem: plan.EcosystemDocker,
 			Dir:       ".",
 			Name:      filepath.Base(root),
 			Lockfiles: []string{},

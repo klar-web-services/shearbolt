@@ -196,7 +196,7 @@ func TestSetupPlanJSONWritesNothing(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
 	p := decodePlan(t, out)
-	if !p.Complete || p.Error != nil || p.SchemaVersion != 1 || p.ShearboltVersion != "1.2.3" {
+	if !p.Complete || p.Error != nil || p.SchemaVersion != 2 || p.ShearboltVersion != "1.2.3" {
 		t.Errorf("plan = complete %v, error %+v, schema %d, version %q", p.Complete, p.Error, p.SchemaVersion, p.ShearboltVersion)
 	}
 	var paths []string
@@ -492,6 +492,17 @@ func TestSetupSecondRunNothingToChange(t *testing.T) {
 	code, out, errb = setupCmd(t, setupDeps(true, ""))
 	if code != 0 || !strings.HasSuffix(out, "Shearbolt is already set up here; nothing to change.\n"+reviewLine) || strings.Contains(out, "Apply these changes") {
 		t.Errorf("interactive second run: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+}
+
+func TestSetupFoundLineComposeOnlyIsDocker(t *testing.T) {
+	fixtureRepo(t, "compose-github")
+	code, out, errb := setupCmd(t, setupDeps(false, ""), "--plan")
+	if code != 0 {
+		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	if !strings.Contains(out, " (docker) in .\n") || !strings.Contains(out, "Found: ") || strings.Contains(out, "(compose)") {
+		t.Errorf("stdout lacks a docker Found line:\n%s", out)
 	}
 }
 

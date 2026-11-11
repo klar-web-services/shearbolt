@@ -8,7 +8,7 @@ import (
 
 func TestPlanJSON(t *testing.T) {
 	p := Plan{
-		SchemaVersion:    1,
+		SchemaVersion:    2,
 		ShearboltVersion: "1.2.3",
 		Projects:         []Project{{Ecosystem: "npm", Dir: ".", Name: "web", Lockfiles: []string{"package-lock.json"}, Binaries: []string{"x"}, Excludes: []string{"y/"}}},
 		CI:               []CIFile{{System: "github", File: ".github/workflows/ci.yml"}},
@@ -21,7 +21,7 @@ func TestPlanJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schemaVersion":1,"shearboltVersion":"1.2.3",` +
+	want := `{"schemaVersion":2,"shearboltVersion":"1.2.3",` +
 		`"projects":[{"ecosystem":"npm","dir":".","name":"web","lockfiles":["package-lock.json"]}],` +
 		`"ci":[{"system":"github","file":".github/workflows/ci.yml"}],` +
 		`"questions":[{"id":"gate-job:.","prompt":"Which job should check the lockfiles of .?","kind":"choice","options":[{"value":".github/workflows/ci.yml#test","label":"ci.yml: test"}],"default":".github/workflows/ci.yml#test","project":"."}],` +
@@ -34,14 +34,14 @@ func TestPlanJSON(t *testing.T) {
 }
 
 func TestPlanJSONEmptyListsAndError(t *testing.T) {
-	p := Plan{SchemaVersion: 1, ShearboltVersion: "dev", Error: &Note{Code: "NO_CI", Message: "a && b"}}
+	p := Plan{SchemaVersion: 2, ShearboltVersion: "dev", Error: &Note{Code: "NO_CI", Message: "a && b"}}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(p); err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schemaVersion":1,"shearboltVersion":"dev","projects":[],"ci":[],"questions":[],"complete":false,"changes":[],"notes":[],"error":{"code":"NO_CI","message":"a && b"}}` + "\n"
+	want := `{"schemaVersion":2,"shearboltVersion":"dev","projects":[],"ci":[],"questions":[],"complete":false,"changes":[],"notes":[],"error":{"code":"NO_CI","message":"a && b"}}` + "\n"
 	if buf.String() != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", buf.String(), want)
 	}

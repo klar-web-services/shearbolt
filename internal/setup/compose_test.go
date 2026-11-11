@@ -77,7 +77,7 @@ func TestAttachCompose(t *testing.T) {
 	}
 
 	got = attachCompose([]plan.Project{proj("npm", "web")}, []string{"compose.yml", "web/compose.yml"}, "/r/repo")
-	if len(got) != 2 || got[0].Dir != "." || got[0].Ecosystem != "compose" || !slices.Equal(got[0].Compose, []string{"compose.yml"}) ||
+	if len(got) != 2 || got[0].Dir != "." || got[0].Ecosystem != "docker" || !slices.Equal(got[0].Compose, []string{"compose.yml"}) ||
 		got[1].Dir != "web" || !slices.Equal(got[1].Compose, []string{"compose.yml"}) {
 		t.Errorf("web: %+v", got)
 	}
@@ -96,7 +96,7 @@ func TestAttachCompose(t *testing.T) {
 	}
 
 	got = attachCompose(nil, []string{"compose.yml"}, "/r/shop")
-	if len(got) != 1 || got[0].Name != "shop" || got[0].Dir != "." || got[0].Ecosystem != "compose" {
+	if len(got) != 1 || got[0].Name != "shop" || got[0].Dir != "." || got[0].Ecosystem != "docker" {
 		t.Errorf("none: %+v", got)
 	}
 }
@@ -105,7 +105,7 @@ func TestComputeComposeProjects(t *testing.T) {
 	ci := &fakeCI{files: []string{fakeCIFile}}
 	root := writeTree(t, map[string]string{"compose.yml": composeImage, fakeCIFile: "build: make\n"})
 	p := computeWith(t, root, ci, nil)
-	if p.Error != nil || len(p.Projects) != 1 || p.Projects[0].Ecosystem != "compose" ||
+	if p.Error != nil || len(p.Projects) != 1 || p.Projects[0].Ecosystem != "docker" ||
 		!slices.Equal(p.Projects[0].Compose, []string{"compose.yml"}) || p.Projects[0].Name != filepath.Base(root) {
 		t.Fatalf("plan = %+v, projects = %+v", p.Error, p.Projects)
 	}

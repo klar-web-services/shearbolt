@@ -311,7 +311,7 @@ func TestSetupChangesSortedWithDiffBaseMode(t *testing.T) {
 	if !hasCode(p.Notes, "TAG_ADDED") {
 		t.Errorf("Edit's notes are missing: %v", codes(p.Notes))
 	}
-	if !p.Complete || p.ShearboltVersion != "1.2.3" || p.SchemaVersion != 1 || len(p.CI) != 1 || p.CI[0] != (plan.CIFile{System: "github", File: fakeCIFile}) {
+	if !p.Complete || p.ShearboltVersion != "1.2.3" || p.SchemaVersion != 2 || len(p.CI) != 1 || p.CI[0] != (plan.CIFile{System: "github", File: fakeCIFile}) {
 		t.Errorf("plan header = %+v", p)
 	}
 }

@@ -367,7 +367,7 @@ func nothingToChange(p *plan.Plan) string {
 // fail reports an error with code and message, and returns exit code 2. p is the plan computed
 // so far (nil before Compute).
 func (s setupRun) fail(p *plan.Plan, code, msg string) int {
-	q := plan.Plan{SchemaVersion: 1, ShearboltVersion: s.d.version}
+	q := plan.Plan{SchemaVersion: plan.SchemaVersion, ShearboltVersion: s.d.version}
 	if p != nil {
 		q = *p
 	}

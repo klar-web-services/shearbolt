@@ -71,7 +71,7 @@ type ciSource struct {
 }
 
 func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
-	p := &plan.Plan{SchemaVersion: 1, ShearboltVersion: o.Version}
+	p := &plan.Plan{SchemaVersion: plan.SchemaVersion, ShearboltVersion: o.Version}
 	fail := func(code, msg, file string) *plan.Plan {
 		p.Error = &plan.Note{Code: code, Message: msg, File: file}
 		return p

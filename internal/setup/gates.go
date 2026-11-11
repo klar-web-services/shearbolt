@@ -65,7 +65,7 @@ type gateModel struct {
 func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *gateModel {
 	m := &gateModel{projects: projects, jobs: jobs, ciFiles: ciFiles}
 	for _, p := range projects {
-		if p.Ecosystem != "compose" {
+		if p.Ecosystem != plan.EcosystemDocker {
 			m.owners = append(m.owners, p)
 		}
 	}
@@ -209,7 +209,7 @@ func (m *gateModel) questions() []plan.Question {
 			Project:      p.Dir,
 			UnlessChosen: bp,
 		}
-		if p.Ecosystem == "compose" {
+		if p.Ecosystem == plan.EcosystemDocker {
 			q.Prompt = fmt.Sprintf("Which job should check the compose images of %s?", projectLabel(p))
 			q.UnlessChosen = nil
 		}
@@ -220,7 +220,7 @@ func (m *gateModel) questions() []plan.Question {
 				def = j
 			}
 		}
-		if def < 0 && p.Ecosystem == "compose" {
+		if def < 0 && p.Ecosystem == plan.EcosystemDocker {
 			// Compose images ship with the deploy: the first job that pushes or deploys.
 			for j := range m.jobs {
 				if m.firstPush(j) != never {
@@ -428,7 +428,7 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 		if len(m.jobs) == 0 {
 			g := plan.Gate{Project: p, Config: configFile(p), Version: version}
 			where := "the job that builds it, after the build and before any push"
-			if p.Ecosystem == "compose" {
+			if p.Ecosystem == plan.EcosystemDocker {
 				where = "a job that runs before any deploy"
 			}
 			msg := fmt.Sprintf("no gate could be placed automatically for %s; add this by hand to %s:", projectLabel(p), where)
@@ -475,7 +475,7 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				gp, notes := m.placeAtStart(p, j, version)
 				pp.gates = append(pp.gates, gp)
 				msg := fmt.Sprintf("No build step was found for %s, so the gate in %s checks its lockfiles.", projectLabel(p), m.jobs[j].Label)
-				if p.Ecosystem == "compose" {
+				if p.Ecosystem == plan.EcosystemDocker {
 					msg = fmt.Sprintf("No build belongs to %s, so the gate in %s checks its compose images.", projectLabel(p), m.jobs[j].Label)
 				}
 				pl.notes = append(pl.notes, plan.Note{Code: "NO_BUILD_FOUND", Message: msg, File: gp.file})
@@ -889,7 +889,7 @@ func (pp *projectPlan) plan() {
 	for _, f := range p.Compose {
 		pp.targets = append(pp.targets, config.Target{Name: uniqueName(composeName(f), taken), Compose: f})
 	}
-	if p.Ecosystem != "compose" {
+	if p.Ecosystem != plan.EcosystemDocker {
 		pp.source = "source"
 		pp.targets = append(pp.targets, config.Target{Name: pp.source, Source: ".", Exclude: slices.Clone(p.Excludes)})
 	}

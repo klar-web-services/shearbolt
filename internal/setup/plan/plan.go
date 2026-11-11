@@ -14,6 +14,12 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
+// SchemaVersion is the plan JSON schema version; changing the contract bumps it.
+const SchemaVersion = 2
+
+// EcosystemDocker is the ecosystem of the root project that owns compose files (and image builds).
+const EcosystemDocker = "docker"
+
 // Context is what a command sees when it runs.
 type Context struct {
 	// Dir is the working directory: a clean repo-relative path ("." for the root), or "" when it
@@ -91,7 +97,7 @@ type Classified struct {
 
 // Project is one protectable project (R1).
 type Project struct {
-	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "compose"
+	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "docker"
 	Dir       string   `json:"dir"`       // "." for the root; also the project's ID
 	Name      string   `json:"name"`
 	Lockfiles []string `json:"lockfiles"`           // relative to Dir
@@ -233,7 +239,7 @@ type Install struct {
 
 // Plan is the result of setup: everything it found, asks and would change.
 type Plan struct {
-	SchemaVersion    int          `json:"schemaVersion"` // 1
+	SchemaVersion    int          `json:"schemaVersion"` // 2
 	ShearboltVersion string       `json:"shearboltVersion"`
 	Projects         []Project    `json:"projects"`
 	CI               []CIFile     `json:"ci"`
