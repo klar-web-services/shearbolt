@@ -408,7 +408,7 @@ func TestConfigNewFileCompose(t *testing.T) {
 
 func TestConfigNewFileComposeOnly(t *testing.T) {
 	r := repo(t, nil)
-	p := composeOnly("docker-compose.yml", "test/compose.yml")
+	p := rootDocker("docker-compose.yml", "test/compose.yml")
 	planned := []config.Target{{Name: "docker-compose", Compose: "docker-compose.yml"}, {Name: "test-compose", Compose: "test/compose.yml"}}
 	ch, _, _, _, notes := configChange(r, p, planned)
 	if ch == nil || len(notes) != 1 || notes[0].Code != "COMPOSE_ADDED" {

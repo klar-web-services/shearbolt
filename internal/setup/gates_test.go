@@ -1038,11 +1038,11 @@ func TestGatesBuildProjectDefaultFollowsExistingGate(t *testing.T) {
 	}
 }
 
-// composeOnly is the root project (ecosystem docker) that attachCompose makes for compose files
+// rootDocker is the root project (ecosystem docker) that attachCompose makes for compose files
 // that no npm or Rust project contains. Without files, it is the one attachImageBuilds makes for
 // the image builds of a repository without an npm or Rust project.
-func composeOnly(files ...string) plan.Project {
-	return plan.Project{Ecosystem: "docker", Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
+func rootDocker(files ...string) plan.Project {
+	return plan.Project{Ecosystem: plan.EcosystemDocker, Dir: ".", Name: "repo", Lockfiles: []string{}, Compose: files}
 }
 
 // A compose-only project never owns builds. With an npm project in web/ and a root compose file,
@@ -1057,7 +1057,7 @@ func TestGatesComposeOnlyOwnsNoBuilds(t *testing.T) {
 	}
 	before, _, plBefore := planGates(t, r, []plan.Project{web}, jobs, nil)
 
-	projects := []plan.Project{composeOnly("docker-compose.yml"), web}
+	projects := []plan.Project{rootDocker("docker-compose.yml"), web}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
 	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:."}) {
 		t.Fatalf("questions: %v", got)
@@ -1107,7 +1107,7 @@ func TestGatesComposeOnlyOwnsNoBuilds(t *testing.T) {
 // compose-only project after the build does not become the default.
 func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
 	r := repo(t, map[string]string{"docker/Dockerfile": "FROM x\n", "compose.yml": composeImage})
-	projects := []plan.Project{composeOnly("compose.yml"), npmProject("apps/a", "a"), npmProject("apps/b", "b")}
+	projects := []plan.Project{rootDocker("compose.yml"), npmProject("apps/a", "a"), npmProject("apps/b", "b")}
 	bScan := run(`"$HOME/.local/bin/shearbolt" scan --ci --config apps/b/shearbolt.yaml`)
 	jobs := []plan.Job{mkJob(t, r, "ci", run(`cd "$X" && npm run build`), scanStep)}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
@@ -1149,7 +1149,7 @@ func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
 // before the compose target, and neither BUILD_NOT_GATED nor the gate-job question remains.
 func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
-	projects := []plan.Project{composeOnly("compose.yml")}
+	projects := []plan.Project{rootDocker("compose.yml")}
 	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."),
 		run("docker push ghcr.io/acme/app:1"))}
 	if qs := newGateModel(projects, jobs, []string{ciFile}).questions(); len(qs) != 0 {
@@ -1180,7 +1180,7 @@ func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 func TestGatesComposeGateJobDefault(t *testing.T) {
 	r := repo(t, map[string]string{"compose.yml": composeImage})
 	checkout := fstep{uses: "actions/checkout@v5"}
-	projects := []plan.Project{composeOnly("compose.yml"), npmProject("apps/a", "a")}
+	projects := []plan.Project{rootDocker("compose.yml"), npmProject("apps/a", "a")}
 	jobs := []plan.Job{
 		mkJob(t, r, "test", checkout, run("docker compose up -d")),
 		mkJob(t, r, "deploy", checkout, run("docker stack deploy -c compose.yml app")),
@@ -1261,7 +1261,7 @@ func TestComputeNoDeploySeen(t *testing.T) {
 // collisions are numbered. Compose targets come after file targets and before source, and a
 // compose-only project has no source target.
 func TestGatesComposeTargetNames(t *testing.T) {
-	pp := &projectPlan{project: composeOnly("docker-compose.yml", "test/compose.yml", "compose.yml", "compose.yaml")}
+	pp := &projectPlan{project: rootDocker("docker-compose.yml", "test/compose.yml", "compose.yml", "compose.yaml")}
 	pp.plan()
 	var got []string
 	for _, tg := range pp.targets {
@@ -1312,7 +1312,7 @@ func TestGatesComposeTargetsInSubsets(t *testing.T) {
 
 // A compose-only project has no build: the by-hand note says where the gate goes instead.
 func TestGatesNoEditableJobComposeOnly(t *testing.T) {
-	m := newGateModel([]plan.Project{composeOnly("compose.yml")}, nil, []string{ciFile})
+	m := newGateModel([]plan.Project{rootDocker("compose.yml")}, nil, []string{ciFile})
 	pl := m.place(resolve(t, m.questions(), nil), "1.2.3", fakeSnippet)
 	n := noteOf(t, pl.notes, "NO_GATE_PLACED")
 	want := "no gate could be placed automatically for "
@@ -1327,7 +1327,7 @@ func TestGatesNoEditableJobComposeOnly(t *testing.T) {
 // question is asked.
 func TestGatesRootOwnsImageBuild(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
-	projects := []plan.Project{composeOnly()}
+	projects := []plan.Project{rootDocker()}
 	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"},
 		run("docker build -t ghcr.io/acme/edge:latest ."), run("docker push ghcr.io/acme/edge:latest"))}
 	m := newGateModel(projects, jobs, []string{ciFile})
@@ -1362,7 +1362,7 @@ func TestGatesRootOwnsImageBuild(t *testing.T) {
 // keeps BUILD_NOT_GATED, and an npm build (other) is unowned and gets no note.
 func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
-	projects := []plan.Project{composeOnly()}
+	projects := []plan.Project{rootDocker()}
 	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"},
 		run("docker build -t ghcr.io/acme/edge:latest ."), run("cargo build --release"), run("npm run build"),
 		run("docker push ghcr.io/acme/edge:latest"))}
@@ -1396,7 +1396,7 @@ func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 	// Without an image build, the root project owns nothing: its compose images get the gate-job
 	// question, and the cargo build keeps BUILD_NOT_GATED.
 	r = repo(t, map[string]string{"compose.yml": composeImage})
-	projects = []plan.Project{composeOnly("compose.yml")}
+	projects = []plan.Project{rootDocker("compose.yml")}
 	jobs = []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("cargo build --release"), run("docker stack deploy -c compose.yml app"))}
 	if got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions()); !slices.Equal(got, []string{"gate-job:."}) {
 		t.Fatalf("questions: %v", got)
@@ -1416,15 +1416,16 @@ func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 
 // IP-5: a job whose only root build cannot be gated gets no gate when the root project has no
 // compose file, because its empty target list would scan an image the job never built. The
-// build's note says so, and no note describes the gate that is not there. With a compose file,
-// the job gets a gate before the build that checks the compose images.
+// build's note says so, no note describes where the missing gate runs, and an existing gate after
+// the push gets GATE_AFTER_PUSH asking for its removal. With a compose file, the job gets a gate
+// before the build that checks the compose images.
 func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "compose.yml": composeImage})
 	jobs := []plan.Job{
 		mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1")),
 		mkJob(t, r, "b", fstep{uses: "actions/checkout@v5"}, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi ."), scanStep),
 	}
-	gates, planned, pl := planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+	gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
 	if len(gates) != 1 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 || gates[0].Targets != nil {
 		t.Fatalf("gates: %+v", gates)
 	}
@@ -1436,20 +1437,22 @@ func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 	if got := noteCodes(pl.notes, "MULTI_PLATFORM"); !slices.Equal(got, want) {
 		t.Fatalf("MULTI_PLATFORM: %+v", got)
 	}
-	if hasCode(pl.notes, "GATE_AFTER_PUSH") || hasCode(pl.notes, "PUSH_BEFORE_GATE") {
-		t.Fatalf("notes about a gate that is not placed: %v", pl.notes)
+	want = []plan.Note{{Code: "GATE_AFTER_PUSH", File: ciFile, Line: 300,
+		Message: "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build"}}
+	if got := noteCodes(pl.notes, "GATE_AFTER_PUSH"); !slices.Equal(got, want) || hasCode(pl.notes, "PUSH_BEFORE_GATE") {
+		t.Fatalf("GATE_AFTER_PUSH %+v, notes %v", got, pl.notes)
 	}
 
 	// A build that pushes through its output: PUSH_IN_BUILD says the same.
 	jobs[1] = mkJob(t, r, "b", run("docker buildx build -o type=registry -t ghcr.io/acme/edge:out ."))
-	gates, _, pl = planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+	gates, _, pl = planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
 	if n := noteOf(t, pl.notes, "PUSH_IN_BUILD"); len(gates) != 1 || !strings.Contains(n.Message, "; no gate is placed for it in this job. Build with --load") {
 		t.Fatalf("PUSH_IN_BUILD: gates %+v, note %+v", gates, n)
 	}
 
 	// With a compose file, b's gate runs before its build and checks only the compose images.
 	jobs[1] = mkJob(t, r, "b", fstep{uses: "actions/checkout@v5"}, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi ."))
-	gates, planned, pl = planGates(t, r, []plan.Project{composeOnly("compose.yml")}, jobs, nil)
+	gates, planned, pl = planGates(t, r, []plan.Project{rootDocker("compose.yml")}, jobs, nil)
 	if len(gates) != 2 || gates[0].Job != jobs[0].ID || gates[0].Targets != nil {
 		t.Fatalf("gates: %+v", gates)
 	}
@@ -1465,8 +1468,9 @@ func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 }
 
 // A job whose only root build runs after a push (BUILD_AFTER_PUSH) gets no gate when the root
-// project has no compose file, and no PUSH_BEFORE_GATE or GATE_AFTER_PUSH for it. Setup finds no
-// image build inside a called script, so the build that pushes first is an action here.
+// project has no compose file: no PUSH_BEFORE_GATE, and a GATE_AFTER_PUSH that asks for the late
+// gate's removal. Setup finds no image build inside a called script, so the build that runs at
+// the push is an action here.
 func TestGatesRootDropsGateAfterPush(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
 	release := fstep{uses: "acme/release-action@v1", push: true, builds: []plan.Build{
@@ -1478,13 +1482,19 @@ func TestGatesRootDropsGateAfterPush(t *testing.T) {
 		steps []fstep
 		codes []string // the notes of job b
 	}{
-		{"only build", []fstep{run("docker push ghcr.io/acme/old:1"), release, scanStep}, []string{"BUILD_AFTER_PUSH"}},
+		// Job b: a push before its first root build, which a placed gate would report as
+		// PUSH_BEFORE_GATE; an action that builds the image and pushes in one step, so its build
+		// runs at the push (BUILD_AFTER_PUSH) and is the job's only root build; and an existing gate
+		// after that push (GATE_AFTER_PUSH).
+		{"only build", []fstep{run("docker push ghcr.io/acme/old:1"), release, scanStep}, []string{"GATE_AFTER_PUSH", "BUILD_AFTER_PUSH"}},
+		// Job b: a build that pushes through its output, then a gateable build after that push,
+		// then an existing gate after the push.
 		{"after its own push", []fstep{run("docker buildx build -o type=registry -t ghcr.io/acme/edge:cache ."), run("docker build -t ghcr.io/acme/edge:2 ."), scanStep},
-			[]string{"PUSH_IN_BUILD", "BUILD_AFTER_PUSH"}},
+			[]string{"GATE_AFTER_PUSH", "PUSH_IN_BUILD", "BUILD_AFTER_PUSH"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			jobs := []plan.Job{a, mkJob(t, r, "b", tc.steps...)}
-			gates, planned, pl := planGates(t, r, []plan.Project{composeOnly()}, jobs, nil)
+			gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
 			if len(gates) != 1 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
 				t.Fatalf("gates: %+v", gates)
 			}
@@ -1495,11 +1505,41 @@ func TestGatesRootDropsGateAfterPush(t *testing.T) {
 				t.Fatalf("notes: %v", pl.notes)
 			}
 			// No gate is placed in b, so the note names none.
-			if n := noteOf(t, pl.notes, "BUILD_AFTER_PUSH"); n.File != ciFile || n.Line != 200 || strings.Contains(n.Message, "the gate, which runs before") ||
+			if n := noteOf(t, pl.notes, "BUILD_AFTER_PUSH"); n.File != ciFile || n.Line != 200 ||
 				n.Message != "this build runs after a push or deploy in the same job, so no gate can run between it and that push and its image is not scanned; build before you push, or in a separate job, to scan it" {
 				t.Fatalf("BUILD_AFTER_PUSH: %+v", n)
 			}
+			if n := noteOf(t, pl.notes, "GATE_AFTER_PUSH"); n.File != ciFile || n.Line != 300 || !strings.HasPrefix(n.Message, "the existing Shearbolt gate in this job runs after a push") {
+				t.Fatalf("GATE_AFTER_PUSH: %+v", n)
+			}
 		})
+	}
+}
+
+// An existing root gate before the push, in a job with no gateable image and no compose file,
+// is kept as it is (drop needs e == nil), and the note on the build after it asks for its
+// removal: it scans no image built here, and its target list now covers the other jobs' images.
+func TestGatesRootExistingGateWithNothingToScan(t *testing.T) {
+	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
+	jobs := []plan.Job{
+		mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1")),
+		mkJob(t, r, "b", scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")),
+	}
+	gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
+	if len(gates) != 2 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
+		t.Fatalf("gates: %+v", gates)
+	}
+	// Setup leaves the gate alone; with no target of its own, it scans every target.
+	if g := gates[1]; g.Job != jobs[1].ID || g.Existing == nil || g.At.Step != 0 || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
+		t.Fatalf("b's gate: %s", dumpGate(g))
+	}
+	if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
+		t.Fatalf("planned: %v", got)
+	}
+	want := []plan.Note{{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
+		Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}}
+	if got := noteCodes(pl.notes, "MULTI_PLATFORM"); !slices.Equal(got, want) {
+		t.Fatalf("MULTI_PLATFORM: %+v", got)
 	}
 }
 
@@ -1521,16 +1561,16 @@ func TestGatesRootNoteWording(t *testing.T) {
 	const mpBefore = "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; "
 	const mpAfter = "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image"
 
-	if g, msg := multiNote(composeOnly(), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks only the images built before it" {
+	if g, msg := multiNote(rootDocker(), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks only the images built before it" {
 		t.Fatalf("gate before: %s, %q", dumpGate(g), msg)
 	}
-	if g, msg := multiNote(composeOnly("compose.yml"), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks its compose images" {
+	if g, msg := multiNote(rootDocker("compose.yml"), gateable, multi); g.At.Step != 0 || msg != mpBefore+"the gate runs before it and checks its compose images" {
 		t.Fatalf("gate before, compose: %s, %q", dumpGate(g), msg)
 	}
-	if g, msg := multiNote(composeOnly(), multi, gateable); g.At.Step != 1 || msg != mpAfter {
+	if g, msg := multiNote(rootDocker(), multi, gateable); g.At.Step != 1 || msg != mpAfter {
 		t.Fatalf("gate after: %s, %q", dumpGate(g), msg)
 	}
-	if g, msg := multiNote(composeOnly("compose.yml"), multi, gateable); g.At.Step != 1 || msg != mpAfter+"; its compose images are still checked" {
+	if g, msg := multiNote(rootDocker("compose.yml"), multi, gateable); g.At.Step != 1 || msg != mpAfter+"; its compose images are still checked" {
 		t.Fatalf("gate after, compose: %s, %q", dumpGate(g), msg)
 	}
 }

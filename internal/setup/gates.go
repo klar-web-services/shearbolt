@@ -147,15 +147,15 @@ func (m *gateModel) prefixOwner(dir string) string {
 	return best
 }
 
-// questions returns R3's questions: projects (with more than one detected project, compose-only
-// included), then build-project by file and line (options: the owners and none; default: the
-// owner whose existing gate follows the build, else the first owner), then gate-job by project.
-// A gate-job question is asked for each project without an attributed build when there is an
-// editable job; its default is the first job that already holds the project's gate, otherwise
-// the first job. A compose-only project's gate-job asks which job checks its compose images; its
-// default without an existing gate is the first job that pushes or deploys (then the first job),
-// so the deploy is gated. No build-project answer makes it inapplicable: no build can be chosen
-// for that project.
+// questions returns R3's questions: projects (with more than one detected project, the root
+// (docker) project included), then build-project by file and line (options: the owners and none;
+// default: the owner whose existing gate follows the build, else the first owner), then gate-job
+// by project. A gate-job question is asked for each project without an attributed build when
+// there is an editable job; its default is the first job that already holds the project's gate,
+// otherwise the first job. The root (docker) project's gate-job, asked only when it owns no
+// build, asks which job checks its compose images; its default without an existing gate is the
+// first job that pushes or deploys (then the first job), so the deploy is gated. No
+// build-project answer makes it inapplicable: no build can be chosen for that project.
 func (m *gateModel) questions() []plan.Question {
 	var qs []plan.Question
 	if len(m.projects) > 1 {
@@ -247,9 +247,9 @@ func (m *gateModel) questions() []plan.Question {
 }
 
 // gateAfter returns the owner of the existing scan gate that follows build b most closely in its
-// job, among the gates of owners; "" when there is none. Gates of a compose-only project are
-// passed over, so the default is always one of the build-project options (plan.Resolve does not
-// check defaults).
+// job, among the gates of owners; "" when there is none. Only owners' gates count (the root
+// project's are passed over where npm or Rust projects own the builds), so the default is always
+// one of the build-project options (plan.Resolve does not check defaults).
 func (m *gateModel) gateAfter(b located) string {
 	best, bestAt := "", never
 	for s, st := range m.jobs[b.job].Steps {
@@ -332,15 +332,16 @@ func existingGate(job plan.Job, dir string, limit at) (found, late *plan.GateCmd
 	return found, late
 }
 
-// lateGateNote is GATE_AFTER_PUSH for an existing gate of p that runs after a push.
-func lateGateNote(p plan.Project, late *plan.GateCmd) plan.Note {
-	return plan.Note{
-		Code: "GATE_AFTER_PUSH",
-		Message: fmt.Sprintf("the existing Shearbolt gate for %s at %s:%d runs after a push or deploy in its job, so it cannot stop what is pushed; setup adds a gate before the push and leaves this one alone. Remove it once the new gate is in place.",
-			projectLabel(p), late.Pos.File, late.Pos.Line),
-		File: late.Pos.File,
-		Line: late.Pos.Line,
+// lateGateNote is GATE_AFTER_PUSH for an existing gate of p that runs after a push. dropped says
+// that setup places no gate in that job (a root project's job with nothing to scan): the late
+// gate then scans images the job does not build, so the note asks for its removal.
+func lateGateNote(p plan.Project, late *plan.GateCmd, dropped bool) plan.Note {
+	msg := fmt.Sprintf("the existing Shearbolt gate for %s at %s:%d runs after a push or deploy in its job, so it cannot stop what is pushed; setup adds a gate before the push and leaves this one alone. Remove it once the new gate is in place.",
+		projectLabel(p), late.Pos.File, late.Pos.Line)
+	if dropped {
+		msg = "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build"
 	}
+	return plan.Note{Code: "GATE_AFTER_PUSH", Message: msg, File: late.Pos.File, Line: late.Pos.Line}
 }
 
 // gatePlace is one gate before its targets are known.
@@ -575,7 +576,7 @@ func (m *gateModel) placeAtStart(p plan.Project, j int, version string) (*gatePl
 	case e != nil:
 		g.Existing, g.At, g.Before = e, e.Pos, false
 	case late != nil:
-		notes = append(notes, lateGateNote(p, late))
+		notes = append(notes, lateGateNote(p, late, false))
 	}
 	return &gatePlace{gate: g, file: file}, notes
 }
@@ -588,8 +589,9 @@ func isCheckout(uses string) bool {
 // placeIn places project p's gate in job j, whose gated builds are g, in order (R4 rules 1-3
 // and 7). firstPush is the first push at or after the first build in g; a Via build in a
 // command that pushes counts as after it. B is the gateable builds of g before firstPush. The
-// gate goes after the last build in B, or, when B is empty, before the first build in g and
-// checks the source only. An existing gate of p strictly before firstPush is updated in place
+// gate goes after the last build in B, or, when B is empty, before the first build in g, where it
+// checks only the source (the root project has none: its compose files, or no gate at all, see
+// below). An existing gate of p strictly before firstPush is updated in place
 // instead (the last one); builds of B after it get BUILD_AFTER_GATE. An existing gate after
 // firstPush cannot stop the push: it is left alone, gets GATE_AFTER_PUSH, and a new gate is
 // placed. Builds of g that are not gated get MULTI_PLATFORM or PUSH_IN_BUILD (image builds that
@@ -597,9 +599,11 @@ func isCheckout(uses string) bool {
 //
 // The root project has no source to check. Its gate is dropped (gatePlace.drop) when B is empty,
 // it has no compose file and there is no existing gate: its empty target list would mean every
-// target, so it would scan an image this job never built. A dropped gate returns only the notes
-// of its builds, which say that no gate is placed; the notes about where the gate runs
-// (GATE_AFTER_PUSH, orderNotes) are left out.
+// target, so it would scan an image this job never built. A dropped gate returns the notes of its
+// builds, which say that no gate is placed, and GATE_AFTER_PUSH for an existing gate after the
+// push, which asks for that gate's removal; orderNotes, about where the gate runs, are left out.
+// An existing root gate before the push that keeps no gated image, without compose files, is
+// left alone, and the notes of the builds after it ask for its removal too.
 func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) (*gatePlace, []plan.Note) {
 	file := m.jobFile(j)
 	inG := func(b located) bool { return slices.ContainsFunc(g, func(x located) bool { return x.i == b.i }) }
@@ -636,8 +640,20 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 	e, late := existingGate(m.jobs[j], p.Dir, firstPush)
 	root := p.Ecosystem == plan.EcosystemDocker
 	drop := root && len(bset) == 0 && len(p.Compose) == 0 && e == nil
-	if e == nil && late != nil && !drop {
-		notes = append(notes, lateGateNote(p, late))
+	if e == nil && late != nil {
+		notes = append(notes, lateGateNote(p, late, drop))
+	}
+	// The endings of the notes on builds the gate does not scan: what a gate after a
+	// multi-platform build still checks, and why a build after the push is not scanned.
+	still, unscanned := "; the source lockfiles are still checked", "so the gate, which runs before that push, does not scan it"
+	switch {
+	case root && len(p.Compose) > 0:
+		still = "; its compose images are still checked"
+	case root:
+		still = ""
+	}
+	if drop {
+		unscanned = "so no gate can run between it and that push and its image is not scanned"
 	}
 	if e != nil {
 		gate.Existing, gate.At, gate.Before = e, e.Pos, false
@@ -664,7 +680,7 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		if slices.ContainsFunc(bset, func(x located) bool { return x.i == b.i }) {
 			continue
 		}
-		order, still := "the gate runs before it and checks the source lockfiles", "; the source lockfiles are still checked"
+		order := "the gate runs before it and checks the source lockfiles"
 		switch {
 		case drop:
 			order = "no gate is placed for it in this job"
@@ -672,14 +688,10 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 			order = "the gate in this job runs after it, so it does not stop this build's push"
 		case root && len(p.Compose) > 0:
 			order = "the gate runs before it and checks its compose images"
-		case root:
+		case root && len(bset) > 0:
 			order = "the gate runs before it and checks only the images built before it"
-		}
-		if root {
-			still = ""
-			if len(p.Compose) > 0 {
-				still = "; its compose images are still checked"
-			}
+		case root: // an existing gate (drop is false only because of it) that keeps no gated image
+			order = "the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"
 		}
 		switch {
 		case !gateable(b) && b.Image.OutputPush:
@@ -689,10 +701,6 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		case !gateable(b):
 			note(b, "MULTI_PLATFORM", "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image"+still)
 		case !b.at().less(firstPush) && !slices.ContainsFunc(b.Notes, func(n plan.Note) bool { return n.Code == "BUILD_AFTER_PUSH" }):
-			unscanned := "so the gate, which runs before that push, does not scan it"
-			if drop {
-				unscanned = "so no gate can run between it and that push and its image is not scanned"
-			}
 			note(b, "BUILD_AFTER_PUSH", where(b)+" runs after a push or deploy in the same job, "+unscanned+"; build before you push, or in a separate job, to scan it")
 		}
 	}
