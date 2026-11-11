@@ -1,0 +1,49 @@
+name: ci
+on:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh -n conf/check.sh || true
+  deploy:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    env:
+      IMAGE: ghcr.io/acme/edge
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish
+        id: shearbolt-build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          live=$(docker pull -q "$IMAGE:latest" >/dev/null 2>&1 && docker inspect -f '{{ index .Config.Labels "rev" }}' "$IMAGE:latest" || true)
+          if [ -n "$live" ] && git diff --quiet "$live" "$GITHUB_SHA" -- Dockerfile conf/; then
+            echo "unchanged"
+            exit 0
+          fi
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" != "$GITHUB_SHA" ]; then
+            exit 0
+          fi
+          docker build --label "rev=$GITHUB_SHA" -t "$IMAGE:latest" -t "$IMAGE:shearbolt-${{ github.sha }}" -t "$IMAGE:sha-$GITHUB_SHA" .
+          echo shearbolt-image="$IMAGE:shearbolt-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo shearbolt-reached=true >> "$GITHUB_OUTPUT"
+      - name: shearbolt
+        if: steps.shearbolt-build.outputs.shearbolt-reached != ''
+        uses: klar-web-services/shearbolt@v1
+        env:
+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}
+      - name: Publish (continued)
+        if: steps.shearbolt-build.outputs.shearbolt-reached != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          docker push -q "$IMAGE:latest"
+          docker push -q "$IMAGE:sha-$GITHUB_SHA"
