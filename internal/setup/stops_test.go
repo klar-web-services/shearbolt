@@ -20,11 +20,15 @@ func stopping(t *testing.T, files map[string]string, script string) []int {
 }
 
 // P6: exit without an argument, with 0 or with a variable, and exec with a command, can stop the
-// shell early and successfully; a literal non-zero exit fails it and does not count.
+// shell early and successfully; a literal non-zero exit fails it and does not count, and so does
+// a bare exit or exit $? right after ||.
 func TestStopsDirect(t *testing.T) {
 	for script, want := range map[string][]int{
 		"exit 0":                            {0},
 		"exit":                              {0},
+		"npm ci || exit":                    nil, // a bare exit reuses $?, the failed command's status
+		"false || { exit; }":                nil,
+		"true && exit":                      {1},
 		`exit "$code"`:                      {0},
 		"exit $?":                           {0},
 		"npm ci || exit $?":                 nil, // after ||, $? is the failed command's status
