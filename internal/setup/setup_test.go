@@ -996,3 +996,51 @@ func TestComputeNoGateableImageComposeTargetRemoved(t *testing.T) {
 		t.Fatalf("error = %+v, notes = %v", p.Error, codes(p.Notes))
 	}
 }
+
+// NO_PROJECT carries the notes that explain it. Message 2 lists the CI plugins' notes after the
+// find notes, one per line as <file>:<line>: <message>, or <file>: <message> without a line.
+func TestComputeNoProjectCarriesCINotes(t *testing.T) {
+	root := writeTree(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: "test: make test\n"})
+	ci := &fakeCI{files: []string{fakeCIFile}, jobNotes: []plan.Note{
+		{Code: "UNSUPPORTED_EDIT", File: fakeCIFile, Line: 3, Message: "this job cannot be edited"},
+		{Code: "UNSUPPORTED_EDIT", File: fakeCIFile, Message: "these jobs cannot be edited"},
+	}}
+	p := computeWith(t, root, ci, nil)
+	want := wantNoProject + "\n" + fakeCIFile + ":3: this job cannot be edited\n" + fakeCIFile + ": these jobs cannot be edited"
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" || p.Error.Message != want {
+		t.Fatalf("error = %+v", p.Error)
+	}
+
+	// A Dockerfile-only GitLab repository whose build is in an included file: setup finds no
+	// image build, and the include note says where it may be.
+	p, _ = computeRepo(t, map[string]string{
+		"Dockerfile":     "FROM nginx:1.27\n",
+		".gitlab-ci.yml": "include:\n  - local: ci/build.yml\ntest:\n  script:\n    - make test\n",
+		"ci/build.yml":   "build:\n  script:\n    - docker build -t registry.example.com/edge:latest .\n    - docker push registry.example.com/edge:latest\n",
+	})
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" || !strings.HasPrefix(p.Error.Message, wantNoProject+"\n") ||
+		!strings.Contains(p.Error.Message, "\n.gitlab-ci.yml: .gitlab-ci.yml includes other pipeline files (include:)") {
+		t.Fatalf("include: error = %+v", p.Error)
+	}
+}
+
+// Message 3 carries the find notes and the CI plugins' notes, after the notes of the builds that
+// cannot be gated.
+func TestComputeNoGateableImageCarriesNotes(t *testing.T) {
+	root := writeTree(t, map[string]string{
+		"Dockerfile":       "FROM nginx:1.27\n",
+		"app/package.json": "{}",
+		"app/bun.lockb":    "",
+		fakeCIFile:         "deploy: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:1 .\n",
+	})
+	ci := &fakeCI{files: []string{fakeCIFile}, jobNotes: []plan.Note{{Code: "UNSUPPORTED_EDIT", File: fakeCIFile, Message: "these jobs cannot be edited"}}}
+	p := computeWith(t, root, ci, nil)
+	if p.Error == nil || p.Error.Code != "NO_PROJECT" {
+		t.Fatalf("error = %+v, notes = %v", p.Error, codes(p.Notes))
+	}
+	got := strings.Split(p.Error.Message, "\n")
+	if len(got) != 4 || got[0] != wantNoGateable || !strings.HasPrefix(got[1], fakeCIFile+":1: this image build targets more than one platform") ||
+		!strings.HasPrefix(got[2], "app uses the binary bun.lockb") || got[3] != fakeCIFile+": these jobs cannot be edited" {
+		t.Fatalf("message:\n%s", p.Error.Message)
+	}
+}

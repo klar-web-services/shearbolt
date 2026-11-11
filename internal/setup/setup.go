@@ -46,11 +46,12 @@ type Options struct {
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
 
 // noProjectMessage is NO_PROJECT's message when setup finds nothing to protect. The find notes
-// follow it.
+// and the CI plugins' notes follow it (noteLine).
 const noProjectMessage = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
 // noGateableMessage is NO_PROJECT's message when CI builds images but the root project, the only
-// project, has no target to scan after placement. The notes of those builds follow it.
+// project, has no target to scan after placement. The notes of those builds follow it, then the
+// find notes and the CI plugins' notes.
 const noGateableMessage = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
 
 // noGateableCodes are the notes of image builds that the gate does not scan, which follow
@@ -103,7 +104,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	// 2. CI files and their jobs.
 	classify := newClassifier(r, ecos)
 	var files []*ciSource
-	var notes []plan.Note
+	var ciNotes []plan.Note // the CI plugins' notes
 	var parseErr *plan.Note
 	for _, ci := range cis {
 		for _, f := range ci.Files(r) {
@@ -123,7 +124,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 				continue
 			}
 			files = append(files, &ciSource{ci: ci, path: f, src: src, jobs: jobs})
-			notes = append(notes, pinSnippets(r, ci, f, o.Version, jn)...)
+			ciNotes = append(ciNotes, pinSnippets(r, ci, f, o.Version, jn)...)
 		}
 	}
 	slices.SortFunc(p.CI, func(a, b plan.CIFile) int { return strings.Compare(a.File, b.File) })
@@ -149,6 +150,9 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		for _, n := range findNotes {
 			msg += "\n" + n.Message
 		}
+		for _, n := range dedupeNotes(ciNotes) {
+			msg += "\n" + noteLine(n)
+		}
 		return fail("NO_PROJECT", msg, "")
 	}
 	if len(p.CI) == 0 {
@@ -158,7 +162,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		p.Error = parseErr
 		return p
 	}
-	notes = append(slices.Clone(findNotes), notes...)
+	notes := append(slices.Clone(findNotes), ciNotes...)
 
 	// 4. Questions (R3).
 	m := newGateModel(projects, jobs, paths)
@@ -189,8 +193,14 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		msg := noGateableMessage
 		for _, n := range dedupeNotes(pl.notes) {
 			if slices.Contains(noGateableCodes, n.Code) {
-				msg += fmt.Sprintf("\n%s:%d: %s", n.File, n.Line, n.Message)
+				msg += "\n" + noteLine(n)
 			}
+		}
+		for _, n := range findNotes {
+			msg += "\n" + n.Message
+		}
+		for _, n := range dedupeNotes(ciNotes) {
+			msg += "\n" + noteLine(n)
 		}
 		return fail("NO_PROJECT", msg, "")
 	}
@@ -379,6 +389,18 @@ func pinSnippets(r plan.Repo, ci plan.CI, file, version string, notes []plan.Not
 func unpinnedSnippet(r plan.Repo, ci plan.CI, file, version string) bool {
 	bare := ci.Snippet(r, file, plan.Gate{})
 	return ci.Snippet(r, file, plan.Gate{Version: version}) == bare && ci.Snippet(r, file, plan.Gate{Version: "1.0.0"}) != bare
+}
+
+// noteLine is note n as one line of an error message: <file>:<line>: <message>, or
+// <file>: <message> without a line, or the message alone without a file.
+func noteLine(n plan.Note) string {
+	switch {
+	case n.File != "" && n.Line > 0:
+		return fmt.Sprintf("%s:%d: %s", n.File, n.Line, n.Message)
+	case n.File != "":
+		return n.File + ": " + n.Message
+	}
+	return n.Message
 }
 
 // dedupeNotes drops exact repeats, such as the same note about a build in a called file that
