@@ -853,3 +853,28 @@ func TestAttachImageBuilds(t *testing.T) {
 		})
 	}
 }
+
+// NO_DEPLOY_SEEN also for image targets: CI that builds an image and never pushes it usually
+// means a platform builds and deploys from source, so a failed check cannot stop it.
+func TestComputeNoDeploySeenImage(t *testing.T) {
+	ci := &fakeCI{files: []string{fakeCIFile}}
+	const build = "build: docker build -t ghcr.io/acme/edge:latest .\n"
+	const push = "build: docker build -t ghcr.io/acme/edge:latest .; docker push ghcr.io/acme/edge:latest\n"
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  int
+	}{
+		{"IP-4 root project, no push", map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: build}, 1},
+		{"npm, no push", npmTree(map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: build}), 1},
+		{"root project, push", map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: push}, 0},
+		{"npm, push", npmTree(map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: push}), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := computeWith(t, writeTree(t, tc.files), ci, nil)
+			if p.Error != nil || countCode(p.Notes, "NO_DEPLOY_SEEN") != tc.want {
+				t.Fatalf("error = %+v, notes = %v", p.Error, codes(p.Notes))
+			}
+		})
+	}
+}

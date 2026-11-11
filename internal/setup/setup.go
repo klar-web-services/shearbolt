@@ -203,8 +203,9 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 
 	// 7-9. Planned targets, configs, then each gate's targets and image variables (R4 rule 8, R5).
-	// A project whose config has a compose target gets NO_DEPLOY_SEEN when no job pushes or
-	// deploys: a platform that deploys on its own is not stopped by the gate.
+	// A project whose config has a compose or image target gets NO_DEPLOY_SEEN when no job
+	// pushes or deploys: CI that builds an image and never pushes it usually means a platform
+	// builds and deploys from source on its own, and a failed check does not stop it.
 	commit := func(file string) string {
 		if f := byPath[file]; f != nil {
 			return commitExprs[f.ci.Name()]
@@ -235,7 +236,10 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		if merged == nil {
 			ts = pp.targets
 		}
-		if !pushed && slices.ContainsFunc(ts, func(t config.Target) bool { return t.Kind() == "compose" }) {
+		if !pushed && slices.ContainsFunc(ts, func(t config.Target) bool {
+			k := t.Kind()
+			return k == "compose" || k == "image"
+		}) {
 			notes = append(notes, plan.Note{Code: "NO_DEPLOY_SEEN", Message: noDeploySeenMessage, File: configFile(proj)})
 		}
 	}
