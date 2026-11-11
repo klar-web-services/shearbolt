@@ -579,3 +579,24 @@ func TestBitbucketSnippetsPinTheVersion(t *testing.T) {
 		}
 	}
 }
+
+// P12 (design §3.5): an exit before the gate ends the step's script successfully and skips the
+// gate, while later steps still run; a step whose gate checks the source is left unchanged.
+func TestBitbucketEarlyStop(t *testing.T) {
+	p, got := result(t, npmRepo(lines(
+		"pipelines:",
+		"  default:",
+		"    - step:",
+		"        name: Build",
+		"        script:",
+		`          - if [ -z "$CHANGED" ]; then exit 0; fi`,
+		"          - npm ci",
+		"          - npm run build",
+		"          - ./deploy.sh",
+	)))
+	n := notes(p, "UNSUPPORTED_EDIT")
+	msg := "the job can stop before the shearbolt gate (exit at line 6), which would skip its check of source while later jobs still run"
+	if got != "" || len(n) != 1 || !strings.Contains(n[0].Message, msg) || !strings.Contains(n[0].Message, "- "+install+"\n") || n[0].Line != 6 {
+		t.Errorf("%s:\n%s\nnotes %v", file, got, noteCodes(p))
+	}
+}

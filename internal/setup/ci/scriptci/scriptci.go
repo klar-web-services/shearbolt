@@ -1017,6 +1017,64 @@ func (e *jobEditor) before(g plan.Gate) []shell.Command {
 // The gate shares the job's shell, so a failing scan would not stop the job there.
 func (e *jobEditor) errexitOff(g plan.Gate) *shell.Command { return shelledit.ErrexitOff(e.before(g)) }
 
+// stopBefore returns the last command that can stop the job's shell early before gate g runs
+// (P12, design §3.5): its line, its name and, for a script item, where it is (at.step -1 for the
+// prelude). Without one in the items, it is the prelude's stop (GitLab's before_script), which
+// runs before every item. It runs once the splits are decided, since runsBefore needs them.
+func (e *jobEditor) stopBefore(g plan.Gate) (line int, cmd string, pos at, ok bool) {
+	for s := len(e.pj.Steps) - 1; s >= 0; s-- {
+		stops := e.pj.Steps[s].Stops
+		for k := len(stops) - 1; k >= 0; k-- {
+			c := stops[k]
+			if c < 0 || s >= len(e.s.Items) || c >= len(e.s.Items[s].Cmds) || !e.runsBefore(s, c, g) {
+				continue
+			}
+			it := &e.s.Items[s]
+			name := shelledit.StopName(it.Cmds[c])
+			if name == "" {
+				name = "exit"
+			}
+			return it.line(it.Cmds[c]), name, at{s, c}, true
+		}
+	}
+	if e.pj.PreludeStop != 0 || e.pj.PreludeStopCmd != "" {
+		return e.pj.PreludeStop, e.pj.PreludeStopCmd, at{-1, -1}, true
+	}
+	return 0, "", at{}, false
+}
+
+// skipSafe reports whether gate g may be skipped when the job's shell stops early at pos
+// (at.step -1: in the prelude, before every item): g scans only its own images, and every build
+// it gates comes after the stop (P12, condition 1 of design §3.3).
+func skipSafe(g plan.Gate, pos at) bool {
+	return g.OnlyOwnImages && !slices.ContainsFunc(g.Builds, func(b plan.Build) bool { return !pos.less(at{b.Pos.Step, b.Pos.Command}) })
+}
+
+// unchecked names what gate g would leave unchecked when the job's shell stops early at pos: the
+// targets it scans other than the images built after the stop (an image built before the stop is
+// listed), or every target when what it scans is unknown.
+func unchecked(g plan.Gate, pos at) string {
+	if g.Scans == nil {
+		return "every target in shearbolt.yaml"
+	}
+	built := map[string]bool{}
+	for _, iv := range g.Images {
+		if pos.less(at{iv.Build.Pos.Step, iv.Build.Pos.Command}) {
+			built[iv.Target] = true
+		}
+	}
+	var rest []string
+	for _, n := range g.Scans {
+		if !built[n] {
+			rest = append(rest, n)
+		}
+	}
+	if len(rest) == 0 {
+		rest = g.Scans // only a build without a target of its own runs before the stop
+	}
+	return strings.Join(rest, ", ")
+}
+
 // installed reports whether shearbolt is installed before gate g: an install command of the job
 // runs before it, or this edit adds an install item at or before its slot.
 func (e *jobEditor) installed(g plan.Gate) bool {
@@ -1041,6 +1099,11 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 	}
 	if off := e.errexitOff(g); off != nil {
 		return shelledit.Errorf(line, "%s turns off errexit (set +e) before the gate, and the gate runs in the same shell, so a failing scan would not stop the job; turn it back on with set -e before the gate", shelledit.CommandText(*off))
+	}
+	// An early stop before the gate ends the job's script successfully: the gate is skipped and
+	// later jobs still run (P12).
+	if sl, cmd, pos, ok := e.stopBefore(g); ok && !skipSafe(g, pos) {
+		return shelledit.Errorf(sl, "the job can stop before the shearbolt gate (%s at line %d), which would skip its check of %s while later jobs still run; move the early stop into the job's rules or condition, or add the gate by hand where it runs on every path", cmd, sl, unchecked(g, pos))
 	}
 	var gateItems []string
 	if !e.installed(g) {

@@ -1,6 +1,7 @@
 package gitlab_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -949,5 +950,93 @@ func TestGitLabPreludeStop(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// P12 (design §3.5): an early stop in the script or in the before_script the job runs ends its
+// shell before the gate, so the gate is skipped while later jobs and stages still run. A job
+// whose gate checks anything other than images built after the stop is left unchanged.
+func TestGitLabEarlyStop(t *testing.T) {
+	const deploy = "    - ./deploy.sh"
+	refused := func(t *testing.T, files map[string]string, job, cmd string, line int) {
+		t.Helper()
+		p, got := result(t, files)
+		var n []plan.Note
+		for _, note := range notes(p, "UNSUPPORTED_EDIT") {
+			if strings.Contains(note.Message, "job "+job+" was left unchanged") {
+				n = append(n, note)
+			}
+		}
+		msg := fmt.Sprintf("the job can stop before the shearbolt gate (%s at line %d), which would skip its check of source while later jobs still run; move the early stop into the job's rules or condition, or add the gate by hand where it runs on every path", cmd, line)
+		if got != "" || len(n) != 1 || !strings.Contains(n[0].Message, msg) || !strings.Contains(n[0].Message, "- "+install+"\n") || n[0].Line != line {
+			t.Errorf("%s:\n%s\nnotes %v", file, got, noteCodes(p))
+		}
+	}
+	t.Run("ES-5", func(t *testing.T) {
+		refused(t, npmRepo(lines(
+			"build:",
+			"  script:",
+			`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+			"    - npm ci",
+			"    - npm run build",
+			deploy,
+		)), "build", "exit", 3)
+	})
+	t.Run("own before_script", func(t *testing.T) {
+		refused(t, npmRepo(lines(
+			"build:",
+			"  before_script:",
+			"    - echo start",
+			`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+			"  script:",
+			"    - npm ci",
+			"    - npm run build",
+			deploy,
+		)), "build", "exit", 4)
+	})
+	t.Run("unseen before_script", func(t *testing.T) {
+		refused(t, npmRepo(lines(
+			".base:",
+			"  image: node:22",
+			"other:",
+			"  before_script:",
+			`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+			"  script:",
+			"    - npm test",
+			"build:",
+			"  extends: .base",
+			"  script:",
+			"    - npm ci",
+			"    - npm run build",
+			deploy,
+		)), "build", "exit", 5)
+	})
+	t.Run("sourced in before_script", func(t *testing.T) {
+		files := npmRepo(lines(
+			"default:",
+			"  before_script:",
+			"    - . ./ci/skip.sh",
+			"build:",
+			"  script:",
+			"    - npm ci",
+			"    - npm run build",
+			deploy,
+		))
+		files["ci/skip.sh"] = "exit 0\n"
+		refused(t, files, "build", "source", 3)
+	})
+
+	// A root project whose gate scans only the image built after the stop in before_script: the
+	// gate follows the build as usual.
+	p, got := result(t, map[string]string{"Dockerfile": "FROM alpine\n", file: lines(
+		"deploy:",
+		"  before_script:",
+		`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+		"  script:",
+		"    - docker build -t web:$CI_COMMIT_SHA .",
+		"    - docker push web:$CI_COMMIT_SHA",
+	)})
+	if !strings.Contains(got, "    - "+install+"\n    - "+scanWeb+"\n    - docker push web:$CI_COMMIT_SHA\n") || len(notes(p, "UNSUPPORTED_EDIT")) != 0 {
+		t.Errorf("%s:\n%s\nnotes %v", file, got, noteCodes(p))
 	}
 }

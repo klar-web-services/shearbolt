@@ -2,8 +2,10 @@ package scriptci_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -1183,5 +1185,102 @@ func TestScriptStops(t *testing.T) {
 		if f.Name == "" {
 			t.Errorf("%s at line %d has no name", f.What, f.Line)
 		}
+	}
+}
+
+// stopMessage is the start of the reason an early stop before the gate fails a job (P12).
+func stopMessage(cmd string, line int, what string) string {
+	return fmt.Sprintf("the job can stop before the shearbolt gate (%s at line %d), which would skip its check of %s while later jobs still run; move the early stop into the job's rules or condition, or add the gate by hand where it runs on every path", cmd, line, what)
+}
+
+// stopRefused checks that setup leaves ci.yml unchanged and fails its job with UNSUPPORTED_EDIT
+// on the early stop's line: the stop's name and line, what the gate would not check, the snippet.
+func stopRefused(t *testing.T, files map[string]string, cmd string, line int, what string) {
+	t.Helper()
+	p, got := result(t, files, "1.2.3")
+	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" })
+	if got != "" || i < 0 {
+		t.Fatalf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
+	}
+	n := p.Notes[i]
+	if !strings.Contains(n.Message, stopMessage(cmd, line, what)) || !strings.Contains(n.Message, `"$HOME/.local/bin/shearbolt" scan --ci --config`) || n.Line != line || n.File != file {
+		t.Errorf("note %+v\nwant %q", n, stopMessage(cmd, line, what))
+	}
+}
+
+// P12 (design §3.5): the gate runs in the job's shell, so an early stop before it ends the job's
+// script successfully, skips the gate, and later jobs still run. A job whose gate checks
+// anything other than images built after the stop is left unchanged with UNSUPPORTED_EDIT.
+func TestScriptEarlyStop(t *testing.T) {
+	npm := func(items ...string) map[string]string {
+		return npmRepo(".", lines(append([]string{"build:", "  script:"}, items...)...))
+	}
+	// ES-5: an exit before an npm build; the gate would check the source.
+	stopRefused(t, npm(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - npm ci", "    - npm run build", "    - ./deploy.sh"), "exit", 3, "source")
+
+	// A sourced file that exits, and one setup cannot follow.
+	files := npm("    - . ./ci/skip.sh", "    - npm ci", "    - npm run build", "    - ./deploy.sh")
+	files["ci/skip.sh"] = "if [ -z \"$CHANGED\" ]; then exit 0; fi\n"
+	stopRefused(t, files, "source", 3, "source")
+	stopRefused(t, npm("    - npm ci", "    - . ./ci/missing.sh", "    - npm run build", "    - ./deploy.sh"), "source", 4, "source")
+
+	// The last stop before the gate counts.
+	stopRefused(t, npm("    - exec ./ci/run.sh", "    - npm ci", `    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - npm run build"), "exit", 5, "source")
+
+	// A stop after the build in the build's item lands after the gate once the item is split.
+	_, got := result(t, npm("    - npm ci", `    - npm run build; if [ -n "$X" ]; then exit 0; fi; ./deploy.sh`), "1.2.3")
+	want(t, got, lines(
+		"build:",
+		"  script:",
+		"    - npm ci",
+		"    - npm run build",
+		"    - "+install,
+		`    - '"$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"'`,
+		`    - if [ -n "$X" ]; then exit 0; fi; ./deploy.sh`,
+	))
+
+	// A literal non-zero exit fails the job instead: no early stop.
+	p, got := result(t, npmRepo("app", lines("build:", "  script:", "    - cd app || exit 1", "    - npm ci", "    - npm run build", "    - ./deploy.sh")), "1.2.3")
+	if !strings.Contains(got, `scan --ci --config "$CI_PROJECT_DIR/app/shearbolt.yaml"`) || hasNote(p, "UNSUPPORTED_EDIT") {
+		t.Errorf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
+	}
+
+	// A root project whose gate scans only the image built after the stop: skipping it is safe,
+	// and the gate follows the build as usual.
+	root := func(items ...string) map[string]string {
+		return map[string]string{"Dockerfile": "FROM alpine\n", file: lines(append([]string{"deploy:", "  script:"}, items...)...)}
+	}
+	p, got = result(t, root(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - docker build -t web:$CI_COMMIT_SHA .", "    - docker push web:$CI_COMMIT_SHA"), "1.2.3")
+	want(t, got, lines(
+		"deploy:",
+		"  script:",
+		`    - if [ -z "$CHANGED" ]; then exit 0; fi`,
+		"    - docker build -t web:$CI_COMMIT_SHA -t web:shearbolt-$CI_COMMIT_SHA .",
+		"    - "+install,
+		`    - SHEARBOLT_IMAGE=web:shearbolt-$CI_COMMIT_SHA "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"`,
+		"    - docker push web:$CI_COMMIT_SHA",
+	))
+	if hasNote(p, "UNSUPPORTED_EDIT") {
+		t.Errorf("notes %v", noteCodes(p))
+	}
+
+	// An image built before the stop would go unchecked: the job is refused, and the message
+	// names that image's target but not the one built after the stop.
+	p, got = result(t, root("    - docker build -t a .", `    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - docker build -t b .", "    - docker push a && docker push b"), "1.2.3")
+	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" })
+	if got != "" || i < 0 {
+		t.Fatalf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
+	}
+	m := regexp.MustCompile(`\(exit at line 4\), which would skip its check of (\S+) while later jobs still run`).FindStringSubmatch(p.Notes[i].Message)
+	var cfg struct{ Targets []struct{ Name string } }
+	for _, c := range p.Changes {
+		if c.Path == "shearbolt.yaml" {
+			if err := yaml.Unmarshal([]byte(c.Content), &cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if len(cfg.Targets) != 2 || cfg.Targets[1].Name != "b" || m == nil || m[1] != cfg.Targets[0].Name {
+		t.Errorf("note %q\ntargets %+v", p.Notes[i].Message, cfg.Targets)
 	}
 }
