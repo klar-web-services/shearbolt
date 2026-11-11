@@ -98,7 +98,10 @@ This writes nothing.
 
 Tell the user, briefly:
 
-- the projects found (`projects[].dir`, `ecosystem`, `framework`) and the CI files (`ci`);
+- the projects found (`projects[].dir`, `ecosystem`, `framework`) and the CI files (`ci`).
+  The ecosystem is `npm`, `rust` or `docker`. A `docker` project is the repository root:
+  it holds the compose files, and, when there is no npm or Rust project, the images CI
+  builds;
 - each change: `changes[].path`, and whether setup creates or modifies it;
 - every note, in plain words. Show `UNSUPPORTED_EDIT` and `NO_GATE_PLACED` messages in
   full: they contain a snippet the user must add by hand, and that job stays ungated
@@ -191,6 +194,12 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
   A block fails the job and the job summary explains it.
 - Repeat what the notes ask the user to add or change by hand. Until they do, those jobs
   or artifacts are not gated.
+- An `EARLY_STOP` note whose gate still runs on early stops means those runs fail,
+  although nothing ships. When the reason names targets, ask the user whether each one
+  ships. For one that does not, such as a test compose file, offer to remove its target
+  from `shearbolt.yaml` and run setup again (3.1 to 3.6), so the gate can skip on early
+  stops. Edit `shearbolt.yaml` only when the user agrees. For the other reasons, pass on
+  the note's advice.
 - `shearbolt scan` in a project directory runs the same check locally (section 4).
 
 **Never commit, push or open a pull request unless the user asks.**

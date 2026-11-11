@@ -8,11 +8,13 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 	"github.com/klar-web-services/shearbolt/skills"
 )
 
@@ -137,6 +139,28 @@ func TestSkillUpdatesTheCLIBeforeUsingIt(t *testing.T) {
 			t.Errorf("SKILL.md mentions %q before the step that comes ahead of it", s)
 		}
 		at = i
+	}
+}
+
+// The plan contract the skill carries names the schema version and the ecosystems that setup
+// prints. An older version would make the skill stop on its own CLI's plans, and a stale
+// ecosystem list would describe projects setup no longer reports.
+func TestSetupJSONDocumentsThePlanSchema(t *testing.T) {
+	doc := string(embedded(t)["references/setup-json.md"])
+	v := strconv.Itoa(plan.SchemaVersion)
+	for _, want := range []string{
+		"This is the contract the skill drives, at `schemaVersion` " + v + ".",
+		"| `schemaVersion` | `" + v + "`. Any other value means the contract changed: stop,",
+		"`ecosystem` (`npm`, `rust` or `" + plan.EcosystemDocker + "`)",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup-json.md does not contain %q", want)
+		}
+	}
+	for _, stale := range []string{"`ecosystem` `compose`", "or `compose`)", "A `compose` project"} {
+		if strings.Contains(doc, stale) {
+			t.Errorf("setup-json.md still names the old compose ecosystem: %q", stale)
+		}
 	}
 }
 

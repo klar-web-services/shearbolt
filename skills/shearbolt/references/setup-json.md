@@ -1,7 +1,7 @@
 # Setup machine mode: the plan JSON
 
 `shearbolt setup` computes a plan from the repository and the answers it is given, and
-writes it only with `--apply`. This is the contract the skill drives, at `schemaVersion` 1.
+writes it only with `--apply`. This is the contract the skill drives, at `schemaVersion` 2.
 
 ## Commands
 
@@ -24,9 +24,9 @@ writes it only with `--apply`. This is the contract the skill drives, at `schema
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | `1`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
+| `schemaVersion` | `2`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
 | `shearboltVersion` | The version that computed the plan; `dev` for a development build. |
-| `projects[]` | Detected projects: `ecosystem` (`npm`, `rust` or `compose`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `compose` project has no lockfiles: it holds the compose files that no npm or Rust project contains. |
+| `projects[]` | Detected projects: `ecosystem` (`npm`, `rust` or `docker`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `docker` project is the root project (`dir` `.`, named after the repository's folder) and has no lockfiles. It holds the compose files that no npm or Rust project contains. When the repository has no npm or Rust project, it also owns the image builds setup finds in CI (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`) and gets an image target for each. It never has a `source` target. |
 | `ci[]` | CI files found: `system` (`github`, `bitbucket` or `gitlab`) and `file`. |
 | `questions[]` | Every question setup can ask, computed from the repository alone. See below. |
 | `complete` | `true` when every applicable question has an `--answer`. |
@@ -62,16 +62,17 @@ The questions come in this order:
    the build in its job, so a re-run keeps the earlier answer; otherwise the first project.
    The line moves when setup edits the file, so always take IDs from the latest plan.
 3. `gate-job:<project dir>` (`choice`, with `project` set), sorted by project. Setup found
-   no build for that project, so it asks which job should check its lockfiles. For a
-   compose-only project (`ecosystem` `compose`) the prompt reads "Which job should check
-   the compose images of <label>?" and the gate checks its compose images instead. The
+   no build for that project, so it asks which job should check its lockfiles. A `docker`
+   project gets this question only when it owns no build, that is, when it holds only
+   compose files. Its prompt reads "Which job should check the compose images of <label>?"
+   and the gate checks its compose images instead. The
    options are the editable job IDs (`<file>#<job>`, labels like `ci.yml: test`). The
    default is the first job, or the job that already holds a gate for that project. For a
-   compose-only project the default is the first job that already holds the gate, then the
+   `docker` project the default is the first job that already holds the gate, then the
    first job that pushes or deploys, then the first job. Its
    `unlessChosen` lists every `build-project` question, because assigning an unattributed
-   build to the project gives it a build and makes the question moot. A compose-only
-   project's `gate-job` has no `unlessChosen`: no build can be assigned to it.
+   build to the project gives it a build and makes the question moot. A `docker`
+   project's `gate-job` has no `unlessChosen`: no build can be assigned to it by a question.
 
 ## Which questions apply
 
@@ -158,9 +159,9 @@ An error plan has `error` set and `changes: []`. It keeps `projects`, `ci` and
 
 | Code | Cause | What to tell the user |
 | --- | --- | --- |
-| `NO_PROJECT` | No npm or Rust project with a lockfile Grype can read, and no compose file that pulls images. | Pass on the message, which names what setup protects (npm, Rust and Docker Compose files that pull images) and includes any `BUN_LOCKB`, `NO_CARGO_LOCK`, `COMPOSE_NO_IMAGES` or `COMPOSE_NOT_READ` advice. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects, Cargo projects with a `Cargo.lock`, and compose files that pull at least one image. |
+| `NO_PROJECT` | One of two messages. **Nothing found:** no npm or Rust project with a lockfile Grype can read, no compose file that pulls images, and no Docker image build in the CI files (setup does not look inside scripts the CI calls). **Nothing gateable:** CI builds Docker images, but none of them can be gated, and there is no npm or Rust project or compose file. | Pass on the message. For nothing found, it names what setup protects and includes any `BUN_LOCKB`, `NO_CARGO_LOCK`, `COMPOSE_NO_IMAGES` or `COMPOSE_NOT_READ` advice. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects, Cargo projects with a `Cargo.lock`, compose files that pull at least one image, and images that CI builds. For nothing gateable, the message lists each build's `MULTI_PLATFORM`, `PUSH_IN_BUILD`, `BUILD_AFTER_PUSH` or `BUILD_AFTER_GATE` note: change those builds as the notes say, then run setup again. |
 | `NO_CI` | No `.github/workflows/*.yml` or `*.yaml`, `bitbucket-pipelines.yml` or `.gitlab-ci.yml`. | Shearbolt is a CI gate, so there is nothing to add it to. Pass on the message: run setup from the repository root, or add a pipeline that builds the project first; meanwhile `shearbolt scan --source .` checks the lockfiles locally. |
-| `PARSE` | A CI file is not valid YAML. The message names the file and line. | Fix that YAML, then run setup again. |
+| `PARSE` | A CI file is not valid YAML. The message names the file and line. When setup found no npm, Rust or compose project, this comes before `NO_PROJECT` (the same holds for a CI file that cannot be read, `READ`), because the file might hold an image build. | Fix that YAML, then run setup again. |
 | `READ` | The repository could not be read (an I/O error). | Show the message. |
 | `BAD_ANSWER` | An answer is invalid (see Answers). | Correct the answer. |
 | `UNANSWERED` | `--apply` without an answer for every applicable question. | Ask the listed questions, then apply again. |
@@ -170,11 +171,13 @@ An error plan has `error` set and `changes: []`. It keeps `projects`, `ci` and
 
 Each note's `message` already names the file, job or command concerned. Explain it in
 the user's terms, using the meanings below. Codes marked *(Bitbucket and GitLab)* occur
-only in Bitbucket Pipelines and GitLab CI files.
+only in Bitbucket Pipelines and GitLab CI files, and codes marked *(GitHub)* only in GitHub
+Actions workflows.
 
-Seven notes are informational: `COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`,
-`COMPOSE_NOT_READ`, `COMPOSE_VARIABLE`, `BUILD_NOT_GATED` and `NO_DEPLOY_SEEN`. None is a
-reason to say Shearbolt is "not set up": setup can be complete with them present.
+Eight notes are informational: `COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`,
+`COMPOSE_NOT_READ`, `COMPOSE_VARIABLE`, `BUILD_NOT_GATED`, `NO_DEPLOY_SEEN` and
+`EARLY_STOP`. None is a reason to say Shearbolt is "not set up": setup can be complete with
+them present.
 
 ### Gaps: something runs unchecked until the user acts
 
@@ -185,6 +188,29 @@ Every note here except the informational ones listed in the intro above counts a
   job that run under different `if:` conditions. That job or file is left as it was, and
   the message gives the reason plus the exact snippet or targets to add by hand. Show it
   in full. Until the user adds it, that job is not gated. A re-run reports the same note.
+  Causes that come from early stops and split steps:
+  - *(Bitbucket and GitLab)* the job can stop early before the gate, through an `exit`
+    that can succeed or an `exec`: in the script before the gate, in GitLab's
+    `before_script`, or in an in-repo file the job sources (a sourced file setup cannot
+    follow counts too). That ends the job successfully, skips the gate, and later jobs
+    still run. Setup refuses only when the gate checks more than the images built after
+    that point, for example a source or compose target. Move the early stop into the job's
+    `rules:` or condition, or add the gate by hand where it runs on every path. This also
+    happens when setup runs again on a job that an earlier version gated. That job is
+    then left as it is, so its install pin is no longer updated. Setup also refuses some
+    jobs that cannot really stop early: a sourced file created at run time
+    (`source venv/bin/activate`), `(cd sub && exit 0)` in a subshell, an `exit` inside a
+    function, or GitLab's `inherit: default: false`, which makes every `before_script`
+    count. Then add the snippet by hand.
+  - *(GitHub)* a step setup splits can stop early, and its own `if:` mixes `${{ }}` into
+    a bare expression. Combined with setup's check that the build ran, it would always be
+    true. Write the `if:` as one expression, without `${{ }}` inside it.
+  - *(GitHub)* the part of a split step before the build writes `$GITHUB_ENV` or
+    `$GITHUB_PATH` (any mention of either name counts). After a split, those writes would
+    change the environment of the rest of the step.
+  - *(GitHub)* a command before the build of a split step may assign a variable in a way
+    setup cannot copy to the rest of the step: `${NAME:=…}`, arithmetic such as
+    `(( n++ ))`, `let`, `getopts` or `printf -v`.
 - `NO_GATE_PLACED`: setup found no job it can edit (for example, every GitLab job uses
   `extends:` or every Bitbucket step uses `<<:`). The project's `shearbolt.yaml` is still
   written, but CI does not run Shearbolt yet. The message holds the snippet for each CI
@@ -201,19 +227,23 @@ Every note here except the informational ones listed in the intro above counts a
 - `BUILD_AFTER_PUSH`: a build runs after a push or deploy in the same job, or inside a
   script or Makefile that also pushes. The gate runs before that push, so it cannot scan
   this build's output. Build before pushing, or build and push in separate steps, then
-  run setup again.
+  run setup again. In a `docker` project, the message may say instead that no gate is
+  placed in that job (see "Jobs a `docker` project cannot scan" below).
 - `BUILD_AFTER_GATE`: a build runs after an existing Shearbolt gate in the job, so that
   gate does not scan it. Move the gate after the build, or remove it and run setup again.
 - `GATE_AFTER_PUSH`: an existing Shearbolt gate runs after a push or deploy, so it cannot
   stop it. Setup adds a new gate before the push and leaves the old one alone. Remove the
-  old gate once the new one is in place.
+  old gate once the new one is in place. In a job where a `docker` project has nothing to
+  scan, setup adds no new gate, and the message asks the user to remove the old one.
 - `COMMANDS_BEFORE_GATE`: commands or steps between the project's gated builds run before
   the gate, which follows the last gated build. The message lists them. If one of them
   deploys or publishes, move it after the gate.
 - `PUSH_IN_BUILD`: an image build pushes straight from the build (`--output` or `outputs:`
   with `type=registry` or `push=true`), so no gate can sit between building and pushing,
-  and that image is not scanned. The gate runs before it and checks the source lockfiles.
-  Build with `--load` (or `load: true`), push in a later step, and run setup again.
+  and that image is not scanned. The message says what the gate, which runs before it,
+  still checks: the source lockfiles, or, in a `docker` project, its compose images or
+  only the images built before it. Or it says that no gate is placed in that job. Build
+  with `--load` (or `load: true`), push in a later step, and run setup again.
 - `PUSH_IN_AFTER_SCRIPT` *(Bitbucket and GitLab)*: a push in GitLab's `after_script` or
   Bitbucket's `after-script`. Those run even when the script fails, so the push would run
   even when the gate blocks. Setup does not edit it. Move the push into the main script,
@@ -236,26 +266,28 @@ Every note here except the informational ones listed in the intro above counts a
   scan fails for those services (`COMPOSE_VARIABLE`) unless the CI job sets them. Set them
   in the job that runs the gate, or add the service to the target's `exclude` if CI
   builds that image and gates it another way. Never exclude a service for the user.
-- `BUILD_NOT_GATED`: the repository has no npm or Rust project, so an image or binary
-  build in CI belongs to no project and the gate does not scan what it produces. If a
-  compose service runs that image, the user adds the service to the compose target's
-  `exclude`, so the gate does not try to pull it, and gates the build separately.
-  Setup cannot clear this note.
-- `NO_DEPLOY_SEEN`: a project with compose targets, and setup saw no push or deploy step
-  in the CI jobs it could read. If the platform deploys by itself, for example on every
-  push, a failed `shearbolt` check does not stop it. The user can require the check
-  before merging to the deployed branch, or deploy from CI after the gate.
+- `BUILD_NOT_GATED`: the repository has no npm or Rust project, so a binary build in CI
+  (a release `cargo build`) belongs to no project and the gate does not scan what it
+  produces. Image builds never get this note: the `docker` project owns them. Setup
+  cannot clear this note.
+- `NO_DEPLOY_SEEN`: a project of any ecosystem with compose or image targets, and setup
+  saw no push or deploy step in the CI jobs it could read. CI that builds an image and
+  never pushes it usually means a platform builds and deploys on its own. If the platform
+  deploys by itself, for example on every push, a failed `shearbolt` check does not stop
+  it. The user can require the check before merging to the deployed branch, or deploy
+  from CI after the gate.
 
-### Partial coverage: an artifact is not scanned, the lockfiles still are
+### Partial coverage: an artifact is not scanned, the rest still is
 
 - `NO_BUILD_FOUND`: setup found no build step for the project, so the gate in the chosen
   job checks only its lockfiles. If CI does build an image or binary for it somewhere,
-  that artifact is not scanned. For a compose-only project, the gate checks its compose
-  images instead of lockfiles.
+  that artifact is not scanned. For a `docker` project with only compose files, the gate
+  checks its compose images instead of lockfiles.
 - `MULTI_PLATFORM`: an image built for more than one platform cannot be loaded into the
   local Docker daemon, so its image is not scanned (multi-platform image gating is not in
-  v1). The message says whether the gate runs before the build or after it; either way
-  the source lockfiles are checked.
+  v1). The message says whether the gate runs before the build or after it, and what it
+  still checks: the source lockfiles, or, in a `docker` project, its compose images or
+  only the images built before it. Or it says that no gate is placed in that job.
 - `RAILPACK_NO_NAME`: a `railpack build` without `--name`, so its image has no name to
   scan. Add `--name <image>:<tag>` and run setup again. Until then the gate checks the
   source lockfiles.
@@ -285,6 +317,15 @@ Every note here except the informational ones listed in the intro above counts a
   every lockfile there, `Cargo.lock` included. Its cargo builds are not rewritten and get
   no binary target.
 
+**Jobs a `docker` project cannot scan.** A `docker` project has no lockfiles. In a job
+where none of its image builds can be scanned (multi-platform, pushing through outputs, or
+after a push) and it has no compose file, setup places no gate: the gate would scan images
+that job never built. `MULTI_PLATFORM`, `PUSH_IN_BUILD` and `BUILD_AFTER_PUSH` then say
+that no gate is placed there. If that job already holds a Shearbolt gate, setup leaves it
+alone, but it now scans images the job does not build and fails on every run. The build
+notes, or `GATE_AFTER_PUSH` for a gate after a push, ask the user to remove that gate and
+run setup again.
+
 ### Changes setup made that the user should know about
 
 - `COMPOSE_ADDED`: setup created compose targets in a new `shearbolt.yaml`, one per
@@ -292,8 +333,10 @@ Every note here except the informational ones listed in the intro above counts a
   in tests do not ship, so ask the user whether each listed file does. For one that does
   not, they remove its target (setup does not add it back) or, for a file that otherwise
   ships, exclude single services. After any such hand edit, `shearbolt setup` must run
-  again, so every gate scans the target (or stops naming it). A compose-only project needs at least one target: if
-  none of its files ship, Shearbolt is the wrong tool for the repository.
+  again, so every gate scans the target (or stops naming it). Removing the target of a
+  test compose file can also let the gate skip on early stops (`EARLY_STOP`). A `docker`
+  project that owns no image build needs at least one target: if none of its compose
+  files ship, Shearbolt is the wrong tool for the repository.
 - `COMPOSE_NO_IMAGES`: a compose file pulls no image (only build services, or only
   overrides), so it is not gated.
 
@@ -308,6 +351,33 @@ Every note here except the informational ones listed in the intro above counts a
 - `PUSH_IF_WRAPPED`: a push step after the gate had an `if:` using `always()`,
   `failure()` or `cancelled()`, which would run it even when the gate fails. Setup changed
   it to `${{ success() && (...) }}`, so a failed gate stops the push.
+- `EARLY_STOP` *(GitHub)*: a run step that setup splits at its build can stop before the
+  build, through an `exit` that can succeed (no argument, `0`, or a value that is not a
+  literal number), an `exec` that replaces the shell, or an in-repo file it sources that
+  does either. The note is on the line of the first such command. Setup adds a marker line
+  after the build, `echo shearbolt-reached=true >> "$GITHUB_OUTPUT"`, and gives the step an
+  id if it has none. The rest of the step, which moves to a new step after the gate, runs
+  only when the marker is set, that is, when the build ran. The message has one of three
+  forms:
+  - **The gate is skipped on early stops.** It checks only images built in that step, and
+    no later step in the job pushes or deploys unchecked, so when the build did not run
+    there is nothing to check and nothing ships. If the user adds a target to
+    `shearbolt.yaml` by hand, setup must run again, so the gate stops skipping.
+  - **The gate keeps running.** On an early stop it still runs and fails when the image
+    was not built, so the run turns red although nothing ships. This fails closed. The
+    message says why: the gate also checks other targets (named, or every target when
+    setup could not read `shearbolt.yaml`), it also follows builds in other steps, or a
+    later step pushes or deploys. It then advises removing targets that do not ship and
+    running setup again, or moving the early stop into the job's `if:`. Three other
+    reasons are about the gate itself, each with its own advice: the gate does not
+    directly follow the step, it is a `shearbolt scan` command in a run step rather than
+    the Action, or its `if:` cannot be combined with the check that the build ran.
+    SKILL.md section 3.7 says what to offer.
+  - **A stale condition was removed.** On a re-run, an existing gate's `if:` checked a
+    step's marker, but the step directly before the gate no longer has that marker line
+    and id (a step was inserted between them, or the id or the line changed). Setup
+    removed that check, so the gate now runs on every run. Where the `if:` shares its
+    line with the step's `-`, setup writes `if: success()` instead, which means the same.
 - `CACHE_NOT_ADDED` *(Bitbucket and GitLab)*: setup could not add the CI cache for
   Shearbolt's scanner and database: the GitLab job inherits a global or `default` cache, it
   already has GitLab's maximum of 4 caches, or the cache list is in flow style. The
