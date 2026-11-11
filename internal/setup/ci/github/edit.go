@@ -161,6 +161,8 @@ type stepPlan struct {
 	pushes     []string // docker push lines for its --push builds
 	split      bool
 	cut, rest  int      // part 1 is script[:cut], the remainder script[rest:]
+	last       int      // the command part 1 ends with: the last gated build, or setup's lines after it
+	marker     bool     // the step can stop before the split point: part 1 ends with setup's marker line (design §3.2)
 	state      []string // shell state copied into the remainder
 	remainder  string
 	pushStep   []string // a converted build-push-action's push step, after the gate
@@ -519,6 +521,7 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 	line := st.line
 	newScript := st.script
 	if sp.split {
+		e.markerEdit(sp)
 		var first, second []shelledit.Edit
 		for _, ed := range sp.edits {
 			switch {
@@ -595,6 +598,22 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 		}
 	}
 	return nil
+}
+
+// markerEdit queues setup's marker line as the last command of a split step's part 1, after the
+// output line and joined like it: with the command's own && or ;, so a failed build in an &&
+// list still fails the step, or on a new line. A marker line already there is kept.
+func (e *jobEditor) markerEdit(sp *stepPlan) {
+	st := sp.st
+	if !sp.marker || slices.Contains(ownLinesAfter(st, sp.builds[len(sp.builds)-1].Pos.Command), shelledit.ReachedLine) {
+		return
+	}
+	at, text := shelledit.InsertPoint(st.script, st.cmds[sp.last], []string{shelledit.ReachedLine})
+	// A line added before it at the end of the script already ends the script with a newline.
+	if at == len(st.script) && slices.ContainsFunc(sp.edits, func(ed shelledit.Edit) bool { return ed.At == at && strings.HasSuffix(ed.Text, "\n") }) {
+		text = strings.TrimPrefix(text, "\n")
+	}
+	sp.edits = append(sp.edits, shelledit.Edit{At: at, End: at, Text: text})
 }
 
 func (e *jobEditor) newID() string {

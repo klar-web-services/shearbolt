@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/klar-web-services/shearbolt/internal/setup/ci/shelledit"
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
@@ -68,6 +69,96 @@ func balanced(s string) bool {
 		}
 	}
 	return depth == 0 && !quoted
+}
+
+// The marker (design §3.2, §3.4): a split step that can stop before its build sets the output
+// shearbolt-reached right after the build, and what runs after the gate checks it. These helpers
+// write and read setup's forms of that check.
+
+// markerExpr is the condition that step id got past its build: its marker output is set.
+func markerExpr(id string) string {
+	return "steps." + id + ".outputs." + shelledit.ReachedOutput + " != ''"
+}
+
+// withMarker adds step id's marker to condition cond: (<cond>) && <marker>, with cond's ${{ }}
+// wrapper removed, or the marker alone when cond is empty. The parentheses keep an a || b
+// condition from swallowing the marker.
+func withMarker(cond, id string) string {
+	if b := bareExpr(cond); b != "" {
+		return "(" + b + ") && " + markerExpr(id)
+	}
+	return markerExpr(id)
+}
+
+// continuedIf returns the if: of the continued step of split step id when that step can stop
+// early: success() && (<copied>) && <marker>, where copied (the step's own if:) is made safe by
+// safeIf and then unwrapped, or the marker alone when there is no copied condition. Left
+// wrapped, (${{ … }}) would be a non-empty string, which is always true; for the same reason a
+// condition that mixes ${{ }} with other text cannot be combined.
+func continuedIf(copied, id string) (string, error) {
+	if bareExpr(copied) == "" {
+		return markerExpr(id), nil
+	}
+	safe, err := safeIf(copied)
+	if err != nil {
+		return "", err
+	}
+	b := bareExpr(safe)
+	if strings.Contains(b, "${{") {
+		return "", fmt.Errorf("the condition %s mixes ${{ }} with other text, so it cannot be combined with the check that the build ran", copied)
+	}
+	return "success() && (" + b + ") && " + markerExpr(id), nil
+}
+
+// stripMarker removes step id's marker from condition cond as withMarker adds it: (<X>) &&
+// <marker> becomes X, and a condition that is exactly <marker> becomes "". A ${{ }} wrapper is
+// dropped, which means the same. The marker is matched with any run of whitespace where setup
+// writes a space; X keeps its text. ok is false, and cond comes back unchanged, when cond holds
+// no such term.
+func stripMarker(cond, id string) (string, bool) {
+	b := bareExpr(cond)
+	if collapse(b) == markerExpr(id) {
+		return "", true
+	}
+	tail := regexp.MustCompile(`\)\s+&&\s+steps\.` + regexp.QuoteMeta(id) + `\.outputs\.` + regexp.QuoteMeta(shelledit.ReachedOutput) + `\s+!=\s+''$`)
+	loc := tail.FindStringIndex(b)
+	if loc == nil || !strings.HasPrefix(b, "(") {
+		return cond, false
+	}
+	inner := strings.TrimSpace(b[1:loc[0]])
+	if inner == "" || !balanced(inner) {
+		return cond, false
+	}
+	return inner, true
+}
+
+// markerAlone matches a marker condition, whitespace collapsed, and captures its step id.
+var markerAlone = regexp.MustCompile(`^steps\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.` + regexp.QuoteMeta(shelledit.ReachedOutput) + ` != ''$`)
+
+// markerGuarded reports whether condition cond is one of setup's two forms that run a step only
+// when split step id got past its build: exactly <marker>, or success() && (<X>) && <marker>
+// where X's parentheses are balanced, as needsWrap requires, so that success() && (a) || (b) &&
+// <marker> does not count. The text is compared without its ${{ }} wrapper and with each run of
+// whitespace collapsed to one space.
+func markerGuarded(cond string) (id string, ok bool) {
+	n := collapse(cond)
+	if m := markerAlone.FindStringSubmatch(n); m != nil {
+		return m[1], true
+	}
+	rest, ok := strings.CutPrefix(n, "success() && (")
+	i := strings.LastIndex(rest, ") && ")
+	if !ok || i < 0 || !balanced(rest[:i]) {
+		return "", false
+	}
+	if m := markerAlone.FindStringSubmatch(rest[i+len(") && "):]); m != nil {
+		return m[1], true
+	}
+	return "", false
+}
+
+// collapse returns cond without its ${{ }} wrapper and with each run of whitespace as one space.
+func collapse(cond string) string {
+	return strings.Join(strings.Fields(bareExpr(cond)), " ")
 }
 
 // pushes reports whether step s pushes or deploys: a command or the step itself, or an image

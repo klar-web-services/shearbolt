@@ -59,8 +59,17 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	if err != nil {
 		return err
 	}
-	sp.split, sp.state, sp.shellEdits = true, state, true
+	sp.split, sp.state, sp.shellEdits, sp.last = true, state, true, last
 	sp.cut, sp.rest = shelledit.SplitPoints(st.script, cmd)
+	// A stop before the split point ends part 1 successfully, and the remainder would run
+	// although the script never got there (design §3.2): part 1 then ends with setup's marker
+	// line, which the remainder checks through the step's id.
+	sp.marker = slices.ContainsFunc(e.pj.Steps[sp.s].Stops, func(k int) bool {
+		return k >= 0 && k < len(st.cmds) && st.cmds[k].End <= sp.cut
+	})
+	if sp.marker {
+		sp.needsID = true
+	}
 	return nil
 }
 
@@ -128,6 +137,8 @@ func isFunction(c shell.Command) bool {
 
 // remainderLines renders the new step that holds a split step's remainder: its name, the copied
 // if (made safe), env, shell, working-directory, continue-on-error and timeout-minutes, and run.
+// When the step can stop early, its if: also checks setup's marker (continuedIf), and it gets
+// one, right after its name, even when the step had none.
 func (e *jobEditor) remainderLines(sp *stepPlan) ([]string, error) {
 	st := sp.st
 	name := "Continue after shearbolt"
@@ -135,15 +146,31 @@ func (e *jobEditor) remainderLines(sp *stepPlan) ([]string, error) {
 		name = st.name + " (continued)"
 	}
 	out := []string{"name: " + yamledit.Scalar(name)}
+	ifLine := ""
+	if st.ifNode != nil || sp.marker {
+		copied, at := "", st.line
+		if st.ifNode != nil {
+			copied, at = st.ifNode.Value, st.ifNode.Line
+		}
+		cond, err := safeIf(copied)
+		why := "would run after a failed gate"
+		if sp.marker {
+			cond, err = continuedIf(copied, sp.id)
+			why = "must run only when the build ran and the gate passed"
+		}
+		if err != nil {
+			return nil, failAt(at, "the continued step %s, and %v", why, err)
+		}
+		ifLine = "if: " + yamledit.Scalar(cond)
+	}
+	if st.ifNode == nil && ifLine != "" {
+		out = append(out, ifLine)
+	}
 	for _, k := range keys(st.m) {
 		switch k {
 		case "if":
 			if st.ifNode != nil {
-				cond, err := safeIf(st.ifNode.Value)
-				if err != nil {
-					return nil, failAt(st.ifNode.Line, "the continued step would run after a failed gate, and %v", err)
-				}
-				out = append(out, "if: "+yamledit.Scalar(cond))
+				out = append(out, ifLine)
 			}
 		case "env", "shell", "working-directory", "continue-on-error", "timeout-minutes":
 			lines, err := e.entryLines(st.m, k)

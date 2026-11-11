@@ -300,10 +300,17 @@ func Follows(cmds []shell.Command, at int, skip map[int]bool) bool {
 	return false
 }
 
-// OwnLine reports a line setup adds: the output line or the railpack docker tag.
+// ReachedOutput is the GitHub step output setup's marker line sets (design §3.2).
+const ReachedOutput = "shearbolt-reached"
+
+// ReachedLine is setup's marker line: it follows the last gated build of a split step that can
+// stop early, so the step sets ReachedOutput only when its script got past the build.
+const ReachedLine = "echo " + ReachedOutput + `=true >> "$GITHUB_OUTPUT"`
+
+// OwnLine reports a line setup adds: the output line, the marker line or the railpack docker tag.
 func OwnLine(c shell.Command) bool {
 	a := c.Argv()
-	return len(a) >= 2 && a[0] == "echo" && strings.HasPrefix(a[1], "shearbolt-image") ||
+	return len(a) >= 2 && a[0] == "echo" && (strings.HasPrefix(a[1], "shearbolt-image") || strings.HasPrefix(a[1], ReachedOutput)) ||
 		len(a) == 4 && a[0] == "docker" && a[1] == "tag" && strings.Contains(a[3], ":shearbolt-")
 }
 
