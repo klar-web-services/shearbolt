@@ -215,27 +215,11 @@ func (s *Script) Stops(classify plan.Classifier, env []string) []Found {
 		it := &s.Items[i]
 		for _, c := range st.Stops {
 			f := it.found(c)
-			f.Name = stopName(it.Cmds[c])
+			f.Name = shelledit.StopName(it.Cmds[c])
 			out = append(out, f)
 		}
 	}
 	return out
-}
-
-// stopName returns the name of the builtin by which cmd, a command the classifier reports as
-// stopping, stops the shell: its first word that is exit, exec, source or ".". Only VAR=x
-// assignments and wrappers such as command come before it. "." is named source, since a message
-// such as "(. at line 4)" reads badly.
-func stopName(cmd shell.Command) string {
-	for _, w := range cmd.Words {
-		switch w.Value {
-		case "exit", "exec", "source":
-			return w.Value
-		case ".":
-			return "source"
-		}
-	}
-	return ""
 }
 
 // ArtifactBuilds returns the image and binary builds in s (in called files too).

@@ -38,8 +38,25 @@ func skipping(stop string, line int) string {
 	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping.", stop, line)
 }
 
+// running is the running form with the advice for the reasons about targets and later pushes.
 func running(stop string, line int, reason string) string {
-	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because %s. Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:.", stop, line, reason)
+	return runningAdvice(stop, line, reason, "Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:.")
+}
+
+func runningAdvice(stop string, line int, reason, advice string) string {
+	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because %s. %s", stop, line, reason, advice)
+}
+
+// The running form's advice for the reasons that are about the gate itself.
+const (
+	adviceNotNext  = "Move the shearbolt gate directly after this step and run setup again."
+	adviceRunStep  = "Use the Shearbolt action for the gate (uses: klar-web-services/shearbolt@v1) and run setup again."
+	adviceTemplate = "Write the gate's if: without ${{ }} inside it and run setup again."
+)
+
+// removed is EARLY_STOP for a gate whose marker term setup took away.
+func removed(id string) string {
+	return "setup removed the early-stop condition from this shearbolt gate, because it no longer directly follows a step that sets steps." + id + ".outputs.shearbolt-reached; the gate now runs on every run."
 }
 
 func earlyStops(p *plan.Plan) []plan.Note {
@@ -187,6 +204,18 @@ func TestGitHubEarlyStopGuardedLaterPush(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 11), 11)
 }
 
+// A later push step guarded by setup's other marker form, success() && (<X>) && <marker>, does
+// not count either.
+func TestGitHubEarlyStopGuardedLaterPushSuccessForm(t *testing.T) {
+	later := lines(
+		"      - if: success() && (github.ref == 'refs/heads/main') && "+reached,
+		"        run: docker push other",
+	)
+	p, got := result(t, rootRepo(head+earlyStop+later, nil))
+	wantWorkflow(t, got, head+withGateIf(earlyStopEdited, reached)+lines("        if: "+reached)+continuedRun+later)
+	wantEarlyStop(t, p, skipping("exit", 11), 11)
+}
+
 // Anything the gate scans besides the split step's own images keeps it running, and the note
 // names it.
 func TestGitHubEarlyStopOtherTargetsKeepGate(t *testing.T) {
@@ -311,7 +340,7 @@ func TestGitHubEarlyStopRunStepGate(t *testing.T) {
 		"        if: "+reached,
 		"        run: docker push ghcr.io/acme/edge:latest",
 	))
-	wantEarlyStop(t, p, running("exit", 10, "setup does not add an if: to a gate in a run step"), 10)
+	wantEarlyStop(t, p, runningAdvice("exit", 10, "setup does not add an if: to a gate in a run step", adviceRunStep), 10)
 }
 
 // An existing action gate that does not directly follow the split step cannot carry the term:
@@ -321,7 +350,7 @@ func TestGitHubEarlyStopExistingGateNotNext(t *testing.T) {
 	edited := strings.Replace(existingGateEdited, "      - name: shearbolt\n", "      - run: echo tested\n      - name: shearbolt\n", 1)
 	p, got := result(t, rootRepo(head+gate, nil))
 	wantWorkflow(t, got, head+edited)
-	wantEarlyStop(t, p, running("exit", 10, "it does not directly follow this step"), 10)
+	wantEarlyStop(t, p, runningAdvice("exit", 10, "it does not directly follow this step", adviceNotNext), 10)
 }
 
 // existingGate is a --push build that can stop early, before a gate the user already has.
@@ -353,6 +382,10 @@ func TestGitHubEarlyStopExistingGate(t *testing.T) {
 	p, got := result(t, rootRepo(head+existingGate, nil))
 	wantWorkflow(t, got, head+withGateIf(existingGateEdited, reached))
 	wantEarlyStop(t, p, skipping("exit", 10), 10)
+	again := compute(t, applied(t, rootRepo(head+existingGate, nil)))
+	if len(again.Changes) > 0 || len(earlyStops(again)) > 0 {
+		t.Errorf("a re-run changes %d files, notes %+v", len(again.Changes), earlyStops(again))
+	}
 
 	// A compose target keeps it running.
 	p, got = result(t, rootRepo(head+existingGate, map[string]string{"docker-compose.yml": composeImage}))
@@ -367,7 +400,7 @@ func TestGitHubEarlyStopTemplateGateIf(t *testing.T) {
 	gate := strings.Replace(existingGate, "      - name: shearbolt\n", "      - name: shearbolt\n        if: "+cond+"\n", 1)
 	p, got := result(t, rootRepo(head+gate, nil))
 	wantWorkflow(t, got, head+withGateIf(existingGateEdited, cond))
-	wantEarlyStop(t, p, running("exit", 10, "its condition cannot be combined with the marker"), 10)
+	wantEarlyStop(t, p, runningAdvice("exit", 10, "its condition cannot be combined with the marker", adviceTemplate), 10)
 
 	// On a re-run, a marker term next to such a condition is removed.
 	root := applied(t, rootRepo(head+existingGate, nil))
@@ -376,7 +409,7 @@ func TestGitHubEarlyStopTemplateGateIf(t *testing.T) {
 		return strings.Replace(s, "        if: "+reached+"\n        uses:", "        if: ("+cond+") && "+reached+"\n        uses:", 1)
 	})
 	wantWorkflow(t, got, strings.Replace(before, "        if: "+reached+"\n        uses:", "        if: "+cond+"\n        uses:", 1))
-	wantEarlyStop(t, p, running("exit", 11, "its condition cannot be combined with the marker"), 11)
+	wantEarlyStop(t, p, runningAdvice("exit", 11, "its condition cannot be combined with the marker", adviceTemplate), 11)
 }
 
 // No EARLY_STOP without an early stop, and none for a split without the marker.
@@ -412,4 +445,75 @@ func TestGitHubEarlyStopNamesExec(t *testing.T) {
 		"          docker push ghcr.io/acme/edge:latest",
 	), map[string]string{"other.sh*": "#!/bin/sh\necho other\n"}))
 	wantEarlyStop(t, p, skipping("exec", 11), 11)
+}
+
+// gateTermLine is ES-1's gate with its marker term, as setup writes it.
+const gateTermLine = "      - name: shearbolt\n        if: " + reached + "\n"
+
+// stale applies ES-1, edits its workflow with edit, and runs setup again; a further run must
+// change nothing. It returns the edited workflow, the plan and the workflow setup writes.
+func stale(t *testing.T, edit func(string) string) (string, *plan.Plan, string) {
+	t.Helper()
+	root := applied(t, rootRepo(head+earlyStop, nil))
+	edited := edit(readFile(t, root, wf))
+	p, got := recompute(t, root, wf, func(string) string { return edited })
+	return edited, p, got
+}
+
+// (A) A step inserted between the split step and its gate: the gate no longer directly follows
+// a step that sets the marker, so a re-run takes the term away instead of keeping it while a
+// later push goes unchecked.
+func TestGitHubEarlyStopStaleTermStepBetween(t *testing.T) {
+	later := lines("      - run: docker push other")
+	edited, p, got := stale(t, func(s string) string {
+		return strings.Replace(s, gateTermLine, "      - run: echo hi\n"+gateTermLine, 1) + later
+	})
+	wantWorkflow(t, got, strings.Replace(edited, gateTermLine, "      - name: shearbolt\n", 1))
+	wantEarlyStop(t, p, removed("shearbolt-build"), 17)
+}
+
+// (B) The split step's id renamed, and the continued step updated: the term with the old id is
+// replaced, not kept next to the new one, which would never let the gate run.
+func TestGitHubEarlyStopStaleTermRenamedID(t *testing.T) {
+	edited, p, got := stale(t, func(s string) string {
+		s = strings.Replace(s, "        id: shearbolt-build\n", "        id: build\n", 1)
+		i := strings.LastIndex(s, "        if: "+reached+"\n")
+		return s[:i] + strings.Replace(s[i:], "steps.shearbolt-build.", "steps.build.", 1)
+	})
+	wantWorkflow(t, got, strings.ReplaceAll(edited, "steps.shearbolt-build.", "steps.build."))
+	wantEarlyStop(t, p, skipping("exit", 12), 12)
+}
+
+// (G) The id deleted and a later push added: the re-run gives the step its id back and decides
+// with it, so the term goes in one run.
+func TestGitHubEarlyStopStaleTermDeletedID(t *testing.T) {
+	later := lines("      - run: docker push other")
+	edited, p, got := stale(t, func(s string) string {
+		return strings.Replace(s, "        id: shearbolt-build\n", "", 1) + later
+	})
+	want := strings.Replace(edited, "      - name: Ship\n", "      - name: Ship\n        id: shearbolt-build\n", 1)
+	wantWorkflow(t, got, strings.Replace(want, gateTermLine, "      - name: shearbolt\n", 1))
+	wantEarlyStop(t, p, running("exit", 11, "a later step pushes or deploys"), 11)
+}
+
+// (H) The marker line deleted and a later push added: nothing sets the marker any more, so the
+// term goes; kept, it would never let the gate run.
+func TestGitHubEarlyStopStaleTermDeletedMarker(t *testing.T) {
+	later := lines("      - run: docker push other")
+	edited, p, got := stale(t, func(s string) string {
+		return strings.Replace(s, "          echo shearbolt-reached=true >> \"$GITHUB_OUTPUT\"\n", "", 1) + later
+	})
+	wantWorkflow(t, got, strings.Replace(edited, gateTermLine, "      - name: shearbolt\n", 1))
+	wantEarlyStop(t, p, removed("shearbolt-build"), 15)
+}
+
+// An if: on the item's dash line cannot be deleted, so a term that is the whole condition
+// becomes if: success(), which means the same as no if:, and later runs leave it alone.
+func TestGitHubEarlyStopDashLineIf(t *testing.T) {
+	later := lines("      - run: docker push other")
+	edited, p, got := stale(t, func(s string) string {
+		return strings.Replace(s, gateTermLine, "      - if: "+reached+"\n        name: shearbolt\n", 1) + later
+	})
+	wantWorkflow(t, got, strings.Replace(edited, "      - if: "+reached+"\n", "      - if: success()\n", 1))
+	wantEarlyStop(t, p, running("exit", 12, "a later step pushes or deploys"), 12)
 }

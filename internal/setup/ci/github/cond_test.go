@@ -146,3 +146,28 @@ func TestTemplated(t *testing.T) {
 		}
 	}
 }
+
+func TestStripAnyMarker(t *testing.T) {
+	for _, c := range []struct{ cond, stripped, id string }{
+		{"steps.build.outputs.shearbolt-reached != ''", "", "build"},
+		{"${{ steps.shearbolt-build.outputs.shearbolt-reached  !=  '' }}", "", "shearbolt-build"},
+		{"(github.ref == 'refs/heads/main') && steps.build.outputs.shearbolt-reached != ''", "github.ref == 'refs/heads/main'", "build"},
+		{"(steps.a.outputs.shearbolt-reached != '') && steps.b.outputs.shearbolt-reached != ''", "steps.a.outputs.shearbolt-reached != ''", "b"},
+	} {
+		got, id, ok := stripAnyMarker(c.cond)
+		if !ok || got != c.stripped || id != c.id {
+			t.Errorf("stripAnyMarker(%q) = %q, %q, %v; want %q, %q", c.cond, got, id, ok, c.stripped, c.id)
+		}
+	}
+	for _, cond := range []string{
+		"",
+		"github.ref == 'refs/heads/main'",
+		"(a) || (b) && steps.build.outputs.shearbolt-reached != ''",
+		"success() && (a) && steps.build.outputs.shearbolt-reached != ''",
+		"a && steps.build.outputs.shearbolt-reached != ''",
+	} {
+		if got, id, ok := stripAnyMarker(cond); ok || got != cond || id != "" {
+			t.Errorf("stripAnyMarker(%q) = %q, %q, %v; want it unchanged", cond, got, id, ok)
+		}
+	}
+}

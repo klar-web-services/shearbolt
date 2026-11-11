@@ -10,7 +10,6 @@ import (
 
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/shelledit"
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
-	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
@@ -153,30 +152,34 @@ func (e *jobEditor) earlyStopNote(s int, skip bool, reason string) plan.Note {
 	for _, k := range e.pj.Steps[s].Stops {
 		if k >= 0 && k < len(st.cmds) {
 			line = st.cmdLine(st.cmds[k])
-			where = fmt.Sprintf(" (%s at line %d)", stopName(st.cmds[k]), line)
+			name := shelledit.StopName(st.cmds[k])
+			if name == "" {
+				name = "exit"
+			}
+			where = fmt.Sprintf(" (%s at line %d)", name, line)
 			break
 		}
 	}
 	msg := "this step can stop before its build" + where + "; the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping."
 	if !skip {
-		msg = "this step can stop before its build" + where + "; the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because " + reason + ". Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:."
+		msg = "this step can stop before its build" + where + "; the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because " + reason + ". " + advice(reason)
 	}
 	return plan.Note{Code: "EARLY_STOP", Message: msg, File: e.wf.file, Line: line}
 }
 
-// stopName returns the name of the builtin by which cmd, a command that can stop the step early,
-// stops it: its first word that is exit, exec, source or "." (named source), as scriptci names
-// stops for GitLab and Bitbucket.
-func stopName(cmd shell.Command) string {
-	for _, w := range cmd.Words {
-		switch w.Value {
-		case "exit", "exec", "source":
-			return w.Value
-		case ".":
-			return "source"
-		}
+// advice is what the running form of EARLY_STOP asks the user to do about reason: fix the gate
+// for the reasons that are about the gate itself, otherwise drop targets that do not ship or move
+// the early stop out of the step.
+func advice(reason string) string {
+	switch reason {
+	case reasonNotNext:
+		return "Move the shearbolt gate directly after this step and run setup again."
+	case reasonRunStep:
+		return "Use the Shearbolt action for the gate (uses: " + gateUses + ") and run setup again."
+	case reasonTemplate:
+		return "Write the gate's if: without ${{ }} inside it and run setup again."
 	}
-	return "exit"
+	return "Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:."
 }
 
 // updateExisting brings an existing gate up to date (R8): its image variables (set, added, or
@@ -222,31 +225,28 @@ func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	return e.gateTerm(gi, g, st)
 }
 
-// gateTerm adds or removes the marker term in the if: of existing action gate g (design §3.4)
-// when the step directly before it is a split step with the marker: one this run splits for g,
-// or one that holds setup's marker line and has an id. The term is there exactly when the gate
-// may be skipped (gateMaySkip) and its own condition can be combined with it. A changed if:, or
-// a split that is new, gets EARLY_STOP; an unchanged re-run says nothing. Conditions are compared
-// normalized, so a term the user reformatted stays as written.
+// gateTerm keeps the marker term in the if: of existing action gate g right (design §3.4). Any
+// term in setup's form is stripped first, whatever its step id, and the decision is made on the
+// rest of the condition:
+//   - When the step directly before the gate is a split step with the marker (markerBefore), the
+//     term is that step's, and it is there exactly when the gate may be skipped (gateMaySkip) and
+//     its own condition can be combined with it. A changed if:, or a split that is new, gets
+//     EARLY_STOP.
+//   - Otherwise a term the gate had is removed, since nothing justifies it any more: kept, a stale
+//     one would skip the gate while a push runs, or never let it run. EARLY_STOP says so on the
+//     gate's line. A gate without a term is left alone (R8).
+//
+// Conditions are compared normalized, so a term the user reformatted stays as written, and an
+// unchanged re-run says nothing.
 func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 	s := g.Existing.Pos.Step - 1
-	if s < 0 {
-		return nil
-	}
-	id, split := "", false
-	if sp := e.markerSplit(gi, s); sp != nil {
-		id, split = sp.id, true
-	} else if prev := e.j.steps[s]; prev.run != nil && prev.id != "" && holdsMarker(prev) {
-		id = prev.id
-	} else {
-		return nil
-	}
-	skip, reason := e.gateMaySkip(g, s)
+	id, split := e.markerBefore(gi, s)
 	if e.d.Get(st.m, "if") != nil && st.ifNode == nil {
 		// An if: that is not a scalar cannot be read as a condition, so it is left alone.
 		if split {
-			if skip {
-				reason = reasonTemplate
+			reason := reasonTemplate
+			if skip, why := e.gateMaySkip(g, s); !skip {
+				reason = why
 			}
 			e.notes = append(e.notes, e.earlyStopNote(s, false, reason))
 		}
@@ -256,7 +256,34 @@ func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 	if st.ifNode != nil {
 		cur = st.ifNode.Value
 	}
-	next, _ := stripMarker(cur, id)
+	// Strip every term in setup's form: an older run may have left one inside another.
+	next, oldID, had := cur, "", false
+	for {
+		rest, termID, ok := stripAnyMarker(next)
+		if !ok {
+			break
+		}
+		if !had {
+			oldID = termID
+		}
+		next, had = rest, true
+	}
+	if id == "" {
+		if !had {
+			return nil
+		}
+		if err := e.setIf(st, next); err != nil {
+			return err
+		}
+		e.notes = append(e.notes, plan.Note{
+			Code:    "EARLY_STOP",
+			Message: fmt.Sprintf("setup removed the early-stop condition from this shearbolt gate, because it no longer directly follows a step that sets steps.%s.outputs.%s; the gate now runs on every run.", oldID, shelledit.ReachedOutput),
+			File:    e.wf.file,
+			Line:    st.line,
+		})
+		return nil
+	}
+	skip, reason := e.gateMaySkip(g, s)
 	if skip && templated(next) {
 		skip, reason = false, reasonTemplate
 	}
@@ -275,8 +302,30 @@ func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 	return nil
 }
 
-// setIf sets an existing gate's if: to cond, after its name when it has none; an empty cond
-// removes it.
+// markerBefore returns the id of step s when it is a split step with the marker, "" when it is
+// not: a step this run splits with the marker for gate gi (split is then true), or a run step
+// that holds setup's marker line. Its id is the one renderStep gave it, which a step whose id
+// the user deleted gets back in the same run, or else its own.
+func (e *jobEditor) markerBefore(gi, s int) (id string, split bool) {
+	if s < 0 {
+		return "", false
+	}
+	if sp := e.markerSplit(gi, s); sp != nil {
+		return sp.id, true
+	}
+	prev := e.j.steps[s]
+	if prev.run == nil || !holdsMarker(prev) {
+		return "", false
+	}
+	if sp := e.steps[s]; sp != nil && sp.id != "" {
+		return sp.id, false
+	}
+	return prev.id, false
+}
+
+// setIf sets an existing gate's if: to cond, after its name when it has none. An empty cond
+// removes it, or, when it shares its line with the item's dash and cannot be deleted, makes it
+// success(), which means the same as no if: and which later runs leave alone.
 func (e *jobEditor) setIf(st *step, cond string) error {
 	fail := func(err error) error {
 		return failAt(st.line, "the existing gate's if: cannot be updated (%v)", err)
@@ -285,7 +334,10 @@ func (e *jobEditor) setIf(st *step, cond string) error {
 		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
 	}
 	if cond == "" {
-		return wrapErr(fail, e.d.DeleteEntry(st.m, "if"))
+		if e.d.DeleteEntry(st.m, "if") == nil {
+			return nil
+		}
+		cond = "success()"
 	}
 	after := ""
 	if slices.Contains(keys(st.m), "name") {

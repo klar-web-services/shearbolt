@@ -111,25 +111,35 @@ func continuedIf(copied, id string) (string, error) {
 	return "success() && (" + b + ") && " + markerExpr(id), nil
 }
 
-// stripMarker removes step id's marker from condition cond as withMarker adds it: (<X>) &&
-// <marker> becomes X, and a condition that is exactly <marker> becomes "". A ${{ }} wrapper is
-// dropped, which means the same. The marker is matched with any run of whitespace where setup
-// writes a space; X keeps its text. ok is false, and cond comes back unchanged, when cond holds
-// no such term.
+// stripMarker removes step id's marker from condition cond as withMarker adds it (stripAnyMarker
+// with that id). ok is false, and cond comes back unchanged, when cond holds no such term for id.
 func stripMarker(cond, id string) (string, bool) {
+	s, got, ok := stripAnyMarker(cond)
+	if !ok || got != id {
+		return cond, false
+	}
+	return s, true
+}
+
+// stripAnyMarker removes a marker term in setup's form, whatever its step id: (<X>) && <marker>
+// becomes X, and a condition that is exactly <marker> becomes "". A ${{ }} wrapper is dropped,
+// which means the same. The marker is matched with any run of whitespace where setup writes a
+// space; X keeps its text. id is the removed term's step id. ok is false, and cond comes back
+// unchanged, when cond holds no such term.
+func stripAnyMarker(cond string) (stripped, id string, ok bool) {
 	b := bareExpr(cond)
-	if normCond(b) == markerExpr(id) {
-		return "", true
+	if m := markerAlone.FindStringSubmatch(normCond(b)); m != nil {
+		return "", m[1], true
 	}
 	loc := markerAfter.FindStringSubmatchIndex(b)
-	if loc == nil || b[loc[2]:loc[3]] != id || !strings.HasPrefix(b, "(") {
-		return cond, false
+	if loc == nil || !strings.HasPrefix(b, "(") {
+		return cond, "", false
 	}
 	inner := strings.TrimSpace(b[1:loc[0]])
 	if inner == "" || !balanced(inner) {
-		return cond, false
+		return cond, "", false
 	}
-	return inner, true
+	return inner, b[loc[2]:loc[3]], true
 }
 
 // markerAlone matches a marker condition, whitespace collapsed, and captures its step id.
@@ -176,6 +186,7 @@ func normCond(cond string) string {
 // Why a gate keeps running on early stops (EARLY_STOP's running form, design §3.3).
 const (
 	reasonAllTargets = "it checks every target in shearbolt.yaml"
+	reasonOtherSteps = "it also follows builds in other steps"
 	reasonLaterPush  = "a later step pushes or deploys"
 	reasonTemplate   = "its condition cannot be combined with the marker"
 	reasonNotNext    = "it does not directly follow this step"
@@ -206,7 +217,7 @@ func (e *jobEditor) gateMaySkip(g plan.Gate, s int) (bool, string) {
 			}
 		}
 		if len(other) == 0 {
-			return false, "it also follows builds in other steps"
+			return false, reasonOtherSteps
 		}
 		return false, "it also checks " + strings.Join(other, ", ")
 	}

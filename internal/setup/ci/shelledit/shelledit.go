@@ -307,6 +307,22 @@ const ReachedOutput = "shearbolt-reached"
 // stop early, so the step sets ReachedOutput only when its script got past the build.
 const ReachedLine = "echo " + ReachedOutput + `=true >> "$GITHUB_OUTPUT"`
 
+// StopName returns the name of the builtin by which cmd, a command the classifier reports as
+// stopping the shell early, stops it: its first word that is exit, exec, source or ".". Only
+// VAR=x assignments and wrappers such as command come before it. "." is named source, since a
+// message such as "(. at line 4)" reads badly. It is "" when there is no such word.
+func StopName(cmd shell.Command) string {
+	for _, w := range cmd.Words {
+		switch w.Value {
+		case "exit", "exec", "source":
+			return w.Value
+		case ".":
+			return "source"
+		}
+	}
+	return ""
+}
+
 // OwnLine reports a line setup adds: the output line, the marker line or the railpack docker tag.
 func OwnLine(c shell.Command) bool {
 	a := c.Argv()

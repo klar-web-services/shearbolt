@@ -28,3 +28,25 @@ func TestOwnLine(t *testing.T) {
 		t.Errorf("ReachedLine = %q, ReachedOutput = %q", ReachedLine, ReachedOutput)
 	}
 }
+
+// StopName is only asked about commands that stop the shell, so it reads no further than words.
+func TestStopName(t *testing.T) {
+	for line, want := range map[string]string{
+		"exit 0":            "exit",
+		"exit":              "exit",
+		"exec ./other.sh":   "exec",
+		"source ./env.sh":   "source",
+		". ./env.sh":        "source",
+		"command exit 0":    "exit",
+		"X=1 exec ./run.sh": "exec",
+		"echo exit-codes":   "",
+	} {
+		cmds, _ := shell.Parse(line, shell.State{})
+		if len(cmds) != 1 {
+			t.Fatalf("%q: %d commands", line, len(cmds))
+		}
+		if got := StopName(cmds[0]); got != want {
+			t.Errorf("StopName(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
