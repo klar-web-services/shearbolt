@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 
@@ -89,7 +90,8 @@ const (
 
 // droppedAssign is an assignment before the split point that the split step cannot re-create
 // and leaves out (design §4). renderStep fails the split with reason when the continued step
-// may read one of its names.
+// may read one of its names (assignRead), so only shell-local names, like live, are ever left
+// out: a name with no lowercase letter, or one in an env:, may be an inherited variable.
 type droppedAssign struct {
 	names  []string
 	line   int
@@ -103,7 +105,8 @@ type droppedAssign struct {
 // and the like. Anything that cannot be carried, or a state change inside a conditional or
 // loop, fails the split, except a command made up only of assignments that is not in a pipeline
 // or in the background: it is returned in dropped, and fails the split only when the continued
-// step reads one of its names (renderStep).
+// step may read one of its names (renderStep, assignRead), which includes every name that may
+// be inherited from the environment.
 func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
 	for i, c := range cmds {
 		line := st.cmdLine(c)
@@ -154,14 +157,21 @@ func carriedState(script string, cmds []shell.Command, st *step) (state []string
 }
 
 // assignRead reports whether a split step's continued text rem may read one of names, which an
-// assignment that the split step leaves out sets (design §4). A name counts as read when it is
-// a whole word anywhere in rem, which covers arithmetic, [[ -v ]] and comments; and every name
-// does when rem uses indirect or prefix expansion, or runs eval, source, ., a nameref or a
-// command that prints variables (also inside a substitution), when script exports the name or
-// makes it readonly, or when allexport is set by one of before, the commands ahead of the
-// assignment. A false match only fails the split.
-func assignRead(names []string, rem, script string, before []shell.Command) bool {
+// assignment that the split step leaves out sets (design §4). A name counts as read when it may
+// be an inherited environment variable, which every child process of rem reads without naming
+// it: when it is one of env, the env: keys of the workflow, the job and the step, or has no
+// lowercase letter, since the runner, $GITHUB_ENV from an earlier step or the shell (PATH, IFS)
+// can set such a name and setup cannot tell. It also counts as read when it is a whole word
+// anywhere in rem, which covers arithmetic, [[ -v ]] and comments; and every name does when rem
+// uses indirect or prefix expansion, or runs eval, source, ., a nameref or a command that
+// prints variables (also inside a substitution), when script exports the name or makes it
+// readonly, or when allexport is set by one of before, the commands ahead of the assignment. A
+// false match only fails the split.
+func assignRead(names []string, rem, script string, before []shell.Command, env []string) bool {
 	for _, n := range names {
+		if slices.Contains(env, n) || !strings.ContainsFunc(n, unicode.IsLower) {
+			return true
+		}
 		if regexp.MustCompile(`(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(n) + `([^A-Za-z0-9_]|$)`).MatchString(rem) {
 			return true
 		}

@@ -266,3 +266,14 @@ func TestGitHubUnsplittableAssignmentsStillRefused(t *testing.T) {
 		wantUnsupported(t, npmRepo("edge", head+shipWith(c.pre, pushLatest), nil), why, c.msg)
 	}
 }
+
+// Names that may be inherited environment variables count as read, so their assignments are
+// never dropped: a name with no lowercase letter, or a key of the workflow's, the job's or the
+// step's env:. A child process reads them without naming them.
+func TestGitHubInheritedAssignmentsRefused(t *testing.T) {
+	wantUnsupported(t, npmRepo("edge", head+shipWith("PATH=$(go env GOPATH)/bin:$PATH", pushLatest+"\ngolangci-lint run"), nil), "PATH", substMsg)
+	jobEnv := strings.Replace(head, "    steps:\n", "    env:\n      IMAGE: ghcr.io/acme/edge\n    steps:\n", 1)
+	wantUnsupported(t, npmRepo("edge", jobEnv+shipWith(`IMAGE=$(echo "$IMAGE" | tr A-Z a-z)`, "./push.sh"), map[string]string{"push.sh*": "#!/bin/sh\necho push\n"}), "IMAGE in job env:", substMsg)
+	stepEnv := strings.Replace(shipWith("foo=$(date)", pushLatest), "        run: |\n", "        env:\n          foo: x\n        run: |\n", 1)
+	wantUnsupported(t, npmRepo("edge", head+stepEnv, nil), "foo in step env:", substMsg)
+}

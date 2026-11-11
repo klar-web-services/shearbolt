@@ -559,7 +559,7 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 			rem += "\n"
 		}
 		for _, d := range sp.dropped {
-			if assignRead(d.names, rem, st.script, st.cmds[:d.cmd]) {
+			if assignRead(d.names, rem, st.script, st.cmds[:d.cmd], slices.Concat(e.wf.env, e.j.env, st.env)) {
 				return failAt(d.line, d.reason, d.text)
 			}
 		}

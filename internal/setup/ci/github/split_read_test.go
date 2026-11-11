@@ -73,7 +73,7 @@ func TestAssignRead(t *testing.T) {
 		{rem: push, before: "set -euo pipefail\n"},
 	} {
 		before, _ := shell.Parse(c.before, shell.State{})
-		if got := assignRead([]string{"live"}, c.rem, c.script, before); got != c.want {
+		if got := assignRead([]string{"live"}, c.rem, c.script, before, nil); got != c.want {
 			t.Errorf("assignRead(rem %q, script %q, before %q) = %v, want %v", c.rem, c.script, c.before, got, c.want)
 		}
 	}
@@ -81,7 +81,30 @@ func TestAssignRead(t *testing.T) {
 
 // Every name of a command that assigns several counts.
 func TestAssignReadNames(t *testing.T) {
-	if !assignRead([]string{"a", "b"}, "echo $b\n", "", nil) {
+	if !assignRead([]string{"a", "b"}, "echo $b\n", "", nil, nil) {
 		t.Error("a read of the second name does not count")
+	}
+}
+
+// A name that may be inherited from the environment counts as read: one with no lowercase
+// letter, or one of env, the env: keys around the step.
+func TestAssignReadInherited(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		env  []string
+		want bool
+	}{
+		{name: "live"},
+		{name: "Live"},
+		{name: "live_2"},
+		{name: "PATH", want: true},
+		{name: "IMAGE_2", want: true},
+		{name: "_", want: true},
+		{name: "foo", env: []string{"BAR", "foo"}, want: true},
+		{name: "foo", env: []string{"FOO", "food"}},
+	} {
+		if got := assignRead([]string{c.name}, "docker push x\n", "", nil, c.env); got != c.want {
+			t.Errorf("assignRead(%s, env %q) = %v, want %v", c.name, c.env, got, c.want)
+		}
 	}
 }
