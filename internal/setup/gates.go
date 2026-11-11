@@ -339,7 +339,7 @@ func lateGateNote(p plan.Project, late *plan.GateCmd, dropped bool) plan.Note {
 	msg := fmt.Sprintf("the existing Shearbolt gate for %s at %s:%d runs after a push or deploy in its job, so it cannot stop what is pushed; setup adds a gate before the push and leaves this one alone. Remove it once the new gate is in place.",
 		projectLabel(p), late.Pos.File, late.Pos.Line)
 	if dropped {
-		msg = "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build"
+		msg = "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build."
 	}
 	return plan.Note{Code: "GATE_AFTER_PUSH", Message: msg, File: late.Pos.File, Line: late.Pos.Line}
 }
@@ -603,7 +603,7 @@ func isCheckout(uses string) bool {
 // builds, which say that no gate is placed, and GATE_AFTER_PUSH for an existing gate after the
 // push, which asks for that gate's removal; orderNotes, about where the gate runs, are left out.
 // An existing root gate before the push that keeps no gated image, without compose files, is
-// left alone, and the notes of the builds after it ask for its removal too.
+// left alone (stale), and every note on the builds it does not scan asks for its removal too.
 func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) (*gatePlace, []plan.Note) {
 	file := m.jobFile(j)
 	inG := func(b located) bool { return slices.ContainsFunc(g, func(x located) bool { return x.i == b.i }) }
@@ -643,18 +643,6 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 	if e == nil && late != nil {
 		notes = append(notes, lateGateNote(p, late, drop))
 	}
-	// The endings of the notes on builds the gate does not scan: what a gate after a
-	// multi-platform build still checks, and why a build after the push is not scanned.
-	still, unscanned := "; the source lockfiles are still checked", "so the gate, which runs before that push, does not scan it"
-	switch {
-	case root && len(p.Compose) > 0:
-		still = "; its compose images are still checked"
-	case root:
-		still = ""
-	}
-	if drop {
-		unscanned = "so no gate can run between it and that push and its image is not scanned"
-	}
 	if e != nil {
 		gate.Existing, gate.At, gate.Before = e, e.Pos, false
 		ePos := at{e.Pos.Step, e.Pos.Command}
@@ -667,6 +655,27 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 			kept = append(kept, b)
 		}
 		bset = kept
+	}
+	// stale: an existing root gate that is kept with nothing of its own to scan. Its empty target
+	// list now covers images this job does not build, so every note about it asks for its removal.
+	stale := root && e != nil && len(bset) == 0 && len(p.Compose) == 0
+	const removeStale = "that gate now also scans images this job does not build, so remove it and run setup again"
+	// The endings of the notes on builds the gate does not scan: what a gate after a
+	// multi-platform build still checks, and why a build after the push is not scanned.
+	still, unscanned := "; the source lockfiles are still checked", "so the gate, which runs before that push, does not scan it"
+	switch {
+	case root && len(p.Compose) > 0:
+		still = "; its compose images are still checked"
+	case stale:
+		still = "; " + removeStale
+	case root:
+		still = ""
+	}
+	switch {
+	case drop:
+		unscanned = "so no gate can run between it and that push and its image is not scanned"
+	case stale:
+		unscanned = "so the existing gate in this job, which runs before that push, does not scan it; " + removeStale
 	}
 	// gateBefore reports whether the gate runs before build b.
 	gateBefore := func(b located) bool {
@@ -688,10 +697,10 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 			order = "the gate in this job runs after it, so it does not stop this build's push"
 		case root && len(p.Compose) > 0:
 			order = "the gate runs before it and checks its compose images"
-		case root && len(bset) > 0:
+		case stale:
+			order = "the existing gate in this job runs before it and does not scan its image; " + removeStale
+		case root:
 			order = "the gate runs before it and checks only the images built before it"
-		case root: // an existing gate (drop is false only because of it) that keeps no gated image
-			order = "the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"
 		}
 		switch {
 		case !gateable(b) && b.Image.OutputPush:

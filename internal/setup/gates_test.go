@@ -1438,7 +1438,7 @@ func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 		t.Fatalf("MULTI_PLATFORM: %+v", got)
 	}
 	want = []plan.Note{{Code: "GATE_AFTER_PUSH", File: ciFile, Line: 300,
-		Message: "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build"}}
+		Message: "the existing Shearbolt gate in this job runs after a push, so it cannot stop that push; setup places no gate in this job, because nothing built here can be scanned. Remove that gate: it would scan images this job does not build."}}
 	if got := noteCodes(pl.notes, "GATE_AFTER_PUSH"); !slices.Equal(got, want) || hasCode(pl.notes, "PUSH_BEFORE_GATE") {
 		t.Fatalf("GATE_AFTER_PUSH %+v, notes %v", got, pl.notes)
 	}
@@ -1473,9 +1473,7 @@ func TestGatesRootDropsGateWithNothingToScan(t *testing.T) {
 // the push is an action here.
 func TestGatesRootDropsGateAfterPush(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
-	release := fstep{uses: "acme/release-action@v1", push: true, builds: []plan.Build{
-		{Kind: plan.BuildImage, Dir: ".", Image: &plan.Image{Tool: "docker", Tags: []string{"ghcr.io/acme/edge:2"}}},
-	}}
+	release := releaseAction("ghcr.io/acme/edge:2")
 	a := mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1"))
 	for _, tc := range []struct {
 		name  string
@@ -1516,30 +1514,55 @@ func TestGatesRootDropsGateAfterPush(t *testing.T) {
 	}
 }
 
+// releaseAction is an action step that builds image tag and pushes it in the same step, so its
+// build runs at the push. Setup finds no image build inside a called script, so this stands in
+// for a build that runs after a push.
+func releaseAction(tag string) fstep {
+	return fstep{uses: "acme/release-action@v1", push: true, builds: []plan.Build{
+		{Kind: plan.BuildImage, Dir: ".", Image: &plan.Image{Tool: "docker", Tags: []string{tag}}},
+	}}
+}
+
 // An existing root gate before the push, in a job with no gateable image and no compose file,
-// is kept as it is (drop needs e == nil), and the note on the build after it asks for its
-// removal: it scans no image built here, and its target list now covers the other jobs' images.
+// is kept as it is (drop needs e == nil), and every note on the builds it does not scan asks for
+// its removal: it scans no image built here, and its target list now covers the other jobs'
+// images.
 func TestGatesRootExistingGateWithNothingToScan(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n"})
-	jobs := []plan.Job{
-		mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1")),
-		mkJob(t, r, "b", scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")),
-	}
-	gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
-	if len(gates) != 2 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
-		t.Fatalf("gates: %+v", gates)
-	}
-	// Setup leaves the gate alone; with no target of its own, it scans every target.
-	if g := gates[1]; g.Job != jobs[1].ID || g.Existing == nil || g.At.Step != 0 || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
-		t.Fatalf("b's gate: %s", dumpGate(g))
-	}
-	if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
-		t.Fatalf("planned: %v", got)
-	}
-	want := []plan.Note{{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
-		Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}}
-	if got := noteCodes(pl.notes, "MULTI_PLATFORM"); !slices.Equal(got, want) {
-		t.Fatalf("MULTI_PLATFORM: %+v", got)
+	a := mkJob(t, r, "a", run("docker build -t ghcr.io/acme/edge:1 ."), run("docker push ghcr.io/acme/edge:1"))
+	for _, tc := range []struct {
+		name     string
+		steps    []fstep // job b
+		gateStep int     // the step of b's existing gate
+		note     plan.Note
+	}{
+		{"multi-platform after the gate", []fstep{scanStep, run("docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:multi .")}, 0,
+			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 200,
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; the existing gate in this job runs before it and does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}},
+		{"build after a push", []fstep{scanStep, run("docker push ghcr.io/acme/old:1"), releaseAction("ghcr.io/acme/edge:2")}, 0,
+			plan.Note{Code: "BUILD_AFTER_PUSH", File: ciFile, Line: 300,
+				Message: "this build runs after a push or deploy in the same job, so the existing gate in this job, which runs before that push, does not scan it; that gate now also scans images this job does not build, so remove it and run setup again; build before you push, or in a separate job, to scan it"}},
+		{"multi-platform before the gate", []fstep{run("docker buildx build --platform linux/amd64,linux/arm64 -t ghcr.io/acme/edge:multi ."), scanStep, run("docker push ghcr.io/acme/edge:multi")}, 1,
+			plan.Note{Code: "MULTI_PLATFORM", File: ciFile, Line: 100,
+				Message: "this image build targets more than one platform, so it cannot be loaded into the local Docker daemon, and the gate, which runs after it, does not scan its image; that gate now also scans images this job does not build, so remove it and run setup again"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jobs := []plan.Job{a, mkJob(t, r, "b", tc.steps...)}
+			gates, planned, pl := planGates(t, r, []plan.Project{rootDocker()}, jobs, nil)
+			if len(gates) != 2 || gates[0].Job != jobs[0].ID || len(gates[0].Images) != 1 {
+				t.Fatalf("gates: %+v", gates)
+			}
+			// Setup leaves the gate alone; with no target of its own, it scans every target.
+			if g := gates[1]; g.Job != jobs[1].ID || g.Existing == nil || g.At.Step != tc.gateStep || len(g.Builds) != 0 || len(g.Images) != 0 || g.Targets != nil {
+				t.Fatalf("b's gate: %s", dumpGate(g))
+			}
+			if got := targetNames(planned["."]); !slices.Equal(got, []string{"repo"}) {
+				t.Fatalf("planned: %v", got)
+			}
+			if got := noteCodes(pl.notes, tc.note.Code); !slices.Equal(got, []plan.Note{tc.note}) {
+				t.Fatalf("%s: %+v", tc.note.Code, got)
+			}
+		})
 	}
 }
 
