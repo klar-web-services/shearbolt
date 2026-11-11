@@ -1,6 +1,7 @@
 package github_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1621,5 +1622,147 @@ func TestGitHubStepStops(t *testing.T) {
 	}
 	if s := jobs[0].Steps[0].Stops; len(s) != 0 {
 		t.Errorf("an action step: %v", s)
+	}
+}
+
+// snippetOf returns the gate snippet of p's UNSUPPORTED_EDIT note for the workflow: the note's
+// text from the gate step on.
+func snippetOf(t *testing.T, p *plan.Plan) string {
+	t.Helper()
+	for _, n := range p.Notes {
+		if n.Code != "UNSUPPORTED_EDIT" || n.File != wf {
+			continue
+		}
+		if i := strings.Index(n.Message, "      - name: shearbolt"); i >= 0 {
+			return n.Message[i:]
+		}
+	}
+	t.Fatalf("no UNSUPPORTED_EDIT with a snippet: %v", noteMessages(p))
+	return ""
+}
+
+// snippetEnv parses snippet as the second step of a job and returns its env: the snippet must
+// be valid YAML at the usual step indentation.
+func snippetEnv(t *testing.T, snippet string) map[string]string {
+	t.Helper()
+	var w struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal([]byte(head+snippet+"\n"), &w); err != nil {
+		t.Fatalf("the snippet is not valid YAML in a job: %v\n%s", err, snippet)
+	}
+	steps := w.Jobs["build"].Steps
+	if len(steps) != 2 || steps[1].Name != "shearbolt" {
+		t.Fatalf("the snippet is not one step: %+v\n%s", steps, snippet)
+	}
+	return steps[1].Env
+}
+
+// P11 (design §5): the hand-written gate passes each image's scan tag as a value GitHub can
+// expand: ${{ env.NAME }} for a plain variable of the job's or workflow's env:, ${{ github.* }}
+// for GitHub's default variables, and otherwise a step output the build step must write, with
+// the two lines to add in comments. The shell function makes setup refuse to split the step.
+func TestGitHubSnippetShellVariables(t *testing.T) {
+	const fn = "f() { :; }"
+	job := func(workflowEnv, jobEnv, stepHead string, script ...string) string {
+		var b strings.Builder
+		b.WriteString("name: ci\non: push\n")
+		if workflowEnv != "" {
+			b.WriteString("env:\n  " + workflowEnv + "\n")
+		}
+		b.WriteString("jobs:\n  build:\n    runs-on: ubuntu-latest\n")
+		if jobEnv != "" {
+			b.WriteString("    env:\n      " + jobEnv + "\n")
+		}
+		b.WriteString("    steps:\n      - uses: actions/checkout@v5\n      - name: Build\n")
+		if stepHead != "" {
+			b.WriteString(stepHead + "\n")
+		}
+		b.WriteString("        run: |\n" + indent(strings.Join(script, "\n"), "          "))
+		return b.String()
+	}
+	build := func(tag string) []string {
+		return []string{fn, `docker build -t "` + tag + `" .`, `docker push "` + tag + `"`}
+	}
+	const imageEnv = "IMAGE: ghcr.io/acme/edge"
+	stepOutput := func(id, value string) string {
+		return lines(
+			"          # SHEARBOLT_IMAGE: this tag is set in the script; in the build step"+map[bool]string{true: " (give it an id)"}[id == "<id>"]+", add:",
+			`          #   echo "shearbolt-image=`+value+`" >> "$GITHUB_OUTPUT"`,
+			"          SHEARBOLT_IMAGE: ${{ steps."+id+".outputs.shearbolt-image }}",
+		)
+	}
+	for _, c := range []struct {
+		why, workflow string
+		value         string // the env value, or "" for the step output
+		comment       string // the step-output lines, with the value line
+	}{
+		{"SN-1: job env:", job("", imageEnv, "", build("$IMAGE:latest")...),
+			"${{ env.IMAGE }}:shearbolt-${{ github.sha }}", ""},
+		{"job env:, braces", job("", imageEnv, "", build("${IMAGE}:latest")...),
+			"${{ env.IMAGE }}:shearbolt-${{ github.sha }}", ""},
+		{"workflow env:", job(imageEnv, "", "", build("$IMAGE:latest")...),
+			"${{ env.IMAGE }}:shearbolt-${{ github.sha }}", ""},
+		{"the step's env: overrides it", job("", imageEnv, "        env:\n          IMAGE: ghcr.io/acme/other", build("$IMAGE:latest")...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"assigned in the script", job("", imageEnv, "", append([]string{"IMAGE=ghcr.io/acme/other"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"exported in the script", job("", imageEnv, "", append([]string{"export IMAGE=ghcr.io/acme/other"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"declared in the script", job("", imageEnv, "", append([]string{"declare IMAGE=ghcr.io/acme/other"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"read in the script", job("", imageEnv, "", append([]string{"read -r IMAGE < image.txt"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"a default variable", job("", "", "", build("ghcr.io/$GITHUB_REPOSITORY:latest")...),
+			"ghcr.io/${{ github.repository }}:shearbolt-${{ github.sha }}", ""},
+		{"default variables, braces", job("", "", "", build("ghcr.io/${GITHUB_REPOSITORY_OWNER}/app-$GITHUB_RUN_NUMBER:latest")...),
+			"ghcr.io/${{ github.repository_owner }}/app-${{ github.run_number }}:shearbolt-${{ github.sha }}", ""},
+		{"a default variable reassigned", job("", "", "", append([]string{"GITHUB_REPOSITORY=acme/other"}, build("ghcr.io/$GITHUB_REPOSITORY:latest")...)...),
+			"", stepOutput("<id>", "ghcr.io/$GITHUB_REPOSITORY:shearbolt-${{ github.sha }}")},
+		{"${GITHUB_REPOSITORY,,}", job("", "", "", build("ghcr.io/${GITHUB_REPOSITORY,,}:latest")...),
+			"", stepOutput("<id>", "ghcr.io/${GITHUB_REPOSITORY,,}:shearbolt-${{ github.sha }}")},
+		{"${IMAGE:-x} of a job env: variable", job("", imageEnv, "", build("${IMAGE:-ghcr.io/acme/x}:latest")...),
+			"", stepOutput("<id>", "${IMAGE:-ghcr.io/acme/x}:shearbolt-${{ github.sha }}")},
+		{"a literal tag", job("", "", "", fn, "docker build -t 'ghcr.io/acme/edge:latest' .", "docker push ghcr.io/acme/edge:latest"),
+			"ghcr.io/acme/edge:shearbolt-${{ github.sha }}", ""},
+		{"a step that does not run in bash", job("", imageEnv, "        shell: pwsh", build("$IMAGE:latest")...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"SN-2: set only in the script", job("", "", "", append([]string{"IMAGE=ghcr.io/acme/edge"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("<id>", "$IMAGE:shearbolt-${{ github.sha }}")},
+		{"SN-2: set only in the script, a step with an id", job("", "", "        id: build", append([]string{"IMAGE=ghcr.io/acme/edge"}, build("$IMAGE:latest")...)...),
+			"", stepOutput("build", "$IMAGE:shearbolt-${{ github.sha }}")},
+	} {
+		p := unsupported(t, npmRepo("web", c.workflow, map[string]string{"image.txt": "ghcr.io/acme/other\n"}), c.why)
+		snippet := snippetOf(t, p)
+		env := snippetEnv(t, snippet)
+		if c.value != "" {
+			if !strings.Contains(snippet+"\n", "\n          SHEARBOLT_IMAGE: "+c.value+"\n") || env["SHEARBOLT_IMAGE"] != c.value {
+				t.Errorf("%s: SHEARBOLT_IMAGE is %q, want %q:\n%s", c.why, env["SHEARBOLT_IMAGE"], c.value, snippet)
+			}
+			if strings.Contains(snippet, "#") {
+				t.Errorf("%s: a mapped tag needs no comment:\n%s", c.why, snippet)
+			}
+			continue
+		}
+		if !strings.Contains(snippet+"\n", "\n"+c.comment) || !strings.HasPrefix(env["SHEARBOLT_IMAGE"], "${{ steps.") {
+			t.Errorf("%s: the snippet lacks\n%s\n%s", c.why, c.comment, snippet)
+		}
+	}
+
+	// Two such builds in one step write two outputs.
+	p := unsupported(t, npmRepo("web", job("", "", "", fn, "A=ghcr.io/acme/web", "B=ghcr.io/acme/worker",
+		`docker build -t "$A:1" .`, `docker build -f Dockerfile -t "$B:1" .`, `docker push "$A:1"`, `docker push "$B:1"`), nil), "two builds")
+	snippet := snippetOf(t, p)
+	env := snippetEnv(t, snippet)
+	if len(env) != 2 || !strings.Contains(snippet, `#   echo "shearbolt-image=$A:shearbolt-${{ github.sha }}" >> "$GITHUB_OUTPUT"`) ||
+		!strings.Contains(snippet, `#   echo "shearbolt-image-2=$B:shearbolt-${{ github.sha }}" >> "$GITHUB_OUTPUT"`) ||
+		env["SHEARBOLT_IMAGE"] != "${{ steps.<id>.outputs.shearbolt-image }}" ||
+		!slices.Contains(slices.Collect(maps.Values(env)), "${{ steps.<id>.outputs.shearbolt-image-2 }}") {
+		t.Errorf("two builds in one step:\n%s", snippet)
 	}
 }

@@ -554,13 +554,67 @@ func pushesAction(d *yamledit.Doc, st *step) bool {
 // ---- Snippet ----
 
 // Snippet renders gate g as the step a user adds by hand, at the usual step indentation. Image
-// variables carry the scan tag the image must also be tagged with.
+// variables carry the scan tag the image must also be tagged with, as a value GitHub expands in
+// env: (P11): the tag with its variables mapped to expressions (snippetValue), or else the build
+// step's output, after two comment lines that show the line the build step needs to write it.
+// A tag whose build cannot be found in the file, or an action's tag, is rendered as written.
 func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
+	var wf *workflow
+	if len(g.Images) > 0 {
+		if src, err := r.Read(file); err == nil {
+			wf, _ = parseWorkflow(file, src)
+		}
+	}
 	var env [][2]string
-	for _, iv := range g.Images {
-		env = append(env, [2]string{iv.Var, shelledit.ShellValue(iv.ScanTag)})
+	notes := map[int][]string{} // env index: comment lines before its entry
+	outputs := map[[2]int]string{}
+	perStep := map[int]int{}
+	for i, iv := range g.Images {
+		value := shelledit.ShellValue(iv.ScanTag)
+		if j, st, before, ok := snippetBuild(wf, iv.Build); ok {
+			sv := st
+			if iv.Build.Via != "" {
+				sv = nil // the tag is in a file the step runs
+			}
+			if v, ok := snippetValue(iv.ScanTag, wf, j, sv, before); ok {
+				value = v
+			} else {
+				at := [2]int{iv.Build.Pos.Step, iv.Build.Pos.Command}
+				name, seen := outputs[at]
+				if !seen {
+					name = "shearbolt-image"
+					if perStep[at[0]]++; perStep[at[0]] > 1 {
+						name = fmt.Sprintf("shearbolt-image-%d", perStep[at[0]])
+					}
+					outputs[at] = name
+				}
+				id, give := st.id, ""
+				if id == "" {
+					id, give = "<id>", " (give it an id)"
+				}
+				value = fmt.Sprintf("${{ steps.%s.outputs.%s }}", id, name)
+				notes[i] = []string{
+					"# " + iv.Var + ": this tag is set in the script; in the build step" + give + ", add:",
+					"#   " + outputEcho(name, iv.ScanTag),
+				}
+			}
+		}
+		env = append(env, [2]string{iv.Var, value})
 	}
 	item := gateLines(g, "", env, 2)
+	if len(notes) > 0 {
+		at := slices.Index(item, "env:")
+		var out []string
+		for k, l := range item {
+			if c, ok := notes[k-at-1]; ok && k > at {
+				for _, n := range c {
+					out = append(out, "  "+n)
+				}
+			}
+			out = append(out, l)
+		}
+		item = out
+	}
 	var b strings.Builder
 	for i, l := range item {
 		switch {
@@ -575,6 +629,213 @@ func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
 		}
 	}
 	return b.String()
+}
+
+// snippetBuild finds run-step build b in workflow wf: its job, its step, and the step's commands
+// ahead of it. It fails for an action build, and when wf is nil (the file could not be read) or
+// does not hold the build.
+func snippetBuild(wf *workflow, b plan.Build) (*job, *step, []shell.Command, bool) {
+	if wf == nil || b.Pos.Command < 0 {
+		return nil, nil, nil, false
+	}
+	j := wf.job(b.Pos.Job)
+	if j == nil || b.Pos.Step < 0 || b.Pos.Step >= len(j.steps) {
+		return nil, nil, nil, false
+	}
+	st := j.steps[b.Pos.Step]
+	if st.run == nil || b.Pos.Command >= len(st.cmds) {
+		return nil, nil, nil, false
+	}
+	return j, st, st.cmds[:b.Pos.Command], true
+}
+
+// githubDefaults are GitHub's default variables that snippetValue maps, with the github context
+// values they hold; the env context does not have them.
+var githubDefaults = map[string]string{
+	"GITHUB_SHA":              "github.sha",
+	"GITHUB_REPOSITORY":       "github.repository",
+	"GITHUB_REPOSITORY_OWNER": "github.repository_owner",
+	"GITHUB_REF_NAME":         "github.ref_name",
+	"GITHUB_ACTOR":            "github.actor",
+	"GITHUB_RUN_ID":           "github.run_id",
+	"GITHUB_RUN_NUMBER":       "github.run_number",
+}
+
+// snippetValue returns scan tag tag, a shell word of step st in job j of workflow wf, as a value
+// GitHub expands in the gate step's env: (P11), and false when it cannot. A ${{ … }} expression
+// is text, as GitHub fills it in before the shell runs; quotes and escapes are removed. A plain
+// $NAME or ${NAME} becomes ${{ github.* }} for one of githubDefaults, or ${{ env.NAME }} for a
+// key of the workflow's or the job's env:, when the step's own env: does not set it (or cannot
+// be read) and none of before, the step's commands ahead of the build, may assign it (assigns).
+// Any other variable, any other expansion (${NAME,,}, ${NAME:-x}, $(…), backticks, $1), and a
+// step that does not run in bash or sh fail. st is nil when the tag is in a file the step runs,
+// whose assignments setup does not see: then no variable maps.
+func snippetValue(tag string, wf *workflow, j *job, st *step, before []shell.Command) (string, bool) {
+	cmds, _ := shell.Parse(tag, shell.State{})
+	if len(cmds) != 1 || len(cmds[0].Words) != 1 || len(cmds[0].Redirs) > 0 || cmds[0].Depth > 0 {
+		return "", false
+	}
+	raw := cmds[0].Words[0].Raw
+	var b strings.Builder
+	quoted := false
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		switch {
+		case strings.HasPrefix(raw[i:], "${{"):
+			end := strings.Index(raw[i:], "}}")
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(raw[i : i+end+2])
+			i += end + 1
+		case c == '"':
+			quoted = !quoted
+		case c == '\'' && !quoted:
+			end := strings.IndexByte(raw[i+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			b.WriteString(raw[i+1 : i+1+end])
+			i += end + 1
+		case c == '\\':
+			if i+1 == len(raw) || raw[i+1] == '\n' {
+				return "", false
+			}
+			if quoted && !strings.ContainsRune("$`\"\\", rune(raw[i+1])) {
+				b.WriteByte('\\') // kept in double quotes
+			}
+			b.WriteByte(raw[i+1])
+			i++
+		case c == '`':
+			return "", false
+		case c == '$':
+			name, n := plainVar(raw[i:])
+			if n == 0 {
+				return "", false
+			}
+			expr, ok := mapVar(name, wf, j, st, before)
+			if !ok {
+				return "", false
+			}
+			b.WriteString("${{ " + expr + " }}")
+			i += n - 1
+		default:
+			b.WriteByte(c)
+		}
+	}
+	if quoted {
+		return "", false
+	}
+	return b.String(), true
+}
+
+// plainVar returns NAME and the length of the $NAME or ${NAME} that s starts with; 0 for
+// anything else.
+func plainVar(s string) (string, int) {
+	braced := strings.HasPrefix(s, "${")
+	from := 1
+	if braced {
+		from = 2
+	}
+	k := from
+	for k < len(s) && (s[k] == '_' || s[k] >= 'a' && s[k] <= 'z' || s[k] >= 'A' && s[k] <= 'Z' || k > from && s[k] >= '0' && s[k] <= '9') {
+		k++
+	}
+	switch {
+	case k == from:
+		return "", 0
+	case !braced:
+		return s[from:k], k
+	case k < len(s) && s[k] == '}':
+		return s[from:k], k + 1
+	}
+	return "", 0
+}
+
+// mapVar returns the GitHub expression that holds variable name where the build reads it (see
+// snippetValue).
+func mapVar(name string, wf *workflow, j *job, st *step, before []shell.Command) (string, bool) {
+	if st == nil || !st.posix {
+		return "", false
+	}
+	if own, ok := envNames(st.m); !ok || slices.Contains(own, name) {
+		return "", false
+	}
+	if slices.ContainsFunc(before, func(c shell.Command) bool { return assigns(c, name) }) {
+		return "", false
+	}
+	if e, ok := githubDefaults[name]; ok {
+		return e, true
+	}
+	if slices.Contains(wf.env, name) || slices.Contains(j.env, name) {
+		return "env." + name, true
+	}
+	return "", false
+}
+
+// assigns reports whether command c may assign variable name (P11): a NAME=… word, alone or
+// before a command; export, declare, typeset, local, readonly, read, mapfile, readarray, unset,
+// let, getopts or printf, or a for or select loop, that names it; a ${NAME=…} or ${NAME:=…}
+// expansion; or eval, source or ., which may assign anything. A false match only gives the
+// step-output advice, which is always right.
+func assigns(c shell.Command, name string) bool {
+	if slices.Contains(c.Prefix(), name) {
+		return true
+	}
+	for _, w := range c.Words {
+		if strings.Contains(w.Raw, "${"+name+"=") || strings.Contains(w.Raw, "${"+name+":=") {
+			return true
+		}
+	}
+	argv := builtinArgv(c)
+	if len(argv) == 0 {
+		return false
+	}
+	switch argv[0] {
+	case "eval", "source", ".":
+		return true
+	case "export", "declare", "typeset", "local", "readonly", "read", "mapfile", "readarray", "unset",
+		"let", "getopts", "printf", "for", "select":
+		return slices.ContainsFunc(argv[1:], func(a string) bool { return a == name || varName(a) == name })
+	}
+	return false
+}
+
+// outputEcho returns the line that writes scan tag tag, a shell word, to the step output name:
+// the tag inside the double quotes when it means the same there, else as written after them.
+func outputEcho(name, tag string) string {
+	if v, ok := inDoubleQuotes(tag); ok {
+		return `echo "` + name + "=" + v + `" >> "$GITHUB_OUTPUT"`
+	}
+	return `echo "` + name + `="` + tag + ` >> "$GITHUB_OUTPUT"`
+}
+
+// inDoubleQuotes returns shell word w as text with the same value inside double quotes: w
+// without its quotes when it is one double-quoted string, w itself when it holds no quote or
+// backslash; false otherwise.
+func inDoubleQuotes(w string) (string, bool) {
+	if !strings.ContainsAny(w, `"'\`) {
+		return w, true
+	}
+	if len(w) < 2 || w[0] != '"' || w[len(w)-1] != '"' {
+		return "", false
+	}
+	inner := w[1 : len(w)-1]
+	for i := 0; i < len(inner); i++ {
+		switch {
+		case strings.HasPrefix(inner[i:], "${{"):
+			end := strings.Index(inner[i:], "}}")
+			if end < 0 {
+				return "", false
+			}
+			i += end + 1
+		case inner[i] == '\\' && i+1 < len(inner):
+			i++
+		case inner[i] == '\\', inner[i] == '"':
+			return "", false
+		}
+	}
+	return inner, true
 }
 
 // gateLines renders a gate step relative to its item's content column: name, if, uses, env,
