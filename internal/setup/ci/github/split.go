@@ -152,14 +152,14 @@ func (e *jobEditor) remainderLines(sp *stepPlan) ([]string, error) {
 		if st.ifNode != nil {
 			copied, at = st.ifNode.Value, st.ifNode.Line
 		}
-		cond, err := safeIf(copied)
-		why := "would run after a failed gate"
+		var cond string
+		var err error
 		if sp.marker {
-			cond, err = continuedIf(copied, sp.id)
-			why = "must run only when the build ran and the gate passed"
-		}
-		if err != nil {
-			return nil, failAt(at, "the continued step %s, and %v", why, err)
+			if cond, err = continuedIf(copied, sp.id); err != nil {
+				return nil, failAt(at, "the continued step must run only when the build ran and the gate passed, and %v", err)
+			}
+		} else if cond, err = safeIf(copied); err != nil {
+			return nil, failAt(at, "the continued step would run after a failed gate, and %v", err)
 		}
 		ifLine = "if: " + yamledit.Scalar(cond)
 	}

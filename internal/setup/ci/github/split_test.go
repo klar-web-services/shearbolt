@@ -57,6 +57,24 @@ func TestGitHubEarlyStopKeepsStepIf(t *testing.T) {
 	}
 }
 
+// A copied if: with a status function needs no success() && (...) wrap of its own: the
+// continued step's success() && (<copied>) && <marker> is already safe, and a re-run leaves it
+// alone (R8) instead of wrapping it as a push step that would run after a failed gate.
+func TestGitHubEarlyStopStatusIfSurvivesReRun(t *testing.T) {
+	for cond, bare := range map[string]string{"${{ !cancelled() }}": "!cancelled()", "always()": "always()"} {
+		step := strings.Replace(earlyStop, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
+		edited := strings.Replace(earlyStopEdited, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
+		edited = strings.Replace(edited, "      - name: shearbolt\n", "      - name: shearbolt\n        if: "+cond+"\n", 1)
+		p, got := result(t, npmRepo("edge", head+step, nil))
+		wantWorkflow(t, got, head+edited+lines(
+			"        if: success() && ("+bare+") && steps.shearbolt-build.outputs.shearbolt-reached != ''",
+		)+continuedRun)
+		if hasNote(p, "PUSH_IF_WRAPPED") {
+			t.Errorf("%s: notes = %v", cond, noteCodes(p))
+		}
+	}
+}
+
 // exec in an if before the build replaces the shell, so it stops the step early too.
 func TestGitHubEarlyStopExec(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+lines(

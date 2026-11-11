@@ -35,6 +35,10 @@ func needsWrap(cond string) bool {
 	if !statusCheck.MatchString(cond) {
 		return false
 	}
+	// setup's marker forms begin with success() or hold no status function: already safe.
+	if _, ok := markerGuarded(cond); ok {
+		return false
+	}
 	inner, ok := strings.CutPrefix(bareExpr(cond), "success() && (")
 	if !ok || !strings.HasSuffix(inner, ")") {
 		return true
@@ -91,19 +95,16 @@ func withMarker(cond, id string) string {
 }
 
 // continuedIf returns the if: of the continued step of split step id when that step can stop
-// early: success() && (<copied>) && <marker>, where copied (the step's own if:) is made safe by
-// safeIf and then unwrapped, or the marker alone when there is no copied condition. Left
-// wrapped, (${{ … }}) would be a non-empty string, which is always true; for the same reason a
-// condition that mixes ${{ }} with other text cannot be combined.
+// early: success() && (<copied>) && <marker>, with copied (the step's own if:) unwrapped, or the
+// marker alone when there is no copied condition. The leading success() keeps a status function
+// in copied from running the step after a failed gate. Left wrapped, (${{ … }}) would be a
+// non-empty string, which is always true; for the same reason a condition that mixes ${{ }}
+// with other text cannot be combined.
 func continuedIf(copied, id string) (string, error) {
-	if bareExpr(copied) == "" {
+	b := bareExpr(copied)
+	if b == "" {
 		return markerExpr(id), nil
 	}
-	safe, err := safeIf(copied)
-	if err != nil {
-		return "", err
-	}
-	b := bareExpr(safe)
 	if strings.Contains(b, "${{") {
 		return "", fmt.Errorf("the condition %s mixes ${{ }} with other text, so it cannot be combined with the check that the build ran", copied)
 	}
@@ -117,12 +118,11 @@ func continuedIf(copied, id string) (string, error) {
 // no such term.
 func stripMarker(cond, id string) (string, bool) {
 	b := bareExpr(cond)
-	if collapse(b) == markerExpr(id) {
+	if normCond(b) == markerExpr(id) {
 		return "", true
 	}
-	tail := regexp.MustCompile(`\)\s+&&\s+steps\.` + regexp.QuoteMeta(id) + `\.outputs\.` + regexp.QuoteMeta(shelledit.ReachedOutput) + `\s+!=\s+''$`)
-	loc := tail.FindStringIndex(b)
-	if loc == nil || !strings.HasPrefix(b, "(") {
+	loc := markerAfter.FindStringSubmatchIndex(b)
+	if loc == nil || b[loc[2]:loc[3]] != id || !strings.HasPrefix(b, "(") {
 		return cond, false
 	}
 	inner := strings.TrimSpace(b[1:loc[0]])
@@ -135,13 +135,21 @@ func stripMarker(cond, id string) (string, bool) {
 // markerAlone matches a marker condition, whitespace collapsed, and captures its step id.
 var markerAlone = regexp.MustCompile(`^steps\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.` + regexp.QuoteMeta(shelledit.ReachedOutput) + ` != ''$`)
 
+// markerAfter matches `) && <marker>` at the end of a condition, with any run of whitespace where
+// setup writes a space, and captures the marker's step id.
+var markerAfter = regexp.MustCompile(`\)\s+&&\s+steps\.([A-Za-z_][A-Za-z0-9_-]*)\.outputs\.` + regexp.QuoteMeta(shelledit.ReachedOutput) + `\s+!=\s+''$`)
+
 // markerGuarded reports whether condition cond is one of setup's two forms that run a step only
 // when split step id got past its build: exactly <marker>, or success() && (<X>) && <marker>
 // where X's parentheses are balanced, as needsWrap requires, so that success() && (a) || (b) &&
 // <marker> does not count. The text is compared without its ${{ }} wrapper and with each run of
-// whitespace collapsed to one space.
+// whitespace collapsed to one space. ${{ }} anywhere inside makes the condition a string, which
+// is always true, so it does not count either.
 func markerGuarded(cond string) (id string, ok bool) {
-	n := collapse(cond)
+	n := normCond(cond)
+	if strings.Contains(n, "${{") {
+		return "", false
+	}
 	if m := markerAlone.FindStringSubmatch(n); m != nil {
 		return m[1], true
 	}
@@ -156,8 +164,8 @@ func markerGuarded(cond string) (id string, ok bool) {
 	return "", false
 }
 
-// collapse returns cond without its ${{ }} wrapper and with each run of whitespace as one space.
-func collapse(cond string) string {
+// normCond returns cond without its ${{ }} wrapper and with each run of whitespace as one space.
+func normCond(cond string) string {
 	return strings.Join(strings.Fields(bareExpr(cond)), " ")
 }
 

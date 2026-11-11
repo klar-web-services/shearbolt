@@ -30,9 +30,9 @@ func TestContinuedIf(t *testing.T) {
 		"github.ref == 'refs/heads/main'":        "success() && (github.ref == 'refs/heads/main') && " + marker,
 		"${{ github.ref == 'refs/heads/main' }}": "success() && (github.ref == 'refs/heads/main') && " + marker,
 		"a || b":                                 "success() && (a || b) && " + marker,
-		// safeIf first: a status check is wrapped in success() && (...), then unwrapped.
-		"always()":            "success() && (success() && (always())) && " + marker,
-		"${{ !cancelled() }}": "success() && (success() && (!cancelled())) && " + marker,
+		// The leading success() already keeps a status function from running it after a failure.
+		"always()":            "success() && (always()) && " + marker,
+		"${{ !cancelled() }}": "success() && (!cancelled()) && " + marker,
 	} {
 		got, err := continuedIf(cond, "shearbolt-build")
 		if err != nil || got != want {
@@ -45,6 +45,21 @@ func TestContinuedIf(t *testing.T) {
 		if got, err := continuedIf(cond, "shearbolt-build"); err == nil {
 			t.Errorf("continuedIf(%q) = %q, want an error", cond, got)
 		}
+	}
+}
+
+// A condition in one of setup's marker forms is already safe: safeIf leaves it as it is.
+func TestNeedsWrapMarkerGuarded(t *testing.T) {
+	for _, cond := range []string{
+		"success() && (always()) && " + marker,
+		"${{ success() && (!cancelled()) && " + marker + " }}",
+	} {
+		if needsWrap(cond) {
+			t.Errorf("needsWrap(%q) = true", cond)
+		}
+	}
+	if !needsWrap("success() && (a) || always() && " + marker) {
+		t.Error("a status function outside setup's form still needs the wrap")
 	}
 }
 
@@ -108,6 +123,9 @@ func TestMarkerGuarded(t *testing.T) {
 		"success() && (a) && steps.x.outputs.shearbolt-image != ''",
 		"steps.x.outputs.shearbolt-reached == ''",
 		"steps..outputs.shearbolt-reached != ''",
+		// ${{ }} inside the condition makes it a string, which is always true.
+		"success() && (${{ github.ref == 'x' }}) && steps.b.outputs.shearbolt-reached != ''",
+		"success() && (github.ref == '${{ env.X }}') && steps.b.outputs.shearbolt-reached != ''",
 	} {
 		if id, ok := markerGuarded(cond); ok {
 			t.Errorf("markerGuarded(%q) = %q, true, want false", cond, id)

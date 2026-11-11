@@ -28,6 +28,31 @@ func TestGitHubMarkerJoinsBuild(t *testing.T) {
 	))
 }
 
+// After a build followed by ; on the same line, the marker joins with ; as the output line does.
+func TestGitHubMarkerJoinsSemicolon(t *testing.T) {
+	_, got := result(t, npmRepo("edge", head+lines(
+		"      - name: Ship",
+		"        run: |",
+		`          if [ -n "$SKIP" ]; then exit 0; fi`,
+		"          docker build -t ghcr.io/acme/edge:latest . ; docker push ghcr.io/acme/edge:latest",
+	), nil))
+	wantWorkflow(t, got, head+lines(
+		"      - name: Ship",
+		"        id: shearbolt-build",
+		"        run: |",
+		`          if [ -n "$SKIP" ]; then exit 0; fi`,
+		`          docker build -t ghcr.io/acme/edge:latest -t ghcr.io/acme/edge:shearbolt-${{ github.sha }} .; echo shearbolt-image=ghcr.io/acme/edge:shearbolt-${{ github.sha }} >> "$GITHUB_OUTPUT"; echo shearbolt-reached=true >> "$GITHUB_OUTPUT"`,
+		"      - name: shearbolt",
+		"        uses: klar-web-services/shearbolt@v1",
+		"        env:",
+		"          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}",
+		"      - name: Ship (continued)",
+		"        if: steps.shearbolt-build.outputs.shearbolt-reached != ''",
+		"        run: |",
+		"          docker push ghcr.io/acme/edge:latest",
+	))
+}
+
 // A --push build at the end of a one-line script: the marker follows the output line on the
 // next line, without an empty line between them.
 func TestGitHubMarkerAtScriptEnd(t *testing.T) {
