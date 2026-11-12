@@ -136,12 +136,14 @@ In the report, an excepted finding does not block. It is listed under **Accepted
 shearbolt scan                                   # the targets in ./shearbolt.yaml
 shearbolt scan --config apps/web/shearbolt.yaml  # another project's config
 shearbolt scan --target source                   # only this target (repeatable)
+shearbolt scan --build                           # rebuild the <name>:local image first
 ```
 
 A local scan uses the same config and the same pinned Grype as CI, so you can find and fix most blocks before you pay for a pipeline run.
 
 - Source lockfiles are always scanned.
 - An image, binary or directory you have not built yet is skipped, with a hint on how to build it, and the report lists it. Images are read from your local Docker when they are there, otherwise from the registry. Setup's configs look for `<name>:local` on your machine (`image: ${SHEARBOLT_IMAGE:-<name>:local}`), so `docker build -t <name>:local .` includes the image.
+- `--build` rebuilds that image before every scan, so you never scan a stale one. It runs `docker build` with the `Dockerfile` next to `shearbolt.yaml`, using that folder as the context. It only works when the config has exactly one image target and the image is tagged `:local`, and it never runs in CI. If the build fails, nothing is scanned.
 - If every target is skipped, the scan is an error. In CI, a missing target is always an error, never a skip.
 
 Ad-hoc flags scan just what they name, with the default policy, and ignore `shearbolt.yaml`:
@@ -284,6 +286,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 | `--output-dir DIR` | The evidence folder (default `.shearbolt/runs/<run-id>`). It must be new or empty. |
 | `--json` | Prints only `run.json` to stdout; logs go to stderr. If the config cannot be used, stdout stays empty, the message goes to stderr, and the exit code is `2`. |
 | `--ci` | Turns on [CI mode](#ci-mode). |
+| `--build` | Builds the image target first: `docker build --tag=<ref> --file=Dockerfile .`, run in the folder of `shearbolt.yaml`, with Docker's output on stderr. It needs exactly one image target, a ref tagged `:local` and a `Dockerfile` next to the config. Otherwise, or in CI mode, with ad-hoc flags or when the build fails, the scan stops with exit `2` and checks nothing. |
 | `--image REF`, `--dir PATH`, `--file PATH`, `--source PATH` | Ad-hoc targets (repeatable). They use the default policy and do not read `shearbolt.yaml`. |
 
 Each Shearbolt release pins one Grype version (`shearbolt version` shows it) and downloads it, checked against its SHA-256, into the cache. A `grype` on your `PATH` is never used, and a project's `.grype.yaml` or `GRYPE_*` environment variables cannot suppress findings.

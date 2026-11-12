@@ -191,7 +191,10 @@ user each command and file change, and run it only after they agree.
   target's `note`. Check that the `ref` is a plain image reference, holding only letters,
   digits and `._/:@-`, then propose
   `docker build -f <Dockerfile> -t <ref> <context>` with the Dockerfile and context the
-  CI build uses, and run it only after the user agrees.
+  CI build uses, and run it only after the user agrees. When CI builds the `Dockerfile`
+  next to shearbolt.yaml with that folder as the context, `shearbolt scan --build` does
+  the same build and then scans. It refuses with exit 2 when the config has more than one
+  image target or the `ref` is not tagged `:local`.
 
 ### Compose images
 

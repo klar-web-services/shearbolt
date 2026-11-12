@@ -253,7 +253,7 @@ func TestImageSourceSelection(t *testing.T) {
 		t.Fatalf("a Grype failure on a local image must be an error, not a skip: exit = %d, targets = %+v", crash.ExitCode, crash.Targets)
 	}
 	local := run(t, cfg, &fakeScanner{outputs: outputs}, nil)
-	if local.ExitCode != 0 || local.Targets[0].Status != "skipped" || !strings.Contains(local.Targets[0].Note, "docker build -t app:local") {
+	if local.ExitCode != 0 || local.Targets[0].Status != "skipped" || !strings.Contains(local.Targets[0].Note, "docker build -t app:local .`, or scan with `--build`, to include it.") {
 		t.Fatalf("unavailable image locally: exit = %d, targets = %+v", local.ExitCode, local.Targets)
 	}
 	ci := run(t, cfg, &fakeScanner{outputs: outputs}, func(o *Options) { o.CIMode = true })

@@ -31,6 +31,7 @@ type deps struct {
 	environ     func() []string
 	now         func() time.Time
 	ensureGrype func(ctx context.Context, cacheDir string) (string, error)
+	buildImage  func(ctx context.Context, ref, dir string, out io.Writer) error // scan --build
 	color       func(io.Writer) bool
 	stdin       io.Reader   // setup's answers
 	stdinTTY    func() bool // whether stdin is a terminal (setup's interactive mode)
@@ -46,6 +47,7 @@ func defaultDeps() deps {
 		ensureGrype: func(ctx context.Context, cacheDir string) (string, error) {
 			return grype.NewInstaller(cacheDir).Ensure(ctx)
 		},
+		buildImage: dockerBuild,
 		color: func(w io.Writer) bool {
 			return os.Getenv("NO_COLOR") == "" && isTerminal(w)
 		},

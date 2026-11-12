@@ -174,7 +174,11 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 		// Only an image that is not in the local daemon and cannot be pulled may be skipped,
 		// and only outside CI mode. A Grype failure on a local image is a real error.
 		if kind == "image" && s.maySkipImage(ctx, req) {
-			s.skip(i, fmt.Sprintf("image %s is not in your local Docker and could not be pulled (%s). Build it with `docker build -t %s .` to include it.", ref, firstLine(err.Error()), ref))
+			how := fmt.Sprintf("Build it with `docker build -t %s .`", ref)
+			if LocalTag(ref) {
+				how += ", or scan with `--build`,"
+			}
+			s.skip(i, fmt.Sprintf("image %s is not in your local Docker and could not be pulled (%s). %s to include it.", ref, firstLine(err.Error()), how))
 			return
 		}
 		s.targetError(i, "SCAN_FAILED", err.Error())

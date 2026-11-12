@@ -187,3 +187,21 @@ func TestYarnWorkspaceLockfile(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalTag(t *testing.T) {
+	for ref, want := range map[string]bool{
+		"web:local":                   true,
+		"floklar.com:local":           true,
+		"registry:5000/web:local":     true,
+		"web":                         false,
+		"web:latest":                  false,
+		"web:localhost":               false,
+		"localhost:5000/web":          false,
+		"local:5000/web":              false,
+		"web:local@sha256:0123456789": false,
+	} {
+		if got := LocalTag(ref); got != want {
+			t.Errorf("LocalTag(%q) = %v, want %v", ref, got, want)
+		}
+	}
+}

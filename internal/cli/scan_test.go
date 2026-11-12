@@ -36,6 +36,10 @@ func testDeps(t *testing.T, vars map[string]string) deps {
 		return env
 	}
 	d.color = func(io.Writer) bool { return false }
+	d.buildImage = func(_ context.Context, ref, _ string, _ io.Writer) error {
+		t.Errorf("unexpected docker build of %s", ref)
+		return errors.New("no builds in tests")
+	}
 	return d
 }
 

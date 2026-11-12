@@ -44,6 +44,13 @@ func DockerHasImage(ctx context.Context, ref string) bool {
 	return exec.CommandContext(ctx, docker, "image", "inspect", "--", ref).Run() == nil
 }
 
+// LocalTag reports whether an image reference is tagged "local" (and not pinned by digest), the
+// tag setup's configs scan outside CI and the only one `scan --build` builds.
+func LocalTag(ref string) bool {
+	i := strings.LastIndex(ref, ":")
+	return !strings.Contains(ref, "@") && i > strings.LastIndex(ref, "/") && ref[i+1:] == "local"
+}
+
 // GrypeExcludes turns a source target's exclude list into Grype --exclude globs.
 func GrypeExcludes(user []string) []string {
 	out := make([]string, 0, len(defaultExcludes)+len(user))

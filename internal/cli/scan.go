@@ -51,6 +51,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	outputDir := flags.String("output-dir", "", "evidence folder (default .shearbolt/runs/<run-id>)")
 	jsonOut := flags.Bool("json", false, "print only run.json to stdout")
 	ciFlag := flags.Bool("ci", false, "CI mode: missing targets are errors (also on when the CI variable is set)")
+	buildFlag := flags.Bool("build", false, "build the image target from the Dockerfile next to shearbolt.yaml first (local scans only; its tag must be :local)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -80,6 +81,13 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	now := d.now()
 	env := config.Env(d.lookupEnv)
 	adHoc := len(images)+len(dirs)+len(files)+len(sources) > 0
+	ciMode := *ciFlag || isCI(d.getenv("CI"))
+	switch {
+	case *buildFlag && ciMode:
+		return configError("--build is for scans on your machine. In CI the gate scans the image the pipeline built, so build it there and scan without --build")
+	case *buildFlag && adHoc:
+		return configError("--build builds the image target in shearbolt.yaml, so it cannot be used with ad-hoc flags")
+	}
 	var cfg *config.Config
 	switch {
 	case adHoc && *configPath != "":
@@ -104,8 +112,15 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	if err != nil {
 		return configError(err.Error())
 	}
+	all := cfg.Targets
 	if len(only) > 0 {
 		if cfg.Targets, err = selectTargets(cfg.Targets, only); err != nil {
+			return configError(err.Error())
+		}
+	}
+	var build config.Target
+	if *buildFlag {
+		if build, err = buildTarget(all, cfg.Dir, only); err != nil {
 			return configError(err.Error())
 		}
 	}
@@ -123,6 +138,18 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 			return configError(fmt.Sprintf("--output-dir %s overlaps the Shearbolt cache %s; use a folder outside it", out, cacheDir))
 		}
 	}
+	// The build runs before the scan lock is taken, so a long build does not hold up other scans.
+	// A failed build stops the run: scanning the image it would have replaced could read stale content.
+	if *buildFlag {
+		fmt.Fprintf(stderr, "shearbolt: building target %s: docker build --tag=%s --file=%s %s\n", build.Name, build.Image, filepath.Join(cfg.Dir, "Dockerfile"), cfg.Dir)
+		bctx, bstop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err := d.buildImage(bctx, build.Image, cfg.Dir, stderr)
+		bstop()
+		if err != nil {
+			fmt.Fprintf(stderr, "shearbolt scan: docker build failed: %v; nothing was scanned\n", err)
+			return 2
+		}
+	}
 	// One scan at a time per cache. Taken before Ctrl-C is caught, so a waiting scan can still be
 	// interrupted; the lock lasts until this function returns.
 	release, err := scanlock.Acquire(cacheDir, stderr)
@@ -134,7 +161,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	opts := scan.Options{
-		Config: cfg, BaseDir: cwd, OutputDir: out, CIMode: *ciFlag || isCI(d.getenv("CI")), Env: env,
+		Config: cfg, BaseDir: cwd, OutputDir: out, CIMode: ciMode, Env: env,
 		DBArchive: d.getenv("SHEARBOLT_DB_ARCHIVE"), Now: d.now,
 	}
 	if opts.DBArchive != "" {
