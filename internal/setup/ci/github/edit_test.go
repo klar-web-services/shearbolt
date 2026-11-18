@@ -28,7 +28,6 @@ func TestGitHubMarkerJoinsBuild(t *testing.T) {
 	))
 }
 
-// After a build followed by ; on the same line, the marker joins with ; as the output line does.
 func TestGitHubMarkerJoinsSemicolon(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+lines(
 		"      - name: Ship",
@@ -53,8 +52,6 @@ func TestGitHubMarkerJoinsSemicolon(t *testing.T) {
 	))
 }
 
-// A --push build at the end of a one-line script: the marker follows the output line on the
-// next line, without an empty line between them.
 func TestGitHubMarkerAtScriptEnd(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+lines(
 		"      - name: Image",
@@ -77,7 +74,6 @@ func TestGitHubMarkerAtScriptEnd(t *testing.T) {
 	))
 }
 
-// The existing output line stays with the build, and the marker follows it.
 func TestGitHubMarkerAfterExistingOutputLine(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - name: Build",

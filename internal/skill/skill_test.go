@@ -18,10 +18,8 @@ import (
 	"github.com/klar-web-services/shearbolt/skills"
 )
 
-// onDisk is the skill's source folder in the repository.
 const onDisk = "../../skills/shearbolt"
 
-// embedded returns every embedded file by its path below the skill folder.
 func embedded(t *testing.T) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
@@ -71,7 +69,6 @@ func TestEmbedHoldsEveryFileOnDisk(t *testing.T) {
 	}
 }
 
-// frontmatter splits SKILL.md into its YAML frontmatter and its body.
 func frontmatter(t *testing.T, src string) (map[string]any, string) {
 	t.Helper()
 	rest, ok := strings.CutPrefix(src, "---\n")
@@ -112,8 +109,6 @@ func TestSkillFrontmatter(t *testing.T) {
 	}
 }
 
-// The skill brings the CLI (and itself) up to date before it runs any other shearbolt
-// command, so an old install never meets newer instructions or misses newer checks.
 func TestSkillUpdatesTheCLIBeforeUsingIt(t *testing.T) {
 	fm, body := frontmatter(t, string(embedded(t)["SKILL.md"]))
 	const latest = "curl -fsSL https://tools.klar.ws/shearbolt/latest"
@@ -142,9 +137,6 @@ func TestSkillUpdatesTheCLIBeforeUsingIt(t *testing.T) {
 	}
 }
 
-// The plan contract the skill carries names the schema version and the ecosystems that setup
-// prints. An older version would make the skill stop on its own CLI's plans, and a stale
-// ecosystem list would describe projects setup no longer reports.
 func TestSetupJSONDocumentsThePlanSchema(t *testing.T) {
 	doc := string(embedded(t)["references/setup-json.md"])
 	v := strconv.Itoa(plan.SchemaVersion)
@@ -183,7 +175,6 @@ func TestDir(t *testing.T) {
 	}
 }
 
-// installed returns the files below dir, by slash path.
 func installed(t *testing.T, dir string) map[string][]byte {
 	t.Helper()
 	out := map[string][]byte{}
@@ -225,7 +216,6 @@ func TestInstallUpdateUnchanged(t *testing.T) {
 		t.Fatalf("second install: %q, %v", out, err)
 	}
 
-	// A changed reference file is restored; a file the skill does not ship is left alone.
 	ref := filepath.Join(dir, "references", "fixing.md")
 	if err := os.WriteFile(ref, []byte("edited\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -324,7 +314,6 @@ func TestInstallReportsWriteErrors(t *testing.T) {
 	}
 }
 
-// checkModes requires mode 0644 for every file below dir and 0755 for dir and its folders.
 func checkModes(t *testing.T, dir string) {
 	t.Helper()
 	err := filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
@@ -412,7 +401,6 @@ func TestInstallWritesSkillFileLast(t *testing.T) {
 	}
 }
 
-// outsideSetup returns a project root and a directory outside it that holds a reference file.
 func outsideSetup(t *testing.T) (root, outside string) {
 	t.Helper()
 	base := t.TempDir()
@@ -487,7 +475,6 @@ func TestInstallInsideFollowsSymlinksWithin(t *testing.T) {
 }
 
 func TestInstallFollowsSymlinksAnywhere(t *testing.T) {
-	// A global install keeps dotfiles layouts working: ~/.claude -> ~/dotfiles/claude.
 	home, outside := outsideSetup(t)
 	symlink(t, outside, filepath.Join(home, ".claude"))
 	if out, err := Install(Dir(home)); err != nil || out != Installed {

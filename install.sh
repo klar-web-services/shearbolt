@@ -1,10 +1,4 @@
 #!/bin/sh
-# Installer for shearbolt: curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh
-# Follows the tools.klar.ws installer contract, plus a wget fallback for images without curl.
-# Optional environment variables:
-#   SHEARBOLT_VERSION      version to install, e.g. 1.2.3 (default: latest)
-#   SHEARBOLT_INSTALL_DIR  target directory (default: ~/.local/bin)
-#   SHEARBOLT_BASE_URL     download location (default: https://tools.klar.ws/shearbolt)
 set -eu
 
 # Progress goes to stdout and errors to stderr, so a CI step can drop the hints and keep errors.

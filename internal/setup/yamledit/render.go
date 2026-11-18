@@ -18,9 +18,6 @@ var yaml11Literals = map[string]bool{"y": true, "yes": true, "n": true, "no": tr
 // sexagesimal, versions); quoting those is always safe.
 var numberLike = regexp.MustCompile(`^[-+]?(\.?[0-9])[0-9A-Za-z_.:+-]*$`)
 
-// Scalar renders s as a block-context YAML scalar: plain when that is safe, otherwise
-// single-quoted (” escapes a quote), or double-quoted when s has a newline or a control
-// character.
 func Scalar(s string) string {
 	switch {
 	case needsEscape(s) || strings.Contains(s, "\n"):
@@ -116,15 +113,8 @@ func doubleQuote(s string) string {
 }
 
 // RenderScript renders a script value for the scalar of a key (or sequence dash) at keyIndent.
-// The first returned line goes where the scalar starts; the others are complete lines.
-//
-//   - A value without a newline in a plain or quoted scalar stays on one line: plain when Scalar
-//     allows it, otherwise in its original quote style (Scalar's single quotes for a plain one).
-//   - Anything else is a literal block at contentIndent (keyIndent+2 if that is not deeper).
-//     Its chomping indicator follows the value: "|-" without a final newline, "|" with one, "|+"
-//     with more. A folded block becomes literal, which keeps the value exact.
-//   - A value with control characters, or one a literal block cannot hold exactly (it is parsed
-//     back to check), is double-quoted on one line.
+// The first returned line goes where the scalar starts; the others are complete lines. A folded
+// block becomes literal, which keeps the value exact.
 func RenderScript(value string, style yaml.Style, keyIndent, contentIndent int) []string {
 	block := style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0
 	switch {
@@ -183,7 +173,6 @@ func RenderScript(value string, style yaml.Style, keyIndent, contentIndent int) 
 	return out
 }
 
-// readsBack reports whether block lines, rendered for a key at keyIndent, parse back to value.
 // Some values have no literal block form (only newlines, whitespace-only lines with tabs), so
 // they fall back to a double-quoted scalar.
 func readsBack(block []string, keyIndent int, value string) bool {

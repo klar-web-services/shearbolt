@@ -13,7 +13,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// rustMake is the Makefile of the rust-make fixture.
 const rustMake = `CARGO ?= cargo
 
 .PHONY: dev test release
@@ -48,7 +47,6 @@ func repo(t *testing.T, files map[string]string) plan.Repo {
 	return plan.Repo{Root: root}
 }
 
-// demoRepo is a Rust project at the root, plus files.
 func demoRepo(t *testing.T, files map[string]string) plan.Repo {
 	t.Helper()
 	all := map[string]string{"Cargo.toml": demoToml, "Cargo.lock": "version = 3\n", "src/main.rs": "fn main() {}\n"}
@@ -58,7 +56,6 @@ func demoRepo(t *testing.T, files map[string]string) plan.Repo {
 	return repo(t, all)
 }
 
-// classifyAll classifies every command of script, run from the repository root.
 func classifyAll(t *testing.T, r plan.Repo, script string) ([]shell.Command, []plan.Classified) {
 	t.Helper()
 	classify := newClassifier(r, ecosystems)
@@ -74,7 +71,6 @@ func classifyAll(t *testing.T, r plan.Repo, script string) ([]shell.Command, []p
 	return cmds, out
 }
 
-// one classifies a script that is a single command.
 func one(t *testing.T, r plan.Repo, script string) plan.Classified {
 	t.Helper()
 	cmds, cl := classifyAll(t, r, script)
@@ -84,7 +80,6 @@ func one(t *testing.T, r plan.Repo, script string) plan.Classified {
 	return cl[0]
 }
 
-// image classifies a single image build command.
 func image(t *testing.T, script string) plan.Build {
 	t.Helper()
 	cl := one(t, repo(t, nil), script)
@@ -339,7 +334,6 @@ func TestEcosystemBuilds(t *testing.T) {
 	}
 }
 
-// viaBuild returns the only build of cl that is not RewriteOnly.
 func gateable(cl plan.Classified) []plan.Build {
 	var out []plan.Build
 	for _, b := range cl.Builds {
@@ -395,7 +389,6 @@ func TestMakefile(t *testing.T) {
 		t.Fatalf(".DEFAULT_GOAL: %+v", cl)
 	}
 
-	// release reaches the build through a prerequisite (order-only ones are ignored).
 	mk := "release: build | dirs\n\techo done\nbuild: ; cargo build --release\ndirs:\n\tcargo build --release --bin never\n"
 	r = demoRepo(t, map[string]string{"Makefile": mk})
 	cl = one(t, r, "make release")
@@ -406,7 +399,6 @@ func TestMakefile(t *testing.T) {
 		t.Fatalf("order-only prerequisite: %+v", ro)
 	}
 
-	// make -C reads that directory's Makefile, and its recipes run there.
 	r = demoRepo(t, map[string]string{
 		"crates/cli/Makefile": "all:\n\tcargo build --release \\\n\t  --locked\n",
 	})
@@ -432,7 +424,6 @@ func TestMakefile(t *testing.T) {
 		t.Fatalf("recipe line state: %+v", cl)
 	}
 
-	// Exported Make variables and command-line variables reach the recipes.
 	for _, s := range []string{"make", "make CARGO_TARGET_DIR=/tmp/t"} {
 		mk := "all:\n\tcargo build --release\n"
 		if s == "make" {
@@ -498,7 +489,6 @@ func TestScripts(t *testing.T) {
 		t.Fatalf("bash -c is not a file call: %+v", cl)
 	}
 
-	// A script that builds and then pushes makes the calling command a push.
 	release := "#!/usr/bin/env bash\ncargo build --release\ngh release upload \"$TAG\" target/release/demo\n"
 	r = demoRepo(t, map[string]string{"release.sh": release})
 	cl = one(t, r, "./release.sh")
@@ -511,21 +501,19 @@ func TestScripts(t *testing.T) {
 		t.Fatalf("notes = %+v", notes)
 	}
 
-	// The script runs from the caller's directory and state.
 	r = demoRepo(t, map[string]string{"tools/b.sh": "cargo build --release\n"})
 	_, cls := classifyAll(t, r, "export CARGO_TARGET_DIR=x\nbash tools/b.sh")
 	if g := gateable(cls[1]); len(g) != 1 || g[0].Dir != "." || g[0].Paths != nil {
 		t.Fatalf("caller state: %+v", cls[1])
 	}
 
-	// A conditional call makes its builds conditional.
 	r = demoRepo(t, map[string]string{"Makefile": rustMake})
 	_, cls = classifyAll(t, r, "if [ -n \"$X\" ]; then\n  make release\nfi")
 	if g := gateable(cls[1]); len(g) != 1 || g[0].Kind != plan.BuildOther || g[0].Notes[0].Code != "RUST_CONDITIONAL_BUILD" || g[0].Notes[0].File != "Makefile" {
 		t.Fatalf("conditional call: %+v", cls[1])
 	}
 
-	// Executables that are not shell scripts cannot be followed, so they count as pushes (M6: a
+	// Executables that are not shell scripts cannot be followed, so they count as pushes (a
 	// file without #! is a shell script).
 	r = demoRepo(t, map[string]string{"bin/tool": "\x7fELF\x00cargo build --release\n", "bin/py": "#!/usr/bin/env python3\ncargo build --release\n", "bin/plain": "cargo build --release\n"})
 	for _, s := range []string{"./bin/tool", "./bin/py"} {
@@ -553,12 +541,10 @@ func TestCallLimits(t *testing.T) {
 	for _, b := range cl.Builds {
 		bins = append(bins, b.Paths...)
 	}
-	// d.sh is beyond the depth limit, so it cannot be followed and counts as a push.
 	if !slices.Equal(bins, []string{"target/release/c", "target/release/b"}) || !cl.Push {
 		t.Fatalf("depth: %q, push %v", bins, cl.Push)
 	}
 
-	// Cycles terminate.
 	r = demoRepo(t, map[string]string{
 		"loop.sh":  "./loop.sh\ncargo build --release\n",
 		"Makefile": "a:\n\t$(MAKE) b\nb:\n\t$(MAKE) a\n\tcargo build --release\n",
@@ -605,14 +591,12 @@ func TestCallLimits(t *testing.T) {
 			t.Errorf("%q: %+v", s, c)
 		}
 	}
-	// In a Makefile: $(MAKE) -C $(DIR) cannot be followed.
 	r = demoRepo(t, map[string]string{"Makefile": "release:\n\tcargo build --release\n\t$(MAKE) -C $(DIR) package\n"})
 	if cl := one(t, r, "make release"); !cl.Push || len(gateable(cl)) != 1 {
 		t.Fatalf("$(MAKE) -C $(DIR): %+v", cl)
 	}
 }
 
-// I4: relative paths with a slash, sourced files and clone-directory paths are followed.
 func TestMoreFileCalls(t *testing.T) {
 	r := demoRepo(t, map[string]string{
 		"script/cibuild":     "#!/bin/bash\ncargo build --release\n",
@@ -647,7 +631,6 @@ func TestMoreFileCalls(t *testing.T) {
 	}
 }
 
-// M4, M5: what make or just runs is not always visible; it fails closed.
 func TestMakeFailsClosed(t *testing.T) {
 	for _, tc := range []struct {
 		name, mk, cmd string
@@ -694,7 +677,6 @@ func TestDockerBuildsInCalledFilesAreNotRecognized(t *testing.T) {
 	}
 }
 
-// I1: wrappers such as time and nohup do not hide pushes or builds.
 func TestWrappedCommands(t *testing.T) {
 	r := demoRepo(t, nil)
 	for _, s := range []string{"time docker push x", "nohup kubectl apply -f k8s", "timeout 10m helm upgrade x y", "command docker push x"} {
@@ -717,7 +699,6 @@ func TestWrappedCommands(t *testing.T) {
 	}
 }
 
-// within fails the test when f does not return in time, instead of hanging it.
 func within(t *testing.T, f func()) {
 	t.Helper()
 	done := make(chan struct{})
@@ -732,7 +713,7 @@ func within(t *testing.T, f func()) {
 	}
 }
 
-// I5: a directory that is absolute or outside the repository is unknown, and nothing loops on it.
+// A directory that is absolute or outside the repository is unknown, and nothing loops on it.
 func TestAbsoluteDirectories(t *testing.T) {
 	r := demoRepo(t, map[string]string{"justfile": "release:\n    cargo build --release\n"})
 	classify := newClassifier(r, ecosystems)
@@ -760,7 +741,6 @@ func TestAbsoluteDirectories(t *testing.T) {
 	}
 }
 
-// C1: an image build that pushes inside a called file makes the calling command a push.
 func TestImagePushInCalledFile(t *testing.T) {
 	mk := "IMAGE ?= ghcr.io/acme/demo\n\nrelease:\n\tcargo build --release\n\tdocker buildx build --platform linux/amd64,linux/arm64 --push -t $(IMAGE) .\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk})
@@ -784,7 +764,6 @@ func TestImagePushInCalledFile(t *testing.T) {
 	}
 }
 
-// I2: a push inside bash|sh|zsh -c '...' is seen; builds inside stay unrecognized.
 func TestInlineShellPush(t *testing.T) {
 	r := demoRepo(t, map[string]string{"Makefile": "deploy:\n\tkubectl apply -f k8s\n"})
 	for _, s := range []string{
@@ -806,7 +785,6 @@ func TestInlineShellPush(t *testing.T) {
 	}
 }
 
-// I3: tools named through a variable still push.
 func TestVariablePrograms(t *testing.T) {
 	r := demoRepo(t, nil)
 	for _, s := range []string{"$(DOCKER) push x", "${KUBECTL} apply -f k8s", "$HELM upgrade a b", `"$DOCKER" push x`} {
@@ -829,7 +807,6 @@ func TestVariablePrograms(t *testing.T) {
 	}
 }
 
-// I6: a push two calls down still reaches the CI command.
 func TestNestedCallPush(t *testing.T) {
 	r := demoRepo(t, map[string]string{
 		"scripts/release.sh": "#!/bin/sh\nmake release\n",
@@ -842,7 +819,6 @@ func TestNestedCallPush(t *testing.T) {
 	}
 }
 
-// M2, M3, I6: buildx --check/--call, push= values, and unknown output types.
 func TestBuildxModesAndOutputs(t *testing.T) {
 	for _, s := range []string{
 		"docker build --check .", "docker buildx build --call=outline .", "docker buildx build --call targets -t x .",
@@ -887,7 +863,6 @@ func TestJustImportsAndRecipeNames(t *testing.T) {
 	}
 }
 
-// M1: a `\` continuation in a CRLF file joins the lines, and offsets stay those of the file.
 func TestCRLFContinuations(t *testing.T) {
 	mk := "all:\r\n\tcargo build \\\r\n\t  --release\r\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk, "build.sh": "cargo build \\\r\n  --release\r\ndocker \\\r\n  push x\r\n"})
@@ -906,7 +881,6 @@ func TestCRLFContinuations(t *testing.T) {
 	}
 }
 
-// I6: make's @, - and + recipe prefixes are removed.
 func TestMakeRecipePrefixes(t *testing.T) {
 	r := demoRepo(t, map[string]string{"Makefile": "build:\n\t@cargo build --release\npush:\n\t-@docker push x\nboth:\n\t+-@ cargo build --release\n"})
 	if cl := one(t, r, "make build"); len(gateable(cl)) != 1 || cl.Push {
@@ -920,7 +894,6 @@ func TestMakeRecipePrefixes(t *testing.T) {
 	}
 }
 
-// M9: RewriteOnly builds carry no notes, not even BUILD_AFTER_PUSH.
 func TestRewriteOnlyBuildsCarryNoNotes(t *testing.T) {
 	mk := "release:\n\tcargo build --release\n\tdocker push x\nother:\n\tcargo build --release --target $(T)\nmaybe:\n\tif true; then cargo build --release; fi\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk})
@@ -939,7 +912,6 @@ func TestRewriteOnlyBuildsCarryNoNotes(t *testing.T) {
 	}
 }
 
-// M9: a few more just, buildx and cargo forms.
 func TestMoreForms(t *testing.T) {
 	just := "@release +targets: build\n    -cargo build --release --bin extra\nbuild:\n    @cargo build --release\n"
 	r := demoRepo(t, map[string]string{"justfile": just})
@@ -960,7 +932,6 @@ func TestMoreForms(t *testing.T) {
 	}
 }
 
-// Re-review 1: a Makefile variable whose value carries options or a wrapper still pushes.
 func TestVariableProgramsWithOptions(t *testing.T) {
 	for _, def := range []string{
 		"KUBECTL := kubectl -n prod\nPUSH = $(KUBECTL) apply -f k8s\n", "DOCKER := sudo docker\nPUSH = $(DOCKER) push x\n",
@@ -981,7 +952,6 @@ func TestVariableProgramsWithOptions(t *testing.T) {
 	}
 }
 
-// Re-review 2: inline scripts in a Makefile see its variables.
 func TestInlinePushSeesMakefileVariables(t *testing.T) {
 	r := demoRepo(t, map[string]string{"Makefile": "CONTAINER_TOOL ?= podman\nrelease:\n\tcargo build --release\n\tsh -c '$(CONTAINER_TOOL) push x'\n"})
 	if cl := one(t, r, "make release"); !cl.Push || len(gateable(cl)) != 1 {
@@ -989,8 +959,6 @@ func TestInlinePushSeesMakefileVariables(t *testing.T) {
 	}
 }
 
-// Re-review 3: rules with a variable target are matched by their resolved name; an unresolved
-// one is only maybe reachable.
 func TestMakeVariableTargets(t *testing.T) {
 	mk := "BIN := target/release/demo\n\ntest:\n\tcargo test\n\nrelease: $(BIN)\n\n$(BIN):\n\tcargo build --release\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk})
@@ -1024,7 +992,6 @@ func TestMakeVariableTargets(t *testing.T) {
 	}
 }
 
-// Re-review 4: running a program the job built is not a file call.
 func TestBuiltProgramsAreNotCalls(t *testing.T) {
 	r := demoRepo(t, map[string]string{
 		"Makefile":            "release:\n\tcargo build --release\n\t./target/release/demo --version\n",
@@ -1052,7 +1019,6 @@ func TestBuiltProgramsAreNotCalls(t *testing.T) {
 	}
 }
 
-// Re-review 5: environment scripts sourced through their home variable, and $(dirname "$0").
 func TestEnvironmentScriptsAndScriptDirectory(t *testing.T) {
 	r := demoRepo(t, map[string]string{
 		"scripts/lib.sh":   "export X=1\n",
@@ -1085,7 +1051,6 @@ func TestEnvironmentScriptsAndScriptDirectory(t *testing.T) {
 	}
 }
 
-// Re-review 7: more cases.
 func TestReReviewGaps(t *testing.T) {
 	r := demoRepo(t, map[string]string{"Makefile": "release:\n\tcargo build --release\n", "justfile": "build:\n    cargo build --release\n"})
 	if cl := one(t, r, "bash -o pipefail -c 'docker push x'"); !cl.Push {
@@ -1102,8 +1067,6 @@ func TestReReviewGaps(t *testing.T) {
 	}
 }
 
-// Batch 2 re-review follow-up: a maybe-reachable rule (its target does not resolve) also
-// follows its literal prerequisites in the same push-only mode; its $ prerequisites stay ignored.
 func TestMaybeReachableLiteralPrerequisites(t *testing.T) {
 	mk := "BIN = $(shell echo app)\n\nrelease: app\n\tcargo build --release\n\n$(BIN): push-image\n\npush-image:\n\tdocker push x\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk})
@@ -1115,25 +1078,21 @@ func TestMaybeReachableLiteralPrerequisites(t *testing.T) {
 		t.Fatalf("the release build counts as after the push: %+v", cl)
 	}
 
-	// Builds in rules reached that way stay RewriteOnly.
 	mk = "test:\n\tcargo test\n$(OUT)/demo: compile\ncompile:\n\tcargo build --release\n"
 	r = demoRepo(t, map[string]string{"Makefile": mk})
 	if cl := one(t, r, "make test"); cl.Push || len(gateable(cl)) != 0 || len(rewriteOnly(cl)) != 1 {
 		t.Fatalf("a build behind a maybe-reachable rule: %+v", cl)
 	}
-	// Transitively: the prerequisite's own literal prerequisites are followed too.
 	mk = "test:\n\tcargo test\n$(OUT)/demo: a\na: b\nb:\n\tdocker push x\n"
 	r = demoRepo(t, map[string]string{"Makefile": mk})
 	if cl := one(t, r, "make test"); !cl.Push {
 		t.Fatalf("a push two prerequisites behind a maybe-reachable rule: %+v", cl)
 	}
-	// $ prerequisites of a maybe-reachable rule stay ignored: no push for an unresolved one.
 	mk = "test:\n\tcargo test\n$(OUT)/demo: $(SRCS) compile\ncompile:\n\tcargo build --release\n"
 	r = demoRepo(t, map[string]string{"Makefile": mk})
 	if cl := one(t, r, "make test"); cl.Push {
 		t.Fatalf("an unresolved $ prerequisite of a maybe-reachable rule counts as a push: %+v", cl)
 	}
-	// A rule that is actually reached keeps its full mode, even when a maybe rule names it.
 	mk = "release: compile\n$(OUT)/demo: compile\ncompile:\n\tcargo build --release\n"
 	r = demoRepo(t, map[string]string{"Makefile": mk})
 	if cl := one(t, r, "make release"); cl.Push || len(gateable(cl)) != 1 {
@@ -1152,8 +1111,6 @@ func TestMissingScriptInOutputDirectoryIsPush(t *testing.T) {
 	}
 }
 
-// Review 5: a maybe-reachable rule follows its $ prerequisites that resolve; unresolved ones stay
-// ignored.
 func TestMaybeReachableResolvedVariablePrerequisites(t *testing.T) {
 	mk := "BIN = $(shell echo app)\nDEPLOY = push-image\n\nrelease: app\n\tcargo build --release\n\n$(BIN): $(DEPLOY)\n\npush-image:\n\tdocker push x\n"
 	r := demoRepo(t, map[string]string{"Makefile": mk})

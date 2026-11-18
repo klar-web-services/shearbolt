@@ -14,21 +14,10 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// This file applies gates and preps to a workflow (R4 rule 5, R5, R8). Each job is edited on its
-// own: its edits are queued, the result is checked, and a job whose edit fails is rolled back
-// completely, reported in Edited.Failed and given UNSUPPORTED_EDIT with the gate snippet.
-//
-// The step is the unit on GitHub. Setup's added lines (docker tag, echo) go at the end of a
-// build's pipeline. A step is split right after its last gated build when another command follows
-// that build in the gate's step (P1), or when a gated build uses --push; the remainder becomes a
-// new step after the gate, with the shell state it needs copied in front.
-
-// failAt returns why a job cannot be edited, located at a file line.
 func failAt(line int, format string, args ...any) error {
 	return shelledit.Errorf(line, format, args...)
 }
 
-// Edit implements plan.CI.
 func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gates []plan.Gate, preps map[string][]plan.Prep) (plan.Edited, error) {
 	wf, err := parseWorkflow(file, src)
 	if err != nil {
@@ -106,7 +95,6 @@ func (wf *workflow) job(id string) *job {
 	return nil
 }
 
-// failNote is UNSUPPORTED_EDIT for a job that was left unchanged, with the snippet of each of its gates.
 func (p Plugin) failNote(r plan.Repo, file string, pj plan.Job, j *job, gates []plan.Gate, err error) plan.Note {
 	key, line := pj.ID, 0
 	if j != nil {
@@ -127,7 +115,6 @@ func (p Plugin) failNote(r plan.Repo, file string, pj plan.Job, j *job, gates []
 	return plan.Note{Code: "UNSUPPORTED_EDIT", Message: msg, File: file, Line: line}
 }
 
-// jobEditor queues one job's edits.
 type jobEditor struct {
 	d     *yamledit.Doc
 	wf    *workflow
@@ -138,33 +125,32 @@ type jobEditor struct {
 	unit  int
 
 	steps   map[int]*stepPlan
-	ids     map[string]bool   // step ids used in the job
+	ids     map[string]bool
 	outputs map[[2]int]string // (step, command) of a run-step image build -> its output name
 	notes   []plan.Note
 	tags    []string
 	attest  bool
 }
 
-// stepPlan is what happens to one step.
 type stepPlan struct {
 	s          int
 	st         *step
-	gate       int // index of the gate whose builds are in this step; -1 for none
+	gate       int
 	multi      bool
-	builds     []plan.Build // gated builds of the step (CI-file and Via), by command
-	owners     []int        // per build: the index of the gate it belongs to
+	builds     []plan.Build
+	owners     []int // per build: the index of the gate it belongs to
 	edits      []shelledit.Edit
 	shellEdits bool // edits that need a POSIX shell (all but the Rust rewrite)
 	needsID    bool
 	id         string
 	hasPush    bool
-	pushes     []string // docker push lines for its --push builds
+	pushes     []string
 	split      bool
-	cut, rest  int             // part 1 is script[:cut], the remainder script[rest:]
-	last       int             // the command part 1 ends with: the last gated build, or setup's lines after it
-	marker     bool            // the step can stop before the split point: part 1 ends with setup's marker line (design §3.2)
-	state      []string        // shell state copied into the remainder
-	dropped    []droppedAssign // assignments left out of the remainder: the split fails when it reads them
+	cut, rest  int  // part 1 is script[:cut], the remainder script[rest:]
+	last       int  // the command part 1 ends with: the last gated build, or setup's lines after it
+	marker     bool // the step can stop before the split point: part 1 ends with setup's marker line
+	state      []string
+	dropped    []droppedAssign
 	remainder  string
 	pushStep   []string // a converted build-push-action's push step, after the gate
 }
@@ -220,7 +206,6 @@ func (e *jobEditor) apply() error {
 	n := len(e.j.steps)
 	inRange := func(p plan.Pos) bool { return p.Step >= 0 && p.Step < n && p.Command < len(e.j.steps[p.Step].cmds) }
 
-	// 1. The gated builds of each step.
 	for gi, g := range e.gates {
 		if g.Existing != nil && !inRange(g.Existing.Pos) || g.Existing == nil && !inRange(g.At) {
 			return failAt(0, "the gate position is not in the job")
@@ -279,7 +264,6 @@ func (e *jobEditor) apply() error {
 		sp.builds, sp.owners = builds, owners
 	}
 
-	// 2. Output names: the n-th scanned image build of a step writes shearbolt-image-<n>.
 	e.outputs = map[[2]int]string{}
 	perStep := map[int][]int{}
 	for _, g := range e.gates {
@@ -300,14 +284,12 @@ func (e *jobEditor) apply() error {
 		}
 	}
 
-	// Setup's output lines already in a step must each follow the build they belong to.
 	for _, sp := range e.sortedPlans() {
 		if err := e.checkOutputLines(sp); err != nil {
 			return err
 		}
 	}
 
-	// 3. Image builds: scan tag, --load, output lines, --push.
 	for _, sp := range e.sortedPlans() {
 		for i, b := range sp.builds {
 			if b.Pos.Command < 0 {
@@ -324,7 +306,6 @@ func (e *jobEditor) apply() error {
 		}
 	}
 
-	// 4. Rust rewrites in the workflow's own scripts.
 	for _, pr := range e.preps {
 		for _, in := range pr.Inserts {
 			if in.Via != "" {
@@ -338,39 +319,32 @@ func (e *jobEditor) apply() error {
 		}
 	}
 
-	// 5. Splits.
 	for _, sp := range e.sortedPlans() {
 		if err := e.decideSplit(sp); err != nil {
 			return err
 		}
 	}
 
-	// 6. Changed steps: ids and scripts.
 	for _, sp := range e.sortedPlans() {
 		if err := e.renderStep(sp); err != nil {
 			return err
 		}
 	}
 
-	// 7. The install, before the first build that needs it.
 	if err := e.install(); err != nil {
 		return err
 	}
 
-	// 8. Gates, then the remainders that follow them.
 	for gi, g := range e.gates {
 		if err := e.placeGate(gi, g); err != nil {
 			return err
 		}
 	}
 
-	// 9. Push steps after a gate must not run when it fails.
+	// Push steps after a gate must not run when it fails.
 	return e.wrapPushIfs()
 }
 
-// imageEdits plans the changes to gated image build b in step sp (R2, R5): the scan tag (or a
-// docker tag line for railpack), the output line that passes it to the gate, --load for buildx,
-// and for --push the conversion to --load with docker push lines for the original tags.
 func (e *jobEditor) imageEdits(sp *stepPlan, g plan.Gate, b plan.Build) error {
 	st := sp.st
 	c := b.Pos.Command
@@ -443,7 +417,6 @@ func (e *jobEditor) imageEdits(sp *stepPlan, g plan.Gate, b plan.Build) error {
 	return nil
 }
 
-// imageVarAt returns the image variable of the build at pos in any of the job's gates.
 func (e *jobEditor) imageVarAt(pos plan.Pos) *plan.ImageVar {
 	for _, g := range e.gates {
 		if iv := imageVarOf(g, pos); iv != nil {
@@ -453,13 +426,11 @@ func (e *jobEditor) imageVarAt(pos plan.Pos) *plan.ImageVar {
 	return nil
 }
 
-// outputLine is the line setup adds after scanned image build c of step s, exactly as written.
 func (e *jobEditor) outputLine(s, c int) string {
 	iv := e.imageVarAt(plan.Pos{File: e.wf.file, Job: e.j.id, Step: s, Command: c})
 	return "echo " + e.outputs[[2]int{s, c}] + "=" + iv.ScanTag + ` >> "$GITHUB_OUTPUT"`
 }
 
-// ownLinesAfter returns the text of setup's own lines directly after command c.
 func ownLinesAfter(st *step, c int) []string {
 	var out []string
 	for k := c + 1; k < len(st.cmds) && shelledit.OwnLine(st.cmds[k]); k++ {
@@ -469,7 +440,7 @@ func ownLinesAfter(st *step, c int) []string {
 }
 
 // checkOutputLines fails the job when a step that holds gated builds has a shearbolt-image
-// output line that is not setup's line for the build it directly follows (R8): after builds are
+// output line that is not setup's line for the build it directly follows: after builds are
 // added or moved, a line matched by its name alone would hand the gate another build's image.
 func (e *jobEditor) checkOutputLines(sp *stepPlan) error {
 	st := sp.st
@@ -497,8 +468,6 @@ func (e *jobEditor) checkOutputLines(sp *stepPlan) error {
 	return nil
 }
 
-// editable reports whether a step's own text can be changed: not an alias, no anchors or aliases
-// inside it (they would change other steps too), and not flow style.
 func editable(st *step) bool {
 	return st.m != nil && st.item.Kind != yaml.AliasNode && !hasAnchor(st.item) && !hasAlias(st.m) && !flow(st.m)
 }
@@ -513,7 +482,6 @@ func hasAlias(n *yaml.Node) bool {
 	return slices.ContainsFunc(n.Content, hasAlias)
 }
 
-// renderStep queues the step's id and its new script (part 1 when it is split).
 func (e *jobEditor) renderStep(sp *stepPlan) error {
 	st := sp.st
 	if st.run == nil {
@@ -617,7 +585,7 @@ func (e *jobEditor) renderStep(sp *stepPlan) error {
 
 // markerEdit queues setup's marker line as the last command of a split step's part 1, after the
 // output line and joined like it: with the command's own && or ;, so a failed build in an &&
-// list still fails the step, or on a new line. A marker line already there is kept.
+// list still fails the step, or on a new line.
 func (e *jobEditor) markerEdit(sp *stepPlan) {
 	st := sp.st
 	if !sp.marker || slices.Contains(ownLinesAfter(st, sp.builds[len(sp.builds)-1].Pos.Command), shelledit.ReachedLine) {
@@ -648,9 +616,8 @@ func (e *jobEditor) newID() string {
 	return id
 }
 
-// insertID queues `id: <id>` after the step's name, or as its first key. When the first key
-// shares the dash line with the script being replaced (scriptFirst), the id is folded into
-// those lines instead.
+// When the first key shares the dash line with the script being replaced (scriptFirst), the id
+// is folded into those lines instead.
 func (e *jobEditor) insertID(st *step, id string, scriptFirst int, scriptLines *[]string) error {
 	m := st.m
 	if slices.Contains(keys(m), "name") {
@@ -676,7 +643,6 @@ func (e *jobEditor) insertID(st *step, id string, scriptFirst int, scriptLines *
 	return e.d.ReplaceLines(k0.Line, k0.Line, []string{idLine, pad + src[off:]})
 }
 
-// byteOffset returns the byte offset of rune column col in s.
 func byteOffset(s string, col int) int {
 	for i := range s {
 		if col == 0 {
@@ -687,8 +653,6 @@ func byteOffset(s string, col int) int {
 	return len(s)
 }
 
-// install queues the first Install of the job's preps as a step before the first build that
-// needs it, unless an earlier step, or the script before that build, already mentions its Marker.
 func (e *jobEditor) install() error {
 	var first *plan.Prep
 	for i := range e.preps {
@@ -771,7 +735,6 @@ func stepMentions(st *step, n int, marker string) bool {
 	return commandsMention(st.cmds[:n], marker)
 }
 
-// commandsMention reports whether a word of cmds contains marker.
 func commandsMention(cmds []shell.Command, marker string) bool {
 	return slices.ContainsFunc(cmds, func(c shell.Command) bool {
 		return slices.ContainsFunc(c.Words, func(w shell.Word) bool { return strings.Contains(w.Value, marker) })

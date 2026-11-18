@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// An interrupt while the archive downloads stops the installer: it exits non-zero, TMPDIR is
-// cleaned up and nothing is installed. "shell only" signals just the shell while curl keeps
-// going and then completes the download, so the trap, not a failed fetch, has to stop the run.
+// "shell only" signals just the shell while curl keeps going and then completes the download,
+// so the trap, not a failed fetch, has to stop the run.
 func TestInstallInterruptLeavesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -71,7 +70,7 @@ func TestInstallInterruptLeavesNothing(t *testing.T) {
 			if !tc.group {
 				time.Sleep(300 * time.Millisecond)
 				select {
-				case release <- struct{}{}: // curl completes the download
+				case release <- struct{}{}:
 				case <-time.After(5 * time.Second):
 					t.Fatal("the held archive request went away")
 				}

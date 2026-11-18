@@ -40,7 +40,6 @@ func check(t *testing.T, d *Doc, want string) {
 
 var gate = []string{"name: shearbolt", "uses: klar-web-services/shearbolt@v1"}
 
-// 1. Comments survive inserting a step.
 func TestInsertItemKeepsComments(t *testing.T) {
 	src := lines(
 		"jobs:",
@@ -76,7 +75,6 @@ func TestInsertItemKeepsComments(t *testing.T) {
 	))
 }
 
-// 2. The same with an indentless sequence.
 func TestInsertItemIndentless(t *testing.T) {
 	src := lines(
 		"jobs:",
@@ -139,7 +137,6 @@ func TestInsertItemFirstAndLast(t *testing.T) {
 	))
 }
 
-// 3. (6a) Indentless sequence spans.
 func TestIndentlessSequenceSpans(t *testing.T) {
 	src := lines(
 		"jobs:",
@@ -176,7 +173,6 @@ func TestIndentlessSequenceSpans(t *testing.T) {
 	))
 }
 
-// 4. (6b) A comment at the previous item's content column stays with that item.
 func TestCommentAtContentColumnStaysWithItem(t *testing.T) {
 	src := lines(
 		"steps:",
@@ -210,7 +206,6 @@ const anchored = "definitions:\n" +
 	"        script:\n" +
 	"          - make\n"
 
-// 5. (6c) Anchored containers.
 func TestSetKeyOnAnchoredContainer(t *testing.T) {
 	d := mustParse(t, anchored)
 	step := get(t, d, "definitions", "steps", "0", "step")
@@ -223,7 +218,6 @@ func TestSetKeyOnAnchoredContainer(t *testing.T) {
 	check(t, d, strings.Replace(anchored, "        name: Build\n", "        name: Build\n        caches: [shearbolt]\n", 1))
 }
 
-// 6. ReplaceScalar keeps a trailing comment.
 func TestReplaceScalarKeepsComment(t *testing.T) {
 	src := lines(
 		"with:",
@@ -252,7 +246,6 @@ func TestReplaceQuotedScalars(t *testing.T) {
 	check(t, d, lines("a: va   # one", "b: vb # two", "c: vc"))
 }
 
-// 7. SetKey after a given key.
 func TestSetKeyAfter(t *testing.T) {
 	src := lines(
 		"steps:",
@@ -380,7 +373,6 @@ func TestDeleteEntry(t *testing.T) {
 	}
 }
 
-// 8. RenderScript, through ReplaceScript.
 func TestReplaceScriptAppendsToBlock(t *testing.T) {
 	src := lines(
 		"steps:",
@@ -489,7 +481,6 @@ func TestRenderScript(t *testing.T) {
 	}
 }
 
-// 9. Scalar.
 func TestScalar(t *testing.T) {
 	plain := []string{"(curl -fsSL https://x || wget -qO- https://x) | sh", "-x", "?x", ":x", "a:b", "a#b", "storefront", "${SHEARBOLT_IMAGE:-web:local}", "target/release/demo"}
 	for _, s := range plain {
@@ -538,7 +529,6 @@ func TestScalar(t *testing.T) {
 	}
 }
 
-// 10. CRLF input.
 func TestCRLF(t *testing.T) {
 	src := "steps:\r\n  - run: make\r\n  - run: make push\r\n"
 	d := mustParse(t, src)
@@ -554,7 +544,6 @@ func TestCRLF(t *testing.T) {
 	}
 }
 
-// 11. Aliases resolve to the anchored node, and edits land at the anchor.
 func TestAliasEditsLandAtAnchor(t *testing.T) {
 	src := anchored + lines(
 		"pipelines:",
@@ -572,7 +561,6 @@ func TestAliasEditsLandAtAnchor(t *testing.T) {
 	check(t, d, strings.Replace(src, "        name: Build\n", "        name: Build\n        caches: [shearbolt]\n", 1))
 }
 
-// 12. Overlaps, round trips, flow style, several documents.
 func TestOverlapRoundTripFlowAndMultiDoc(t *testing.T) {
 	src := lines("a: 1", "b: 2", "c: 3", "d: 4")
 	d := mustParse(t, src)
@@ -782,7 +770,6 @@ func FuzzReplaceScript(f *testing.F) {
 	})
 }
 
-// result returns Result() and fails the test on error.
 func result(t *testing.T, d *Doc) string {
 	t.Helper()
 	out, err := d.Result()
@@ -792,7 +779,7 @@ func result(t *testing.T, d *Doc) string {
 	return string(out)
 }
 
-// C1(a): yaml.v3 columns count runes; edits must slice bytes at the right place.
+// yaml.v3 columns count runes; edits must slice bytes at the right place.
 func TestNonASCIIColumns(t *testing.T) {
 	d := mustParse(t, "env:\n  größe: alt  # c\n  日本: \"x\" # q\n  😀: |\n    a\n")
 	if err := d.ReplaceScalar(get(t, d, "env", "größe"), "neu"); err != nil {
@@ -817,7 +804,7 @@ func TestNonASCIIColumns(t *testing.T) {
 	}
 }
 
-// C1(b): yaml.v3 skips a leading BOM; positions on line 1 must still match, and the BOM stays.
+// yaml.v3 skips a leading BOM; positions on line 1 must still match, and the BOM stays.
 func TestByteOrderMark(t *testing.T) {
 	bom := "\xef\xbb\xbf"
 	src := bom + "push: true  # c\nb: 2\n"
@@ -836,7 +823,7 @@ func TestByteOrderMark(t *testing.T) {
 	}
 }
 
-// C1(c): yaml.v3 counts these as line breaks, which would shift every line after them.
+// yaml.v3 counts these as line breaks, which would shift every line after them.
 func TestUnusualLineBreaksAreRefused(t *testing.T) {
 	step := "steps:\n  - uses: docker/build-push-action@v6  # note%smore\n    with:\n      push: true\n"
 	for _, br := range []string{"\r", "\xc2\x85", "\xe2\x80\xa8", "\xe2\x80\xa9"} {
@@ -849,7 +836,6 @@ func TestUnusualLineBreaksAreRefused(t *testing.T) {
 	}
 }
 
-// I2: a re-render or delete must not remove an anchor, and Result catches broken output.
 func TestAnchorsAreNotRemoved(t *testing.T) {
 	src := lines(
 		"steps:",
@@ -898,7 +884,7 @@ func TestResultRefusesBrokenOutput(t *testing.T) {
 	}
 }
 
-// I3: a keep-chomped block owns its trailing blank lines; nothing is inserted before them.
+// A keep-chomped block owns its trailing blank lines; nothing is inserted before them.
 func TestKeepBlockKeepsTrailingLines(t *testing.T) {
 	d := mustParse(t, lines("a: |+", "  x", "", "b: 1"))
 	if err := d.SetKey(d.Root(), "c", "2", "a"); err != nil {
@@ -933,7 +919,6 @@ func TestKeepBlockKeepsTrailingLines(t *testing.T) {
 	}
 }
 
-// Minor 1: nothing is inserted after a document end marker.
 func TestDocumentEndMarker(t *testing.T) {
 	for _, tail := range []string{"...\n", "... # end\n# c\n"} {
 		d := mustParse(t, "a: 1\n"+tail)
@@ -946,7 +931,6 @@ func TestDocumentEndMarker(t *testing.T) {
 	}
 }
 
-// Minor 2: a null first item (a dash at the end of its line).
 func TestNullFirstItem(t *testing.T) {
 	d := mustParse(t, lines("steps:", "  -", "  - run: x"))
 	steps := get(t, d, "steps")
@@ -967,7 +951,7 @@ func TestNullFirstItem(t *testing.T) {
 	}
 }
 
-// Minor 3: a comment between the key column and the block's content is not part of the block.
+// A comment between the key column and the block's content is not part of the block.
 func TestBlockEndsAtContentIndentation(t *testing.T) {
 	src := lines("steps:", "  - run: |", "      make", "     # between", "    name: x")
 	d := mustParse(t, src)
@@ -980,7 +964,6 @@ func TestBlockEndsAtContentIndentation(t *testing.T) {
 	}
 }
 
-// Minor 8: a missing `after` key is an error, not a silent append.
 func TestSetKeyMissingAfter(t *testing.T) {
 	d := mustParse(t, lines("a: 1"))
 	if err := d.SetKey(d.Root(), "b", "2", "nope"); err == nil {
@@ -988,7 +971,6 @@ func TestSetKeyMissingAfter(t *testing.T) {
 	}
 }
 
-// leaves maps the path of every scalar under n (aliases not followed) to its value.
 func leaves(n *yaml.Node, path string, out map[string]string) {
 	switch n.Kind {
 	case yaml.MappingNode:
@@ -1006,7 +988,6 @@ func leaves(n *yaml.Node, path string, out map[string]string) {
 	}
 }
 
-// containers lists the paths of the block mappings and sequences under n.
 func containers(n *yaml.Node, path []string, out *[][]string) {
 	if n.Kind != yaml.MappingNode && n.Kind != yaml.SequenceNode || n.Style&yaml.FlowStyle != 0 {
 		return
@@ -1022,8 +1003,6 @@ func containers(n *yaml.Node, path []string, out *[][]string) {
 	}
 }
 
-// FuzzEdits applies one structural edit to documents with BOM, CRLF and non-ASCII content and
-// checks that Result parses, the edit took effect, and nothing outside the edited container moved.
 func FuzzEdits(f *testing.F) {
 	docs := []string{
 		"jobs:\n  bäu:\n    steps:\n      - name: Prüfen # c\n        run: make\n      - uses: x/y@v1\n        with:\n          größe: 1\n          tags: a\n    env:\n      日本: x\n",
@@ -1167,7 +1146,6 @@ func TestCheckpointRollback(t *testing.T) {
 	}
 	d.Rollback(cp)
 	check(t, d, lines("a: 10", "b: 2", "c: 3"))
-	// The rolled-back lines can be edited again.
 	if err := d.SetKey(d.Root(), "b", "21", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -1201,7 +1179,6 @@ func TestScriptLines(t *testing.T) {
 	if err != nil || first != 4 || last != 5 || !slices.Equal(got, want) {
 		t.Fatalf("ScriptLines = %d-%d %q (%v), want 4-5 %q", first, last, got, err, want)
 	}
-	// ScriptLines queues nothing; ReplaceScript queues the same lines.
 	check(t, d, src)
 	if err := d.ReplaceScript(n, "make\nmake test\n"); err != nil {
 		t.Fatal(err)

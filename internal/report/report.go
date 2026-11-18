@@ -1,4 +1,3 @@
-// Package report writes and renders scan results.
 package report
 
 import (
@@ -13,7 +12,6 @@ import (
 
 const githubSummaryLimit = 1_000_000 // GitHub allows 1 MiB per step
 
-// WriteEvidence writes run.json and summary.md into the run's evidence folder.
 func WriteEvidence(r *model.Run) error {
 	if r.EvidenceDir == "" {
 		return errors.New("no evidence folder")
@@ -28,7 +26,6 @@ func WriteEvidence(r *model.Run) error {
 	return os.WriteFile(filepath.Join(r.EvidenceDir, "run.json"), data, 0o644)
 }
 
-// RunJSON serializes a run as run.json, with empty arrays instead of nulls.
 func RunJSON(r *model.Run) ([]byte, error) {
 	if r.Targets == nil {
 		r.Targets = []model.TargetResult{}
@@ -48,7 +45,6 @@ func RunJSON(r *model.Run) ([]byte, error) {
 	return json.MarshalIndent(r, "", "  ")
 }
 
-// AppendGitHubSummary appends Markdown to $GITHUB_STEP_SUMMARY, truncated to GitHub's limit.
 func AppendGitHubSummary(path, md string) error {
 	if len(md) > githubSummaryLimit {
 		cut := strings.LastIndex(md[:githubSummaryLimit-300], "\n")

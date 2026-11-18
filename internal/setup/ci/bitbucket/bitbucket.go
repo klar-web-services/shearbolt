@@ -1,6 +1,3 @@
-// Package bitbucket is the Bitbucket Pipelines plugin of shearbolt setup: it reads the steps of
-// bitbucket-pipelines.yml into the CI-neutral job model, and edits their scripts (through
-// scriptci) and caches.
 package bitbucket
 
 import (
@@ -28,13 +25,10 @@ const (
 // pattern to a list.
 var sections = []string{"default", "branches", "tags", "pull-requests", "custom"}
 
-// Plugin is the Bitbucket Pipelines plugin.
 type Plugin struct{}
 
-// Name implements plan.CI.
 func (Plugin) Name() string { return "bitbucket" }
 
-// Files returns bitbucket-pipelines.yml when the repository has one.
 func (Plugin) Files(r plan.Repo) []string {
 	if _, err := r.ReadDir(pipelinesFile); err == nil || !r.Exists(pipelinesFile) {
 		return nil
@@ -42,19 +36,17 @@ func (Plugin) Files(r plan.Repo) []string {
 	return []string{pipelinesFile}
 }
 
-// step is one editable step.
 type step struct {
 	path   string // "branches/main/0"
 	id     string
 	label  string
 	name   string
-	m      *yaml.Node // the step mapping
+	m      *yaml.Node
 	line   int
 	script *scriptci.Script
 	after  *scriptci.Script // its after-script, nil when it has none that setup can read
 }
 
-// pipelines is a parsed bitbucket-pipelines.yml.
 type pipelines struct {
 	file    string
 	doc     *yamledit.Doc
@@ -103,9 +95,7 @@ func scalarValue(n *yaml.Node) string {
 	return ""
 }
 
-// parse reads the steps of every pipeline (R4 rule 6, Task 16). A step reached through an alias
-// is one job, at the path where it is first found. Steps with a merge key, a shared or flow-style
-// script, or script items that are not commands or pipes are left out and listed in skipped.
+// A step reached through an alias is one job, at the path where it is first found.
 func parse(file string, src []byte) (*pipelines, error) {
 	d, err := yamledit.Parse(src)
 	if err != nil {
@@ -142,7 +132,6 @@ func parse(file string, src []byte) (*pipelines, error) {
 	return pl, nil
 }
 
-// imported records a pipeline that is imported from elsewhere (import: repo:branch:name).
 func (pl *pipelines) imported(n *yaml.Node, path string) {
 	if rawValue(n, "import") != nil {
 		pl.imports = append(pl.imports, path)
@@ -178,7 +167,6 @@ func (pl *pipelines) list(n *yaml.Node, prefix string, seen map[*yaml.Node]bool)
 	}
 }
 
-// add reads one step.
 func (pl *pipelines) add(n *yaml.Node, path string, seen map[*yaml.Node]bool) {
 	m := resolve(n)
 	if m == nil || m.Kind != yaml.MappingNode || seen[m] {
@@ -226,7 +214,6 @@ func (pl *pipelines) add(n *yaml.Node, path string, seen map[*yaml.Node]bool) {
 	}
 }
 
-// windows reports whether a runs-on value (a label or a list of labels) names a Windows runner.
 func windows(n *yaml.Node) bool {
 	n = resolve(n)
 	if n == nil {
@@ -247,9 +234,8 @@ func (pl *pipelines) step(id string) *step {
 	return nil
 }
 
-// Jobs reads the steps into editable jobs: each script item is a step, a pipe a step that pushes.
-// Steps that cannot be edited are listed in one UNSUPPORTED_EDIT note. A push in an after-script
-// gets PUSH_IN_AFTER_SCRIPT: after-script runs even when the script, and so the gate, fails.
+// A push in an after-script gets PUSH_IN_AFTER_SCRIPT: after-script runs even when the script,
+// and so the gate, fails.
 func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
 	pl, err := parse(file, src)
 	if err != nil {
@@ -282,19 +268,12 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 	return jobs, notes, nil
 }
 
-// ---- Snippet and Edit ----
-
-// Snippet renders gate g as the two script items a user adds by hand.
 func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
 	return scriptci.Snippet(g, cloneDir, snippetIndent)
 }
 
-// cacheSnippet is what a user adds by hand for the shearbolt cache.
 const cacheSnippet = "definitions:\n  caches:\n    " + cacheName + ": " + cachePath + "\n...\n      - step:\n          caches:\n            - " + cacheName
 
-// Edit applies the gates and preps of the file's jobs through scriptci, and gives every step
-// with a gate the shearbolt cache: an entry in its caches list (a new list before script:) and
-// one definitions.caches entry for the file (Task 16).
 func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gates []plan.Gate, preps map[string][]plan.Prep) (plan.Edited, error) {
 	pl, err := parse(file, src)
 	if err != nil {
@@ -318,7 +297,6 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 	})
 }
 
-// caches edits the shearbolt cache of a file's steps.
 type caches struct {
 	pl     *pipelines
 	unit   int
@@ -327,8 +305,6 @@ type caches struct {
 	refs   map[string]bool // job IDs whose step lists the shearbolt cache after its edit
 }
 
-// check decides whether definitions.caches can hold the shearbolt entry: definitions and its
-// caches must be block mappings that are not shared through an alias.
 func (c *caches) check() {
 	root := c.pl.doc.Root()
 	defs := rawValue(root, "definitions")
@@ -365,8 +341,6 @@ func (c *caches) notAdded(st *step, why string) []plan.Note {
 	}}
 }
 
-// step adds shearbolt to the caches of st, the step of a job that gets a gate. A step whose
-// caches are flow style, or shared through an anchor, gets CACHE_NOT_ADDED instead.
 func (c *caches) step(st *step) ([]plan.Note, error) {
 	d := c.pl.doc
 	if c.reason != "" {

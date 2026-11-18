@@ -1,48 +1,12 @@
 name: release
-# Shearbolt's own releases (spec section 14; plan 3, D4):
-#
-#   tag vX.Y.Z ─▶ build ─┬─▶ gate ──────┐
-#                        ├─▶ behaviour ─┼─▶ publish ─┬─▶ verify ────────┬─▶ major-tag
-#                        └─▶ install ───┘            └─▶ verify-action ─┘
-#
 # Candidate code (the built binaries, repository scripts, go test) runs only in jobs with
 # contents: read. publish (S3 secrets, contents: write) and major-tag (contents: write) run no
 # candidate binary and no repository script: they only copy files and run gh, git and the
 # tools.klar.ws publish action.
-#
-# Release procedure (from main only; every version must be higher than every published one,
-# backports are unsupported in v1):
-#
-#   printf '1.2.3\n' > VERSION && git commit -m "release: v1.2.3" VERSION
-#   git tag -a v1.2.3 -m "Shearbolt v1.2.3" && git push --atomic origin main v1.2.3
-#   # after the run: set GATE_VERSION/GATE_SHA256 below to the values in the run summary; commit
-#
-# The tag must point at a commit on main (build checks it). Push one release tag at a time and
-# wait for its run to finish: the concurrency group keeps one run going and one pending, and a
-# third queued run cancels the pending one.
-#
-# A job failed (a missing secret, a flaky verify or network step): re-run the failed jobs of the
-# same run, `gh run rerun <id> --failed` (possible for 30 days). Re-runs reuse that run's
-# artifacts, so both hosts receive the same bytes, and publishing what is already published is a
-# no-op.
-#
-# Blocked before publishing (gate, behaviour or install failed): never retry the same version, and
-# never start a fresh run for its tag (a rebuild gives different bytes, which both hosts refuse).
-# Delete the tag (`git push origin :refs/tags/vX.Y.Z`), then right away either commit the fix and
-# cut the next patch release (`release: vX.Y.(Z+1)`), or commit VERSION back to the last published
-# version (`chore: VERSION back to <last> after blocked vX.Y.Z`; `dev` if nothing was ever
-# published), so that main never names an unpublished version.
-#
-# Dry run: `gh workflow run release.yml --ref main`. It builds 0.0.0-dryrun.<run number> and runs
-# build, gate, behaviour and install; publish, verify, verify-action and major-tag are skipped.
-#
-# Rollback: the tools.klar.ws "Manage a tool" workflow, command set-latest (owner), and
-# `git push -f origin <previous release commit>:refs/tags/v1`.
-# Emergency (compromised release): retire, purge, then restart the tools service (tools-klar-ws skill).
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
-  workflow_dispatch: # dry run: everything except publish, verify, verify-action and major-tag
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -52,8 +16,8 @@ defaults:
   run:
     shell: bash # bash -eo pipefail
 env:
-  GATE_VERSION: '1.3.0' # previous release that gates candidates; empty = bootstrap with the pinned Grype
-  GATE_SHA256: '8b3e69d7b325cdacfd0882a1b4d2fa808617f447e94aaa16e68df45cbd4a7108' # SHA-256 of its shearbolt-x86_64-unknown-linux-gnu.tar.gz
+  GATE_VERSION: '1.3.0'
+  GATE_SHA256: '8b3e69d7b325cdacfd0882a1b4d2fa808617f447e94aaa16e68df45cbd4a7108'
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -66,7 +30,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Releases are cut from main only (backports are unsupported in v1). Dry runs are exempt.
       - name: The tag is on main
         if: github.event_name == 'push'
         run: |
@@ -159,9 +122,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gate"
           tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/gate" shearbolt
           "$RUNNER_TEMP/gate/shearbolt" scan --ci --config .github/release-gate.yaml --output-dir "$RUNNER_TEMP/gate-evidence"
-      # First release only: the Grype release pinned in this commit's pins.go, verified by its
-      # linux_amd64 archive checksum. Every target is scanned before the step fails, so the
-      # evidence is complete.
       - name: Gate with the pinned Grype (bootstrap)
         if: env.GATE_VERSION == ''
         run: |
@@ -234,8 +194,6 @@ jobs:
         run: |
           SHEARBOLT_CANDIDATE="$RUNNER_TEMP/candidate/shearbolt" SHEARBOLT_TEST_DB_ARCHIVE="$ARCHIVE" \
             go test -tags behaviour -count=1 -timeout 30m -v ./internal/behaviour/
-      # AC-17: the cases themselves must reject a binary that always exits 0. Only TestCandidate
-      # runs, without SHEARBOLT_CANDIDATE_VERSION.
       - name: Negative control (an always-0 binary must fail)
         env:
           ARCHIVE: ${{ steps.db.outputs.archive }}
@@ -258,7 +216,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-15-intel, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20 # macOS minutes bill 10x on private repositories
+    timeout-minutes: 20
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
@@ -283,7 +241,6 @@ jobs:
             echo "::error::expected shearbolt $VERSION, but the installed binary reports '$got'"
             exit 1
           fi
-      # One Alpine amd64 run: BusyBox wget (no curl) and musl, over loopback HTTP.
       - name: Install with BusyBox wget in Alpine
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -304,7 +261,6 @@ jobs:
     env:
       VERSION: ${{ needs.build.outputs.version }}
     steps:
-      # Before anything is published anywhere.
       - name: Check the publishing secrets
         env:
           TOOLS_S3_BUCKET: ${{ secrets.TOOLS_S3_BUCKET }}
@@ -367,7 +323,6 @@ jobs:
       - name: Stage the install script and landing page
         run: mkdir site && cp install.sh .github/tools-klar-ws/index.html site/
       - name: Publish to tools.klar.ws
-        # v1: the commit behind its annotated tag (tag object 90aa915b13610cab9cbe2e37c23e883f91659c6a).
         uses: klar-web-services/tools.klar.ws/publish@6d0c0851802c426f7307013acf9ed6cf992c64e4 # v1
         with:
           tool: shearbolt
@@ -379,7 +334,6 @@ jobs:
           bucket: ${{ secrets.TOOLS_S3_BUCKET }}
           access-key-id: ${{ secrets.TOOLS_S3_ACCESS_KEY }}
           secret-access-key: ${{ secrets.TOOLS_S3_SECRET_KEY }}
-      # Only a stable release becomes the next gate; a pre-release gets no pin suggestion.
       - name: Next gate pin
         if: "!contains(needs.build.outputs.version, '-')"
         run: |
@@ -425,13 +379,12 @@ jobs:
           done
           echo "::error::https://tools.klar.ws/shearbolt/latest says '$got', not $VERSION"
           exit 1
-      # Spec section 10's exact Bitbucket/GitLab install line, in an image with wget only.
+      # The README's exact Bitbucket/GitLab install line, in an image with wget only.
       - name: Bitbucket/GitLab install line in Alpine
         run: |
           docker run --rm -e V="$VERSION" alpine:3.22 sh -c \
             '(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION="$V" sh && test "$("$HOME/.local/bin/shearbolt" version | head -n1)" = "shearbolt $V"'
 
-  # The Action from the tag in release mode: install.sh from tools.klar.ws, checksum-verified.
   verify-action:
     needs: [build, publish]
     runs-on: ubuntu-latest
@@ -482,7 +435,6 @@ jobs:
             2) ;;
             *) echo "::error::could not list the branches on origin"; exit 1 ;;
           esac
-          # Only a guard: backports are unsupported in v1.
           newest=$(git tag -l "$major.*" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
           if [ "$newest" != "$GITHUB_REF_NAME" ]; then
             echo "::notice::$GITHUB_REF_NAME is not the newest $major.*.* release ($newest), so $major stays where it is."

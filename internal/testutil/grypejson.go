@@ -7,22 +7,20 @@ import (
 	"time"
 )
 
-// Match describes one finding in a generated Grype document.
 type Match struct {
 	ID          string
 	Package     string
 	Version     string
-	Type        string // default "npm"
-	Severity    string // default "High"
-	FixState    string // default "not-fixed"
+	Type        string
+	Severity    string
+	FixState    string
 	FixVersions []string
 	KEV         bool
 	EPSS        float64
 	Related     []string
-	Location    string // default "/package-lock.json"
+	Location    string
 }
 
-// GrypeJSON returns a minimal Grype JSON report with the given database build time.
 func GrypeJSON(built time.Time, matches ...Match) string {
 	type ref struct {
 		CVE string `json:"cve"`
@@ -103,7 +101,6 @@ func GrypeJSON(built time.Time, matches ...Match) string {
 	return string(b)
 }
 
-// SBOMJSON returns a CycloneDX document with one library component per purl (each located in its lockfile, plus one file component).
 func SBOMJSON(purls ...string) string {
 	type property struct {
 		Name  string `json:"name"`
@@ -138,8 +135,6 @@ func or(v, fallback string) string {
 	return v
 }
 
-// SBOMAt is like SBOMJSON, but every package is read from the given scan-root-relative file
-// (for example "/yarn.lock") instead of a default lockfile.
 func SBOMAt(path string, purls ...string) string {
 	type property struct {
 		Name  string `json:"name"`

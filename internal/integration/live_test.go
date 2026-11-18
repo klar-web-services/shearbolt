@@ -7,7 +7,6 @@ import (
 	"time"
 )
 
-// The one test on today's database: ad hoc flags, default policy (48-hour age limit).
 // lodash 4.17.20 must stay vulnerable; if this fails, check whether an advisory was withdrawn
 // before suspecting Shearbolt.
 func TestLiveDatabaseSmoke(t *testing.T) {

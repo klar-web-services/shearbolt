@@ -31,7 +31,6 @@ func targetNames(ts []config.Target) []string {
 	return out
 }
 
-// loadConfig writes content to a temp shearbolt.yaml and loads it with an empty environment.
 func loadConfig(t *testing.T, content string) *config.Config {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "shearbolt.yaml")
@@ -163,7 +162,6 @@ func TestConfigMerge(t *testing.T) {
 		t.Fatalf("merged: %v", got)
 	}
 
-	// A second run changes nothing.
 	r2 := repo(t, map[string]string{"shearbolt.yaml": ch.Content})
 	ch2, merged2, names2, _, notes2 := configChange(r2, p, planned)
 	if ch2 != nil || len(notes2) != 0 || names2["source"] != "repo" || len(merged2) != 2 {
@@ -222,14 +220,11 @@ func TestConfigNameCollisions(t *testing.T) {
 		{Name: "web", Image: "${SHEARBOLT_IMAGE:-web:local}"},
 		{Name: "source", Source: "."},
 	}
-	// An existing target with the planned image's value under another name is reused.
 	src := "version: 1\nproject: web\ntargets:\n  - name: app\n    image: ${SHEARBOLT_IMAGE:-web:local}\n  - name: source\n    source: ./\n"
 	ch, _, names, vars, notes := configChange(repo(t, map[string]string{"shearbolt.yaml": src}), p, planned)
 	if ch != nil || len(notes) != 0 || names["web"] != "app" || vars["app"] != "SHEARBOLT_IMAGE" || names["source"] != "source" {
 		t.Fatalf("value match: %v %v %v %v", ch, notes, names, vars)
 	}
-	// Same name, other kind: the planned target is added under a free name, so the image is
-	// still scanned.
 	src = "version: 1\nproject: web\ntargets:\n  - name: web\n    dir: public\n  - name: source\n    source: .\n"
 	ch, merged, names, vars, notes := configChange(repo(t, map[string]string{"shearbolt.yaml": src}), p, planned)
 	if ch == nil || names["web"] != "web-2" || vars["web-2"] != "SHEARBOLT_IMAGE" || !slices.Equal(codes(notes), []string{"TARGET_EXISTS"}) {
@@ -239,12 +234,10 @@ func TestConfigNameCollisions(t *testing.T) {
 		t.Fatalf("merged: %v", got)
 	}
 	loadConfig(t, ch.Content)
-	// Re-run: the added target is found by its value.
 	ch, _, names, _, notes = configChange(repo(t, map[string]string{"shearbolt.yaml": ch.Content}), p, planned)
 	if ch != nil || len(notes) != 0 || names["web"] != "web-2" {
 		t.Fatalf("kind collision re-run: %v %v %v", ch, notes, names)
 	}
-	// Same name and kind, other value (not an image): left alone.
 	src = "version: 1\nproject: web\ntargets:\n  - name: source\n    source: app\n"
 	ch, _, names, _, notes = configChange(repo(t, map[string]string{"shearbolt.yaml": src}), p, planned[1:])
 	if ch != nil || names["source"] != "source" || !slices.Equal(codes(notes), []string{"TARGET_EXISTS"}) {
@@ -343,7 +336,7 @@ func TestIgnoreDockerignore(t *testing.T) {
 	}
 }
 
-// Review 4: an invalid target name is caught by the read-back check, for a new file and for a
+// An invalid target name is caught by the read-back check, for a new file and for a
 // merge; excludes with variables are left out so the file loads with an empty environment.
 func TestConfigReadBackSafetyNet(t *testing.T) {
 	p := plan.Project{Ecosystem: "npm", Dir: ".", Name: "web"}
@@ -451,8 +444,6 @@ func TestConfigExistingComposeOtherName(t *testing.T) {
 	}
 }
 
-// A compose target next to a missing image target: the image is appended, the compose target
-// is not.
 func TestConfigExistingComposeNeverAppended(t *testing.T) {
 	existing := "version: 1\ntargets:\n  - name: source\n    source: .\n"
 	r := repo(t, map[string]string{"shearbolt.yaml": existing})
@@ -480,8 +471,6 @@ func TestReadsBackCompose(t *testing.T) {
 	}
 }
 
-// Compose targets are create-only, so the by-hand snippet of an existing config that cannot be
-// edited does not list them, and they get no note of their own.
 func TestConfigExistingUnsupportedOmitsCompose(t *testing.T) {
 	existing := "version: 1\ntargets: [{name: source, source: .}]\n"
 	r := repo(t, map[string]string{"shearbolt.yaml": existing})

@@ -15,10 +15,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/scan"
 )
 
-// buildTarget returns the image target `scan --build` builds from all of a config's targets
-// (before --target) and the config's folder dir. It checks the rules that keep a local build from
-// standing in for any other image: exactly one image target, kept by --target (only) when given,
-// with a reference tagged :local, and a Dockerfile in dir.
 func buildTarget(all []config.Target, dir string, only []string) (config.Target, error) {
 	var images []config.Target
 	for _, t := range all {
@@ -51,8 +47,7 @@ func buildTarget(all []config.Target, dir string, only []string) (config.Target,
 	return t, nil
 }
 
-// dockerBuild builds dir/Dockerfile with dir as the context and tags the image ref. Docker's
-// output goes to out; an *os.File is handed to docker as is, so it shows its terminal progress.
+// An *os.File is handed to docker as is, so it shows its terminal progress.
 func dockerBuild(ctx context.Context, ref, dir string, out io.Writer) error {
 	docker, err := exec.LookPath("docker")
 	if err != nil {

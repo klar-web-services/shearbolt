@@ -1,5 +1,3 @@
-// Package github is the GitHub Actions plugin of shearbolt setup: it parses workflows into the
-// CI-neutral job model and splices gates, image tags, step splits and installs into them.
 package github
 
 import (
@@ -22,7 +20,6 @@ const (
 	gateUses     = gateAction + "@v1"
 )
 
-// pushActions are the actions that push or deploy (R2).
 var pushActions = []string{
 	"softprops/action-gh-release", "ncipollo/release-action", "actions/upload-release-asset",
 	"aws-actions/amazon-ecs-deploy-task-definition", "google-github-actions/deploy-cloudrun",
@@ -30,13 +27,10 @@ var pushActions = []string{
 	"cloudflare/wrangler-action", "appleboy/ssh-action", "appleboy/scp-action",
 }
 
-// Plugin is the GitHub Actions plugin.
 type Plugin struct{}
 
-// Name implements plan.CI.
 func (Plugin) Name() string { return "github" }
 
-// Files returns the workflow files: .github/workflows/*.yml and *.yaml, sorted.
 func (Plugin) Files(r plan.Repo) []string {
 	names, err := r.ReadDir(workflowsDir)
 	if err != nil {
@@ -49,7 +43,7 @@ func (Plugin) Files(r plan.Repo) []string {
 		}
 		p := workflowsDir + "/" + n
 		if _, err := r.ReadDir(p); err == nil {
-			continue // a directory
+			continue
 		}
 		if r.Exists(p) {
 			out = append(out, p)
@@ -58,23 +52,19 @@ func (Plugin) Files(r plan.Repo) []string {
 	return out
 }
 
-// ---- the workflow model ----
-
-// workflow is a parsed workflow file.
 type workflow struct {
 	file    string
 	doc     *yamledit.Doc
-	env     []string // workflow env names
+	env     []string
 	jobs    []*job
-	skipped []string // jobs that cannot be edited: "key (reason)"
+	skipped []string
 }
 
-// job is one editable job.
 type job struct {
 	key     string
 	id      string
-	node    *yaml.Node // the job mapping
-	seq     *yaml.Node // its steps sequence
+	node    *yaml.Node
+	seq     *yaml.Node
 	line    int
 	env     []string
 	windows bool // the runner may be Windows, where run steps default to PowerShell
@@ -84,28 +74,24 @@ type job struct {
 	steps    []*step
 }
 
-// step is one workflow step.
 type step struct {
-	item   *yaml.Node // the sequence item as written (an alias when the step is one)
-	m      *yaml.Node // the step's mapping (resolved); nil when the item is not a mapping
-	line   int
-	name   string
-	id     string
-	uses   string
-	ifNode *yaml.Node
-	run    *yaml.Node // the run scalar, or nil
-	script string
-	dir    string // working directory before the script ("" = unknown)
-	posix  bool   // the script runs in bash or sh
-	// shell is the effective shell: setting (the step's shell:, else defaults.run.shell), and
-	// shellSet whether one is set at all.
+	item     *yaml.Node // the sequence item as written (an alias when the step is one)
+	m        *yaml.Node // the step's mapping (resolved); nil when the item is not a mapping
+	line     int
+	name     string
+	id       string
+	uses     string
+	ifNode   *yaml.Node
+	run      *yaml.Node
+	script   string
+	dir      string // working directory before the script ("" = unknown)
+	posix    bool
 	shell    string
 	shellSet bool
 	env      []string
 	cmds     []shell.Command
 }
 
-// runDefaults are a defaults.run mapping's values.
 type runDefaults struct {
 	dir, shell       string
 	hasDir, hasShell bool
@@ -136,7 +122,6 @@ func value(n *yaml.Node) string {
 	return n.Value
 }
 
-// keys returns the scalar keys of mapping n (nil for anything else).
 func keys(n *yaml.Node) []string {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
@@ -168,7 +153,6 @@ func resolveAlias(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// hasAnchor reports whether n or anything inside it defines an anchor.
 func hasAnchor(n *yaml.Node) bool {
 	if n == nil {
 		return false
@@ -185,8 +169,6 @@ func shared(n *yaml.Node) bool { return n != nil && (n.Kind == yaml.AliasNode ||
 
 func flow(n *yaml.Node) bool { return n != nil && n.Style&yaml.FlowStyle != 0 }
 
-// workDir returns a working-directory value as a repo-relative directory, or "" when it is not
-// certain (an expression or variable, absolute, outside the repository).
 func workDir(v string) string {
 	if strings.ContainsAny(v, "$`") {
 		return ""
@@ -194,10 +176,9 @@ func workDir(v string) string {
 	return plan.CleanDir(v)
 }
 
-// parseWorkflow parses a workflow into its editable jobs. Jobs that call a reusable workflow, or
-// have no steps, are not jobs. Jobs that use YAML anchors, aliases or merge keys, or flow-style
-// steps, are left out and listed in skipped: editing them would change other jobs too, or the
-// file cannot be edited in place.
+// Jobs that use YAML anchors, aliases or merge keys, or flow-style steps, are left out and
+// listed in skipped: editing them would change other jobs too, or the file cannot be edited in
+// place.
 func parseWorkflow(file string, src []byte) (*workflow, error) {
 	d, err := yamledit.Parse(src)
 	if err != nil {
@@ -312,9 +293,6 @@ func posixShell(name string, set, windows bool) bool {
 	return name == "bash" || name == "sh" || strings.HasPrefix(name, "bash ") || strings.HasPrefix(name, "sh ")
 }
 
-// mayBeWindows reports whether a job's runs-on may name a Windows runner: a label containing
-// "windows", or an expression that cannot be resolved to labels without it. ${{ matrix.<key> }}
-// is resolved through strategy.matrix.<key> and its include entries.
 func mayBeWindows(d *yamledit.Doc, jm *yaml.Node) bool {
 	ro := d.Get(jm, "runs-on")
 	if ro == nil {
@@ -365,14 +343,11 @@ func mayBeWindows(d *yamledit.Doc, jm *yaml.Node) bool {
 	return false
 }
 
-// windowsLabel reports a runner label that may name a Windows runner: it contains "windows" or
-// starts with "win", in any case.
 func windowsLabel(v string) bool {
 	l := strings.ToLower(strings.TrimSpace(v))
 	return strings.Contains(l, "windows") || strings.HasPrefix(l, "win")
 }
 
-// matrixKey returns KEY for a value that is exactly ${{ matrix.KEY }}.
 func matrixKey(v string) (string, bool) {
 	inner, ok := strings.CutPrefix(v, "${{")
 	if !ok {
@@ -389,8 +364,6 @@ func matrixKey(v string) (string, bool) {
 	return key, true
 }
 
-// matrixValues returns every literal value strategy.matrix.<key> can take, including those its
-// include entries add; false when they cannot all be read.
 func matrixValues(d *yamledit.Doc, jm *yaml.Node, key string) ([]string, bool) {
 	m := d.Get(jm, "strategy", "matrix")
 	if m == nil || m.Kind != yaml.MappingNode {
@@ -427,7 +400,6 @@ func matrixValues(d *yamledit.Doc, jm *yaml.Node, key string) ([]string, bool) {
 	return out, found
 }
 
-// cmdLine returns the file line where command c of the step's script starts.
 func (st *step) cmdLine(c shell.Command) int {
 	n := st.run
 	nl := strings.Count(st.script[:min(c.Start, len(st.script))], "\n")
@@ -437,10 +409,6 @@ func (st *step) cmdLine(c shell.Command) int {
 	return n.Line + nl
 }
 
-// ---- Jobs ----
-
-// Jobs parses a workflow into editable jobs (R2): run scripts are parsed from the step's
-// working directory and every command classified; uses steps are existing gates or pushes.
 func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
 	wf, err := parseWorkflow(file, src)
 	if err != nil {
@@ -479,7 +447,7 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 						ps.Gates = append(ps.Gates, g)
 					}
 				}
-				// The sh an install pipes into is part of the install (Batch 5 re-review).
+				// The sh an install pipes into is part of the install.
 				for _, g := range slices.Clone(ps.Gates) {
 					sh := shelledit.InstallShell(st.cmds, g.Pos.Command)
 					if !g.Install || sh < 0 || slices.ContainsFunc(ps.Gates, func(o plan.GateCmd) bool { return o.Pos.Command == sh }) {
@@ -518,14 +486,11 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 	return jobs, notes, nil
 }
 
-// actionIs reports whether a uses reference names action (owner/repo, case-insensitive).
 func actionIs(uses, action string) bool {
 	name, _, _ := strings.Cut(uses, "@")
 	return strings.EqualFold(strings.TrimSuffix(name, "/"), action)
 }
 
-// gateProject returns the project an existing gate step checks: with.working-directory (default
-// ".") joined with the directory of with.config; "" when that is not certain.
 func gateProject(d *yamledit.Doc, st *step) string {
 	wd, cfg := ".", "shearbolt.yaml"
 	if v := scalar(d.Get(st.m, "with", "working-directory")); v != nil {
@@ -540,8 +505,6 @@ func gateProject(d *yamledit.Doc, st *step) string {
 	return plan.CleanDir(path.Join(wd, path.Dir(cfg)))
 }
 
-// pushesAction reports whether a uses step is a known deploy or release action (R2), or a
-// docker/bake-action whose push input pushes (true in any case, or an expression).
 func pushesAction(d *yamledit.Doc, st *step) bool {
 	for _, a := range pushActions {
 		if actionIs(st.uses, a) {
@@ -551,13 +514,11 @@ func pushesAction(d *yamledit.Doc, st *step) bool {
 	return actionIs(st.uses, "docker/bake-action") && pushInput(value(d.Get(st.m, "with", "push")))
 }
 
-// ---- Snippet ----
-
-// Snippet renders gate g as the step a user adds by hand, at the usual step indentation. Image
-// variables carry the scan tag the image must also be tagged with, as a value GitHub expands in
-// env: (P11): the tag with its variables mapped to expressions (snippetValue), or else the build
-// step's output, after two comment lines that show the line the build step needs to write it.
-// A tag whose build cannot be found in the file, or an action's tag, is rendered as written.
+// Image variables carry the scan tag the image must also be tagged with, as a value GitHub
+// expands in env:, either the tag with its variables mapped to expressions (snippetValue), or
+// else the build step's output, after two comment lines that show the line the build step needs
+// to write it. A tag whose build cannot be found in the file, or an action's tag, is rendered as
+// written.
 func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
 	var wf *workflow
 	if len(g.Images) > 0 {
@@ -631,9 +592,6 @@ func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
 	return b.String()
 }
 
-// snippetBuild finds run-step build b in workflow wf: its job, its step, and the step's commands
-// ahead of it. It fails for an action build, and when wf is nil (the file could not be read) or
-// does not hold the build.
 func snippetBuild(wf *workflow, b plan.Build) (*job, *step, []shell.Command, bool) {
 	if wf == nil || b.Pos.Command < 0 {
 		return nil, nil, nil, false
@@ -662,14 +620,10 @@ var githubDefaults = map[string]string{
 }
 
 // snippetValue returns scan tag tag, a shell word of step st in job j of workflow wf, as a value
-// GitHub expands in the gate step's env: (P11), and false when it cannot. A ${{ … }} expression
-// is text, as GitHub fills it in before the shell runs; quotes and escapes are removed. A plain
-// $NAME or ${NAME} becomes ${{ github.* }} for one of githubDefaults, or ${{ env.NAME }} for a
-// key of the workflow's or the job's env:, when the step's own env: does not set it (or cannot
-// be read) and none of before, the step's commands ahead of the build, may assign it (assigns).
-// Any other variable, any other expansion (${NAME,,}, ${NAME:-x}, $(…), backticks, $1), and a
-// step that does not run in bash or sh fail. st is nil when the tag is in a file the step runs,
-// whose assignments setup does not see: then no variable maps.
+// GitHub expands in the gate step's env:, and false when it cannot. A ${{ … }} expression is
+// text, as GitHub fills it in before the shell runs; quotes and escapes are removed. st is nil
+// when the tag is in a file the step runs, whose assignments setup does not see: then no
+// variable maps.
 func snippetValue(tag string, wf *workflow, j *job, st *step, before []shell.Command) (string, bool) {
 	cmds, _ := shell.Parse(tag, shell.State{})
 	if len(cmds) != 1 || len(cmds[0].Words) != 1 || len(cmds[0].Redirs) > 0 || cmds[0].Depth > 0 {
@@ -729,8 +683,6 @@ func snippetValue(tag string, wf *workflow, j *job, st *step, before []shell.Com
 	return b.String(), true
 }
 
-// plainVar returns NAME and the length of the $NAME or ${NAME} that s starts with; 0 for
-// anything else.
 func plainVar(s string) (string, int) {
 	braced := strings.HasPrefix(s, "${")
 	from := 1
@@ -752,8 +704,6 @@ func plainVar(s string) (string, int) {
 	return "", 0
 }
 
-// mapVar returns the GitHub expression that holds variable name where the build reads it (see
-// snippetValue).
 func mapVar(name string, wf *workflow, j *job, st *step, before []shell.Command) (string, bool) {
 	if st == nil || !st.posix {
 		return "", false
@@ -773,10 +723,7 @@ func mapVar(name string, wf *workflow, j *job, st *step, before []shell.Command)
 	return "", false
 }
 
-// assigns reports whether command c may assign variable name (P11): a NAME=… word, alone or
-// before a command; export, declare, typeset, local, readonly, read, mapfile, readarray, unset,
-// let, getopts or printf, or a for or select loop, that names it; a ${NAME=…} or ${NAME:=…}
-// expansion; or eval, source or ., which may assign anything. A false match only gives the
+// assigns reports whether command c may assign variable name. A false match only gives the
 // step-output advice, which is always right.
 func assigns(c shell.Command, name string) bool {
 	if slices.Contains(c.Prefix(), name) {
@@ -801,8 +748,6 @@ func assigns(c shell.Command, name string) bool {
 	return false
 }
 
-// outputEcho returns the line that writes scan tag tag, a shell word, to the step output name:
-// the tag inside the double quotes when it means the same there, else as written after them.
 func outputEcho(name, tag string) string {
 	if v, ok := inDoubleQuotes(tag); ok {
 		return `echo "` + name + "=" + v + `" >> "$GITHUB_OUTPUT"`
@@ -810,9 +755,7 @@ func outputEcho(name, tag string) string {
 	return `echo "` + name + `="` + tag + ` >> "$GITHUB_OUTPUT"`
 }
 
-// inDoubleQuotes returns shell word w as text with the same value inside double quotes: w
-// without its quotes when it is one double-quoted string, w itself when it holds no quote or
-// backslash; false otherwise.
+// inDoubleQuotes returns shell word w as text with the same value inside double quotes.
 func inDoubleQuotes(w string) (string, bool) {
 	if !strings.ContainsAny(w, `"'\`) {
 		return w, true
@@ -838,8 +781,6 @@ func inDoubleQuotes(w string) (string, bool) {
 	return inner, true
 }
 
-// gateLines renders a gate step relative to its item's content column: name, if, uses, env,
-// with (working-directory when the project is not the root, targets when the gate lists them).
 func gateLines(g plan.Gate, ifCond string, env [][2]string, unit int) []string {
 	pad := strings.Repeat(" ", unit)
 	out := []string{"name: shearbolt"}

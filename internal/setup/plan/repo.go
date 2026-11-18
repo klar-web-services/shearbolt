@@ -10,17 +10,14 @@ import (
 	"strings"
 )
 
-// ErrOutside is returned for a path that resolves outside the repository.
 var ErrOutside = errors.New("path is outside the repository")
 
-// Repo is the repository setup works in. Read and Exists take repo-relative, slash-separated
-// paths, resolve symlinks, and refuse paths that resolve outside Root.
+// Read and Exists take repo-relative, slash-separated paths, resolve symlinks, and refuse paths
+// that resolve outside Root.
 type Repo struct{ Root string } // absolute
 
-// skipDirs are the directories Walk never enters (R1), besides every name starting with ".".
 var skipDirs = []string{"node_modules", "target", "vendor", "dist", "build", "out", "coverage", "testdata"}
 
-// Read returns the content of the regular file at rel.
 func (r Repo) Read(rel string) ([]byte, error) {
 	p, err := r.resolve(rel)
 	if err != nil {
@@ -36,7 +33,6 @@ func (r Repo) Read(rel string) ([]byte, error) {
 	return os.ReadFile(p)
 }
 
-// ReadDir returns the sorted entry names of the directory at rel.
 func (r Repo) ReadDir(rel string) ([]string, error) {
 	p, err := r.resolve(rel)
 	if err != nil {
@@ -53,7 +49,6 @@ func (r Repo) ReadDir(rel string) ([]string, error) {
 	return names, nil
 }
 
-// Exists reports whether rel exists inside the repository.
 func (r Repo) Exists(rel string) bool {
 	_, err := r.resolve(rel)
 	return err == nil
@@ -86,10 +81,6 @@ func outside(rel string) bool {
 	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// Walk visits the repository's directories in lexical order, starting at "." (R1). fn gets each
-// visited directory (repo-relative, slash-separated) and the sorted names of its entries.
-// Directories in the R1 skip list, and every other directory whose name starts with ".", are not
-// entered; skipped gets each of them (only the topmost, since their contents are not walked).
 // Symlinked directories are not followed. A directory that cannot be read is an error, so no
 // project is silently missed.
 func (r Repo) Walk(fn func(dir string, names []string), skipped func(dir string)) error {

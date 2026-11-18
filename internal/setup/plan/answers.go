@@ -7,8 +7,7 @@ import (
 	"strings"
 )
 
-// ParseAnswers parses --answer arguments of the form id=value. IDs never contain "=", so the
-// first "=" separates the ID from the value.
+// IDs never contain "=", so the first "=" separates the ID from the value.
 func ParseAnswers(args []string) (map[string]string, error) {
 	out := map[string]string{}
 	for _, a := range args {
@@ -24,10 +23,6 @@ func ParseAnswers(args []string) (map[string]string, error) {
 	return out, nil
 }
 
-// Resolve checks the answers against the questions and returns the value of every applicable
-// question: its answer, or its default. missing lists the applicable questions without an
-// answer, in question order; it is empty when yes is set.
-//
 // A question applies when its Project (if set) is selected and none of its UnlessChosen
 // questions resolves to that Project. The selected projects come from the "projects" question,
 // or are all projects when there is none. Inapplicable questions get no value; answers to them
@@ -103,7 +98,6 @@ func Resolve(qs []Question, answers map[string]string, yes bool) (values map[str
 	return values, missing, nil
 }
 
-// normalize validates answer a to q. A multi answer is returned deduplicated, in option order.
 func normalize(q Question, a string) (string, error) {
 	valid := make([]string, len(q.Options))
 	for i, o := range q.Options {

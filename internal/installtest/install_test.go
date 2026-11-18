@@ -35,12 +35,10 @@ var allTriples = []string{linuxAmd64, linuxArm64, darwinAmd64, darwinArm64}
 // The child PATH holds only these (plus the fetchers a case adds), so a new dependency fails.
 var baseTools = []string{"sh", "mktemp", "rm", "mkdir", "tar", "gzip", "awk", "find", "head", "tr", "install", "mv", "cat"}
 
-// toolsWithHash is the base list plus the given SHA-256 tool and fetchers.
 func toolsWithHash(hash string, fetchers ...string) []string {
 	return append(append(slices.Clone(baseTools), hash), fetchers...)
 }
 
-// tools is the base list plus sha256sum (or shasum where sha256sum is missing) and the given fetchers.
 func tools(fetchers ...string) []string {
 	hash := "sha256sum"
 	if _, err := exec.LookPath(hash); err != nil {
@@ -49,7 +47,6 @@ func tools(fetchers ...string) []string {
 	return toolsWithHash(hash, fetchers...)
 }
 
-// needTool skips a case on hosts without the tool, except under CI, where it fails.
 func needTool(t *testing.T, tool string) {
 	t.Helper()
 	if _, err := exec.LookPath(tool); err != nil {
@@ -65,7 +62,6 @@ func needWget(t *testing.T) {
 	needTool(t, "wget")
 }
 
-// eachHash runs f once with only sha256sum and once with only shasum on the child's PATH.
 func eachHash(t *testing.T, f func(t *testing.T, hash string)) {
 	for _, hash := range []string{"sha256sum", "shasum"} {
 		t.Run(hash, func(t *testing.T) {
@@ -75,7 +71,6 @@ func eachHash(t *testing.T, f func(t *testing.T, hash string)) {
 	}
 }
 
-// eachFetcher runs f once with curl and once with wget only.
 func eachFetcher(t *testing.T, f func(t *testing.T, fetcher string)) {
 	for _, fetcher := range []string{"curl", "wget"} {
 		t.Run(fetcher, func(t *testing.T) {
@@ -106,8 +101,6 @@ func writeFile(t *testing.T, path string, data []byte, mode os.FileMode) {
 	}
 }
 
-// fakeRelease writes latest and v<version>/ with one archive per triple and checksums.txt.
-// Each archive holds an executable shearbolt script printing "shearbolt <version> <triple>".
 func fakeRelease(t *testing.T, version string, triples ...string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -116,7 +109,6 @@ func fakeRelease(t *testing.T, version string, triples ...string) string {
 	return dir
 }
 
-// addRelease adds v<version>/ to a fake release without touching latest.
 func addRelease(t *testing.T, dir, version string, triples ...string) {
 	t.Helper()
 	var sums strings.Builder
@@ -150,7 +142,6 @@ func archive(t *testing.T, script string) []byte {
 	return buf.Bytes()
 }
 
-// setChecksums rewrites checksums.txt of a version with the given lines.
 func setChecksums(t *testing.T, dir, version string, lines ...string) {
 	t.Helper()
 	writeFile(t, filepath.Join(dir, "v"+version, "checksums.txt"), []byte(strings.Join(lines, "\n")+"\n"), 0o644)
@@ -165,7 +156,6 @@ func sumOf(t *testing.T, path string) string {
 	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
-// server serves a fake release on 127.0.0.1 and records every request path.
 type server struct {
 	URL   string
 	mu    sync.Mutex
@@ -217,36 +207,33 @@ esac
 type result struct {
 	code           int // -1 when the shell died from a signal
 	stdout, stderr string
-	home           string   // empty when HOME was unset
-	mktemp         []string // the argument lists mktemp was called with
+	home           string
+	mktemp         []string
 }
 
 type invocation struct {
-	env    map[string]string // only SHEARBOLT_* and FAKE_UNAME_* variables
-	tools  []string          // host tools linked into the child's PATH
-	path   []string          // extra PATH entries after the tool directory
-	stdin  []byte            // when set, the script is piped to sh instead of passed as a file
-	tmpdir string            // TMPDIR, absolute or relative to the working directory (default: a new temp dir)
-	noHome bool              // leave HOME unset
+	env    map[string]string
+	tools  []string
+	path   []string
+	stdin  []byte
+	tmpdir string
+	noHome bool
 }
 
-// prepared is a configured installer run that has not started yet.
 type prepared struct {
 	cmd            *exec.Cmd
 	stdout, stderr bytes.Buffer
 	home           string
-	tmp            string // TMPDIR, absolute
-	tmpVar         string // TMPDIR as the child sees it
+	tmp            string
+	tmpVar         string
 	mktempLog      string
 }
 
-// runInstall runs sh install.sh with the given SHEARBOLT_* / FAKE_UNAME_* variables and host tools.
 func runInstall(t *testing.T, env map[string]string, tools []string) result {
 	t.Helper()
 	return run(t, invocation{env: env, tools: tools})
 }
 
-// run executes install.sh to completion; a death by signal fails the test.
 func run(t *testing.T, inv invocation) result {
 	t.Helper()
 	p := prepare(t, inv)
@@ -257,10 +244,7 @@ func run(t *testing.T, inv invocation) result {
 	return r
 }
 
-// prepare builds an installer run with an environment built from scratch: PATH (a directory of
-// symlinks to the listed host tools, a uname shim and a recording mktemp shim), HOME, TMPDIR,
-// FAKE_UNAME_* and the case's SHEARBOLT_* variables. Nothing is inherited, so no proxy variable
-// reaches curl or wget.
+// Nothing is inherited, so no proxy variable reaches curl or wget.
 func prepare(t *testing.T, inv invocation) *prepared {
 	t.Helper()
 	p := &prepared{home: t.TempDir(), mktempLog: filepath.Join(t.TempDir(), "mktemp.log")}
@@ -331,8 +315,6 @@ func prepare(t *testing.T, inv invocation) *prepared {
 	return p
 }
 
-// finish turns the outcome of Run or Wait into a result. TMPDIR must be empty afterwards, and
-// every mktemp call must have created its directory inside TMPDIR.
 func (p *prepared) finish(t *testing.T, err error) result {
 	t.Helper()
 	r := result{home: p.home, stdout: p.stdout.String(), stderr: p.stderr.String()}
@@ -392,7 +374,6 @@ func wantFail(t *testing.T, r result, msg string) {
 	}
 }
 
-// wantInstalled checks that path is a 0755 regular file that prints want.
 func wantInstalled(t *testing.T, path, want string) {
 	t.Helper()
 	info, err := os.Lstat(path)
@@ -420,8 +401,6 @@ func wantInstalled(t *testing.T, path, want string) {
 	}
 }
 
-// wantUntouched checks that nothing was installed: dir does not exist when previous is nil,
-// otherwise it holds only the previous shearbolt, byte-identical.
 func wantUntouched(t *testing.T, dir string, previous []byte) {
 	t.Helper()
 	if previous == nil {
@@ -454,12 +433,10 @@ func names(entries []os.DirEntry) []string {
 	return out
 }
 
-// installDir is a new, not yet existing install dir whose path contains a space.
 func installDir(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "my bin")
 }
 
-// previousInstall puts an older shearbolt into a new install dir and returns both.
 func previousInstall(t *testing.T) (string, []byte) {
 	t.Helper()
 	dir := installDir(t)
@@ -498,20 +475,17 @@ func checkPlatform(t *testing.T, fetcher string, p platform) {
 	}
 }
 
-// 1. Platforms (curl).
 func TestInstallPlatformsCurl(t *testing.T) {
 	for _, p := range platforms {
 		t.Run(p.s+"-"+p.m, func(t *testing.T) { checkPlatform(t, "curl", p) })
 	}
 }
 
-// 2. wget only: curl is absent from PATH.
 func TestInstallWgetOnly(t *testing.T) {
 	needWget(t)
 	checkPlatform(t, "wget", platforms[0])
 }
 
-// 3. Latest vs pinned.
 func TestInstallLatestVsPinned(t *testing.T) {
 	release := func(t *testing.T) string {
 		dir := fakeRelease(t, "1.2.3", linuxAmd64)
@@ -552,7 +526,6 @@ func TestInstallLatestVsPinned(t *testing.T) {
 	})
 }
 
-// 4. Default dir.
 func TestInstallDefaultDir(t *testing.T) {
 	srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64))
 	r := runInstall(t, map[string]string{"SHEARBOLT_BASE_URL": srv.URL}, tools("curl"))
@@ -560,7 +533,6 @@ func TestInstallDefaultDir(t *testing.T) {
 	wantInstalled(t, filepath.Join(r.home, ".local", "bin", "shearbolt"), "shearbolt 1.2.3 "+linuxAmd64)
 }
 
-// 5. Checksum mismatch.
 func TestInstallChecksumMismatch(t *testing.T) {
 	eachFetcher(t, func(t *testing.T, fetcher string) {
 		for _, existing := range []bool{false, true} {
@@ -580,7 +552,6 @@ func TestInstallChecksumMismatch(t *testing.T) {
 	})
 }
 
-// 6. Corrupt download: the archive is truncated after its checksum was computed.
 func TestInstallCorruptDownload(t *testing.T) {
 	eachFetcher(t, func(t *testing.T, fetcher string) {
 		for _, existing := range []bool{false, true} {
@@ -607,7 +578,6 @@ func TestInstallCorruptDownload(t *testing.T) {
 	})
 }
 
-// 7. No build for the platform.
 func TestInstallNoBuild(t *testing.T) {
 	srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64, linuxArm64, darwinAmd64))
 	dir := installDir(t)
@@ -622,7 +592,6 @@ func TestInstallNoBuild(t *testing.T) {
 	}
 }
 
-// 8. Unknown version (404).
 func TestInstallUnknownVersion(t *testing.T) {
 	eachFetcher(t, func(t *testing.T, fetcher string) {
 		srv := serve(t, fakeRelease(t, "1.2.3", allTriples...))
@@ -636,7 +605,6 @@ func TestInstallUnknownVersion(t *testing.T) {
 	})
 }
 
-// 9. Unsupported platform: fails before any download.
 func TestInstallUnsupportedPlatform(t *testing.T) {
 	for _, tc := range []struct{ s, m, msg string }{
 		{"FreeBSD", "amd64", "unsupported operating system: FreeBSD"},
@@ -658,7 +626,6 @@ func TestInstallUnsupportedPlatform(t *testing.T) {
 	}
 }
 
-// 10. No fetcher.
 func TestInstallNoFetcher(t *testing.T) {
 	srv := serve(t, fakeRelease(t, "1.2.3", allTriples...))
 	dir := installDir(t)
@@ -670,8 +637,7 @@ func TestInstallNoFetcher(t *testing.T) {
 	}
 }
 
-// 11. Invalid version, pinned or served as latest: refused before anything is downloaded with
-// it, and never echoed (it may come from the server).
+// Invalid version, pinned or served as latest: never echoed (it may come from the server).
 func TestInstallInvalidVersion(t *testing.T) {
 	for _, v := range []string{"1.0;x", "../1.2.3", "1.2.3/../../x", "1.2.3?x=1", "1.2.3#x", "1.2.3:x", "1.2.3%2f", `1.2.3\x`, "1.2\x1b[31m", " \t"} {
 		t.Run(fmt.Sprintf("pinned %q", v), func(t *testing.T) {
@@ -703,7 +669,6 @@ func TestInstallInvalidVersion(t *testing.T) {
 	}
 }
 
-// wantNotEchoed checks that stderr neither repeats a rejected value nor carries control characters.
 func wantNotEchoed(t *testing.T, stderr, value string) {
 	t.Helper()
 	if v := strings.TrimSpace(value); v != "" && strings.Contains(stderr, v) {
@@ -714,7 +679,6 @@ func wantNotEchoed(t *testing.T, stderr, value string) {
 	}
 }
 
-// A missing latest file (404) is an error, not a guess.
 func TestInstallLatestNotFound(t *testing.T) {
 	eachFetcher(t, func(t *testing.T, fetcher string) {
 		rel := fakeRelease(t, "1.2.3", allTriples...)
@@ -732,8 +696,6 @@ func TestInstallLatestNotFound(t *testing.T) {
 	})
 }
 
-// Without HOME, the default install dir is unknown: the installer says what to set before any
-// download. SHEARBOLT_INSTALL_DIR alone is enough.
 func TestInstallWithoutHome(t *testing.T) {
 	srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64))
 	r := run(t, invocation{env: map[string]string{"SHEARBOLT_BASE_URL": srv.URL}, tools: tools("curl"), noHome: true})
@@ -746,7 +708,6 @@ func TestInstallWithoutHome(t *testing.T) {
 	wantInstalled(t, filepath.Join(dir, "shearbolt"), "shearbolt 1.2.3 "+linuxAmd64)
 }
 
-// sha256sum and shasum (used where sha256sum is missing) both verify with SHA-256.
 func TestInstallHashTools(t *testing.T) {
 	eachHash(t, func(t *testing.T, hash string) {
 		t.Run("install", func(t *testing.T) {
@@ -800,7 +761,6 @@ func TestInstallUnusualTMPDIR(t *testing.T) {
 	}
 }
 
-// Only a checksum line naming exactly the asset counts; lines that merely contain its name do not.
 func TestInstallChecksumLineMatchesExactly(t *testing.T) {
 	rel := fakeRelease(t, "1.2.3", linuxAmd64)
 	name := "shearbolt-" + linuxAmd64 + ".tar.gz"
@@ -821,7 +781,6 @@ func TestInstallChecksumLineMatchesExactly(t *testing.T) {
 	wantUntouched(t, dir, nil)
 }
 
-// 12. Replace: an older shearbolt is replaced atomically, with no temporary file left.
 func TestInstallReplace(t *testing.T) {
 	eachFetcher(t, func(t *testing.T, fetcher string) {
 		srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64))
@@ -848,7 +807,6 @@ func TestInstallRefusesDirectoryAtTarget(t *testing.T) {
 	}
 }
 
-// 13. PATH hint.
 func TestInstallPathHint(t *testing.T) {
 	for _, onPath := range []bool{false, true} {
 		t.Run(fmt.Sprintf("onPath=%v", onPath), func(t *testing.T) {
@@ -879,15 +837,13 @@ func TestInstallBinaryModeChecksums(t *testing.T) {
 	wantInstalled(t, filepath.Join(dir, "shearbolt"), "shearbolt 1.2.3 "+linuxAmd64)
 }
 
-// 14. Truncation: install.sh cut at any line boundary inside main and piped to sh exits
-// non-zero, downloads nothing and writes nothing. The whole script piped to sh installs.
 func TestInstallTruncatedScriptRunsNothing(t *testing.T) {
 	script, err := os.ReadFile(installScript(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.SplitAfter(string(script), "\n")
-	lines = slices.DeleteFunc(lines, func(l string) bool { return l == "" }) // the piece after the last newline
+	lines = slices.DeleteFunc(lines, func(l string) bool { return l == "" })
 	start, end := slices.Index(lines, "main() {\n"), -1
 	for i := start + 1; start >= 0 && i < len(lines); i++ {
 		if lines[i] == "}\n" {

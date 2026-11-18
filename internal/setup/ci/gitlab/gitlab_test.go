@@ -22,7 +22,6 @@ const (
 	scanWeb = `SHEARBOLT_IMAGE=web:shearbolt-$CI_COMMIT_SHA "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"`
 )
 
-// vars and cache are what a job that gets a gate gains when it has neither.
 var (
 	vars  = []string{"  variables:", "    SHEARBOLT_CACHE_DIR: $CI_PROJECT_DIR/.shearbolt/cache"}
 	cache = []string{"  cache:", "    - key: shearbolt", "      paths:", "        - .shearbolt/cache"}
@@ -60,7 +59,6 @@ func result(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	return p, out
 }
 
-// rerun is result that also returns the second run's plan.
 func rerun(t *testing.T, files map[string]string) (*plan.Plan, string, *plan.Plan) {
 	t.Helper()
 	root := tree(t, files)
@@ -150,8 +148,6 @@ func TestGitLabFiles(t *testing.T) {
 	}
 }
 
-// Jobs are the top-level keys that are not keywords or hidden; one note lists the jobs without
-// their own block script of plain strings.
 func TestGitLabJobs(t *testing.T) {
 	src := lines(
 		"stages: [build]",
@@ -205,7 +201,6 @@ func TestGitLabJobs(t *testing.T) {
 	}
 }
 
-// A job with a merge key is not a job; neither is one defined through an anchor.
 func TestGitLabMergeKeyJob(t *testing.T) {
 	js, ns := jobs(t, lines(
 		".base: &base",
@@ -220,7 +215,6 @@ func TestGitLabMergeKeyJob(t *testing.T) {
 	}
 }
 
-// The variables and cache of a job with neither go before its before_script (or script).
 func TestGitLabVariablesAndCache(t *testing.T) {
 	_, got := result(t, npmRepo(lines(
 		"build:",
@@ -233,7 +227,6 @@ func TestGitLabVariablesAndCache(t *testing.T) {
 		[]string{"  script:", "    - docker build -t web:1 -t web:shearbolt-$CI_COMMIT_SHA .", "    - " + install, "    - " + scanWeb},
 	)...))
 
-	// Existing variables get the entry; the cache list goes after them.
 	_, got = result(t, npmRepo(lines(
 		"build:",
 		"  script:",
@@ -257,7 +250,6 @@ func TestGitLabVariablesAndCache(t *testing.T) {
 	))
 }
 
-// A cache: mapping becomes a one-item list, then gets the shearbolt entry.
 func TestGitLabCacheMappingConverted(t *testing.T) {
 	_, got := result(t, npmRepo(lines(
 		"build:",
@@ -274,7 +266,6 @@ func TestGitLabCacheMappingConverted(t *testing.T) {
 		[]string{"  script:", "    - docker build -t web:1 -t web:shearbolt-$CI_COMMIT_SHA .", "    - " + install, "    - " + scanWeb},
 	)...))
 
-	// A list gets the entry appended.
 	p, got := result(t, npmRepo(lines(
 		"build:",
 		"  cache:",
@@ -289,8 +280,6 @@ func TestGitLabCacheMappingConverted(t *testing.T) {
 	}
 }
 
-// No cache edit, but CACHE_NOT_ADDED with the snippet: an inherited default or global cache, a
-// job at GitLab's limit of 4 caches, and a flow-style cache.
 func TestGitLabCacheNotAdded(t *testing.T) {
 	for name, ci := range map[string]string{
 		"default": lines(
@@ -341,7 +330,6 @@ func TestGitLabCacheNotAdded(t *testing.T) {
 	}
 }
 
-// Jobs without an editable script are left alone and listed; the editable job is edited.
 func TestGitLabUnsupportedJobsUnchanged(t *testing.T) {
 	src := lines(
 		".build-template:",
@@ -365,8 +353,6 @@ func TestGitLabUnsupportedJobsUnchanged(t *testing.T) {
 	}
 }
 
-// No editable job: no gate-job question, no CI change, the config and .gitignore are written,
-// and NO_GATE_PLACED carries the GitLab snippet.
 func TestGitLabNoEditableJob(t *testing.T) {
 	files := npmRepo(lines(
 		".build-template:",
@@ -394,7 +380,6 @@ func TestGitLabNoEditableJob(t *testing.T) {
 	}
 }
 
-// A file with a spec: header is not parsed further: UNSUPPORTED_EDIT, not PARSE.
 func TestGitLabSpecHeader(t *testing.T) {
 	src := lines(
 		"spec:",
@@ -415,14 +400,13 @@ func TestGitLabSpecHeader(t *testing.T) {
 		t.Errorf("%s:\n%s\nnotes %v", file, got, noteCodes(p))
 	}
 
-	// Any other multi-document file is a parse error.
 	if _, _, err := (gitlab.Plugin{}).Jobs(plan.Repo{}, file, []byte("a:\n  script: [x]\n---\nb: 1\n"), nil); err == nil {
 		t.Error("a second document without a spec: header is accepted")
 	}
 }
 
 // before_script runs in the job's shell before the script: its cd sets where the script starts,
-// so the gate names its config. Top-level and job variables are in each command's env.
+// so the gate names its config.
 func TestGitLabBeforeScriptAndVariables(t *testing.T) {
 	files := npmRepo(lines(
 		"default:",
@@ -471,7 +455,6 @@ func TestGitLabBeforeScriptAndVariables(t *testing.T) {
 	}
 }
 
-// A push in after_script (the job's own, or default's) is reported, not edited.
 func TestGitLabAfterScriptPush(t *testing.T) {
 	p, got := result(t, npmRepo(lines(
 		"default:",
@@ -504,7 +487,6 @@ func TestGitLabSnippet(t *testing.T) {
 	}
 }
 
-// A CRLF file keeps its line endings, inserted lines included.
 func TestGitLabCRLF(t *testing.T) {
 	src := strings.ReplaceAll(lines(
 		"build:",
@@ -521,8 +503,6 @@ func TestGitLabCRLF(t *testing.T) {
 	want(t, got, exp)
 }
 
-// before_script runs before the script, so before any gate: an image or binary build there
-// makes the job unsupported, and a push there gets PUSH_BEFORE_GATE (Batch 5 review).
 func TestGitLabBeforeScriptClassified(t *testing.T) {
 	for name, ci := range map[string]string{
 		"own": lines(
@@ -564,7 +544,6 @@ func TestGitLabBeforeScriptClassified(t *testing.T) {
 		})
 	}
 
-	// A push there is reported, and the job is still edited.
 	p, got := result(t, npmRepo(lines(
 		"build:",
 		"  before_script:",
@@ -578,7 +557,6 @@ func TestGitLabBeforeScriptClassified(t *testing.T) {
 	}
 }
 
-// An --all-tags push of the scanned repository in after_script fails the job too.
 func TestGitLabAfterScriptAllTags(t *testing.T) {
 	p, got := result(t, npmRepo(lines(
 		"build:",
@@ -592,9 +570,6 @@ func TestGitLabAfterScriptAllTags(t *testing.T) {
 	}
 }
 
-// Batch 5 review, minor: jobs whose after_script setup cannot read, and extends/inherit jobs
-// without their own before_script when a before_script in the file turns errexit off, are left
-// out; include: gets INCLUDE_NOT_READ.
 func TestGitLabMoreSkips(t *testing.T) {
 	js, ns := jobs(t, lines(
 		".base:",
@@ -644,7 +619,6 @@ func TestGitLabMoreSkips(t *testing.T) {
 	}
 }
 
-// GitLab jobs left out for their layout (Batch 5 review: skip paths without a test).
 func TestGitLabSkipPaths(t *testing.T) {
 	_, ns := jobs(t, lines(
 		".tpl: &tpl",
@@ -673,7 +647,7 @@ func TestGitLabSkipPaths(t *testing.T) {
 }
 
 // A job with extends or inherit: and no before_script of its own may run any before_script in
-// the file: a build in one leaves the job out, a push gets PUSH_BEFORE_GATE (Batch 5 re-review).
+// the file.
 func TestGitLabInheritedBeforeScript(t *testing.T) {
 	for name, ci := range map[string]string{
 		"extends": lines(
@@ -720,8 +694,8 @@ func TestGitLabInheritedBeforeScript(t *testing.T) {
 	}
 }
 
-// Batch 5 re-review: block-style !reference scripts are not commands, and jobs that may take a
-// cache from their template or default: get CACHE_NOT_ADDED instead of a job cache.
+// Block-style !reference scripts are not commands, and jobs that may take a cache from their
+// template or default: get CACHE_NOT_ADDED instead of a job cache.
 func TestGitLabReReviewMutants(t *testing.T) {
 	_, ns := jobs(t, lines(
 		".tpl:",
@@ -764,8 +738,6 @@ func TestGitLabReReviewMutants(t *testing.T) {
 	}
 }
 
-// A job with extends or inherit: and no own before_script is left out when a before_script of the
-// file cannot be read, or when the top-level one builds (Batch 5 final review).
 func TestGitLabUnseenBeforeScriptFinal(t *testing.T) {
 	for name, ci := range map[string]string{
 		"unreadable template": lines(
@@ -801,9 +773,6 @@ func TestGitLabUnseenBeforeScriptFinal(t *testing.T) {
 	}
 }
 
-// The hand-edit snippets in per-file notes (UNSUPPORTED_EDIT, INCLUDE_NOT_READ, a spec: header)
-// and NO_GATE_PLACED pin the version like setup's own edits; a development build leaves them
-// unpinned and says so with UNPINNED_VERSION.
 func TestGitLabSnippetsPinTheVersion(t *testing.T) {
 	const devInstall = "(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | sh"
 	for name, ci := range map[string]string{
@@ -851,7 +820,6 @@ func TestGitLabSnippetsPinTheVersion(t *testing.T) {
 	}
 }
 
-// reading is the GitLab plugin, recording the jobs it reads with the classifier setup passes.
 type reading struct {
 	gitlab.Plugin
 	jobs *[]plan.Job
@@ -863,7 +831,6 @@ func (p reading) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifie
 	return js, ns, err
 }
 
-// classified returns the jobs setup reads from ci, classified by the core, by key.
 func classified(t *testing.T, ci string) map[string]plan.Job {
 	t.Helper()
 	var js []plan.Job
@@ -875,7 +842,7 @@ func classified(t *testing.T, ci string) map[string]plan.Job {
 	return out
 }
 
-// P6: a job's PreludeStop is the line of the first command of the before_script it runs that can
+// A job's PreludeStop is the line of the first command of the before_script it runs that can
 // stop its shell early, and PreludeStopCmd its name; a job whose before_script is unknown takes
 // the first in any before_script of the file.
 func TestGitLabPreludeStop(t *testing.T) {
@@ -960,9 +927,9 @@ func TestGitLabPreludeStop(t *testing.T) {
 	}
 }
 
-// P12 (design §3.5): an early stop in the script or in the before_script the job runs ends its
-// shell before the gate, so the gate is skipped while later jobs and stages still run. A job
-// whose gate checks anything other than images built after the stop is left unchanged.
+// An early stop in the script or in the before_script the job runs ends its shell before the gate,
+// so the gate is skipped while later jobs and stages still run. A job whose gate checks anything
+// other than images built after the stop is left unchanged.
 func TestGitLabEarlyStop(t *testing.T) {
 	const deploy = "    - ./deploy.sh"
 	refused := func(t *testing.T, files map[string]string, job, cmd string, line int) {
@@ -1048,8 +1015,8 @@ func TestGitLabEarlyStop(t *testing.T) {
 	}
 }
 
-// P12 on a re-run: an exit added before a gate already in the job (here setup's own from a first
-// run) fails the job on the exit's line, and nothing changes.
+// An exit added before a gate already in the job (here setup's own from a first run) fails the
+// job on the exit's line, and nothing changes.
 func TestGitLabEarlyStopRerun(t *testing.T) {
 	root := tree(t, npmRepo(lines(
 		"build:",

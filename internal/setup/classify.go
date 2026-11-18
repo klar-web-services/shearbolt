@@ -13,16 +13,12 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// classifier implements the R2 recognizers for shell commands. CI plugins classify their own
-// non-shell steps (GitHub actions, Bitbucket pipes).
 type classifier struct {
 	r     plan.Repo
 	ecos  []plan.Ecosystem
-	files map[string][]byte // called files read so far; nil for one that cannot be read
+	files map[string][]byte
 }
 
-// newClassifier returns the Classifier for one run. Called files are read through r.
-//
 // The builds it returns carry no Pos: the CI plugin sets it, for builds found in called files
 // too (they take the calling command's position). Their notes carry no location unless the build
 // is in a called file, where File is that file and Line the build's line.
@@ -36,8 +32,7 @@ func newClassifier(r plan.Repo, ecos []plan.Ecosystem) plan.Classifier {
 	return c.classify
 }
 
-// classify classifies one CI command (firstMatch), and sets Stops on the result whatever it is: a
-// command that builds or pushes can also stop the shell early (stops).
+// A command that builds or pushes can also stop the shell early.
 func (c *classifier) classify(cmd shell.Command, ctx plan.Context) plan.Classified {
 	ctx.Dir = plan.CleanDir(ctx.Dir)
 	cl := c.firstMatch(cmd, ctx)
@@ -45,9 +40,6 @@ func (c *classifier) classify(cmd shell.Command, ctx plan.Context) plan.Classifi
 	return cl
 }
 
-// firstMatch classifies one CI command (first match wins): an image build, an ecosystem build, an
-// existing Shearbolt gate, a call to an in-repo file (followed recursively; one that cannot be
-// followed counts as a push), or a push, also inside `bash -c '...'`. ctx.Dir is clean.
 func (c *classifier) firstMatch(cmd shell.Command, ctx plan.Context) plan.Classified {
 	args := cmd.ArgWords()
 	if b := imageBuild(cmd, args, ctx, nil); b != nil {
@@ -67,7 +59,7 @@ func (c *classifier) firstMatch(cmd shell.Command, ctx plan.Context) plan.Classi
 		}
 		if push && t != nil {
 			// The gate can only go before or after the whole command, and after it would follow
-			// the push: these builds count as after the first push (R2, R4 rule 1).
+			// the push: these builds count as after the first push.
 			for i := range builds {
 				b := &builds[i]
 				if b.RewriteOnly {
@@ -90,7 +82,6 @@ func (c *classifier) firstMatch(cmd shell.Command, ctx plan.Context) plan.Classi
 	return plan.Classified{}
 }
 
-// recognize asks the ecosystems, in order, whether cmd is one of their builds.
 func (c *classifier) recognize(cmd shell.Command, ctx plan.Context) *plan.Build {
 	for _, e := range c.ecos {
 		if b := e.Recognize(c.r, cmd, ctx); b != nil {
@@ -100,7 +91,6 @@ func (c *classifier) recognize(cmd shell.Command, ctx plan.Context) *plan.Build 
 	return nil
 }
 
-// read returns a repo file's content, or nil when it cannot be read.
 func (c *classifier) read(file string) []byte {
 	if b, ok := c.files[file]; ok {
 		return b
@@ -113,7 +103,6 @@ func (c *classifier) read(file string) []byte {
 	return b
 }
 
-// line returns the 1-based line of offset in file, or 0 when it cannot be read.
 func (c *classifier) line(file string, offset int) int {
 	src := c.read(file)
 	if src == nil || offset > len(src) {
@@ -126,8 +115,6 @@ func variable(s string) bool { return strings.ContainsAny(s, "$`") }
 
 func escapes(p string) bool { return p == ".." || strings.HasPrefix(p, "../") }
 
-// relPath joins p to dir, or returns false when the result is not a certain path inside the
-// repository (a variable, an absolute or home path, or one that leaves the repository).
 func relPath(dir, p string) (string, bool) {
 	if dir == "" || p == "" || variable(p) || path.IsAbs(p) || strings.HasPrefix(p, "~") {
 		return "", false
@@ -139,20 +126,17 @@ func relPath(dir, p string) (string, bool) {
 	return j, true
 }
 
-// ---- options ----
-
-// opt is one parsed command-line option.
 type opt struct {
-	name     string     // "-t", "--tag"
+	name     string
 	value    shell.Word // its value; for --name=value and -nvalue a word holding only the value
 	hasValue bool
-	word     shell.Word // the option's own word
-	end      int        // the offset after the last word the option consumed
+	word     shell.Word
+	end      int // the offset after the last word the option consumed
 }
 
-// parseOpts splits args into options and positional words. An option in withValue takes the next
-// word unless it is written --name=value; a short option whose letter is in attached may also be
-// written -nvalue or -n=value. "--" ends the options. Any other option is a boolean.
+// An option in withValue takes the next word unless it is written --name=value; a short option
+// whose letter is in attached may also be written -nvalue or -n=value. Any other option is a
+// boolean.
 func parseOpts(args []shell.Word, withValue []string, attached string) ([]opt, []shell.Word) {
 	var opts []opt
 	var pos []shell.Word
@@ -195,11 +179,10 @@ func parseOpts(args []shell.Word, withValue []string, attached string) ([]opt, [
 	return opts, pos
 }
 
-// wordEnd returns the offset just after word w.
 func wordEnd(w shell.Word) int { return w.Start + len(w.Raw) }
 
-// valueWord returns the part of w after prefix as a word of its own. When the raw word does not
-// start with prefix (the option itself was quoted), the unquoted value stands in for it.
+// When the raw word does not start with prefix (the option itself was quoted), the unquoted value
+// stands in for it.
 func valueWord(w shell.Word, prefix, value string) shell.Word {
 	if raw, ok := strings.CutPrefix(w.Raw, prefix); ok {
 		return shell.Word{Raw: raw, Value: value, Start: w.Start + len(prefix)}
@@ -207,7 +190,6 @@ func valueWord(w shell.Word, prefix, value string) shell.Word {
 	return shell.Word{Raw: value, Value: value, Start: w.Start}
 }
 
-// positionals returns the values of args that are not options or option values.
 func positionals(args []shell.Word, withValue []string) []string {
 	_, pos := parseOpts(args, withValue, "")
 	out := make([]string, len(pos))
@@ -217,10 +199,7 @@ func positionals(args []shell.Word, withValue []string) []string {
 	return out
 }
 
-// ---- image builds ----
-
 var (
-	// dockerGlobalOpts are docker's options before the subcommand that take a value.
 	dockerGlobalOpts = []string{"--config", "-c", "--context", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"}
 	dockerBuildOpts  = []string{
 		"-t", "--tag", "-f", "--file", "--platform", "--build-arg", "--build-context", "--target", "--cache-from",
@@ -231,8 +210,6 @@ var (
 	railpackOpts = []string{"--name", "--platform", "--progress", "--cache-key", "--cache-from", "--cache-to", "--output", "--env"}
 )
 
-// imageBuild recognizes `docker build`, `docker image build`, `docker buildx build` and
-// `railpack build` (R2). A build that only exports files is a BuildOther gate location.
 func imageBuild(cmd shell.Command, args []shell.Word, ctx plan.Context, vars map[string]string) *plan.Build {
 	if len(args) < 2 {
 		return nil
@@ -258,8 +235,6 @@ func imageBuild(cmd shell.Command, args []shell.Word, ctx plan.Context, vars map
 	return nil
 }
 
-// dockerBuildArgs returns the arguments after a docker build subcommand, and the tool: "docker"
-// for build and image build, "buildx" for buildx build.
 func dockerBuildArgs(args []shell.Word) ([]shell.Word, string, bool) {
 	i := 0
 	for i < len(args) && strings.HasPrefix(args[i].Value, "-") {
@@ -356,8 +331,7 @@ func dockerBuild(cmd shell.Command, args []shell.Word, tool string, ctx plan.Con
 	return &plan.Build{Kind: plan.BuildImage, Dir: dir, Cmd: cmd, Image: img}
 }
 
-// platforms counts a --platform list. A variable counts as two: the list is unknown, and a
-// multi-platform build cannot be gated.
+// A variable counts as two: the list is unknown, and a multi-platform build cannot be gated.
 func platforms(v string) int {
 	if variable(v) {
 		return 2
@@ -371,9 +345,7 @@ func platforms(v string) int {
 	return n
 }
 
-// outputKind classifies a buildx output: "push" (type=registry, or type=image with push=true),
-// "load" (type=docker into the daemon), or "export" (files, a tarball, an unpushed image, the
-// cache). An output that cannot be read, such as a variable, counts as a push, so the gate goes
+// An output that cannot be read, such as a variable, counts as a push, so the gate goes
 // before it.
 func outputKind(v string) string {
 	if variable(v) {
@@ -406,7 +378,6 @@ func outputKind(v string) string {
 	return "push"
 }
 
-// truthy parses a boolean option value; a value that does not parse gives onError.
 func truthy(v string, onError bool) bool {
 	b, err := strconv.ParseBool(v)
 	if err != nil {
@@ -415,8 +386,6 @@ func truthy(v string, onError bool) bool {
 	return b
 }
 
-// contextDir returns a local build context relative to the repository, or "" when it is not a
-// certain local directory (a URL, stdin, a variable, an absolute path).
 func contextDir(cur, v string) string {
 	if v == "-" || strings.Contains(v, "://") || strings.HasPrefix(v, "git@") {
 		return ""
@@ -460,8 +429,6 @@ func railpackBuild(cmd shell.Command, args []shell.Word, ctx plan.Context) *plan
 	return b
 }
 
-// ---- pushes ----
-
 // pushRule is how one tool pushes or deploys: the subcommand paths that do, and the tool's
 // options before them that take a value.
 type pushRule struct {
@@ -470,7 +437,7 @@ type pushRule struct {
 }
 
 // composeOpts are compose's options before the subcommand that take a value. They are also
-// docker's options for every subcommand (P3): that only makes positionals more accurate.
+// docker's options for every subcommand: that only makes positionals more accurate.
 var composeOpts = []string{"-f", "--file", "-p", "--project-name", "--profile", "--env-file", "--project-directory", "--ansi", "--progress", "--parallel"}
 
 var pushRules = map[string]pushRule{
@@ -496,8 +463,6 @@ var pushRules = map[string]pushRule{
 		[][]string{{"upgrade"}, {"install"}}},
 }
 
-// isPush reports whether the command pushes or deploys (the fixed list of R2, including compose
-// pushes and stack deploys). vars resolves a program written as a Makefile variable.
 func isPush(args []shell.Word, vars map[string]string) bool {
 	if len(args) == 0 {
 		return false
@@ -529,7 +494,6 @@ func isPush(args []shell.Word, vars map[string]string) bool {
 // varProgram matches a program written as one variable: $(NAME), ${NAME} or $NAME.
 var varProgram = regexp.MustCompile(`^\$(?:\(([A-Za-z_][A-Za-z0-9_]*)\)|\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$`)
 
-// knownTool reports a program name the image and push rules know.
 func knownTool(p string) bool {
 	_, ok := pushRules[p]
 	return ok || p == "railpack" || p == "flyctl"
@@ -564,10 +528,8 @@ func expandProgram(args []shell.Word, vars map[string]string) []shell.Word {
 	return args
 }
 
-// shells are the programs whose -c script and script files setup reads.
 var shells = []string{"bash", "sh", "zsh", "dash", "ksh"}
 
-// inlineScript returns the script of `bash|sh|zsh -c '<script>'`.
 func inlineScript(args []shell.Word) (string, bool) {
 	if len(args) < 2 || !slices.Contains(shells, path.Base(args[0].Value)) {
 		return "", false
@@ -596,10 +558,7 @@ func inlineScript(args []shell.Word) (string, bool) {
 	return "", false
 }
 
-// inlinePush reports whether a `bash|sh|zsh -c '<script>'` pushes. Its script is parsed in the
-// command's state, and each command is checked like one in a called file at the same level
-// (pushes, pushing image builds, file calls, nested -c), with the file's Makefile variables.
-// Builds inside are not recognized.
+// inlinePush reports whether a `bash|sh|zsh -c '<script>'` pushes. Builds inside are not recognized.
 func (c *classifier) inlinePush(cmd shell.Command, args []shell.Word, level int, stack []string, vars map[string]string) bool {
 	script, ok := inlineScript(args)
 	if !ok {
@@ -616,7 +575,6 @@ func (c *classifier) inlinePush(cmd shell.Command, args []shell.Word, level int,
 	return false
 }
 
-// contextOf is the context of a command found in a called file or an inline script.
 func contextOf(cmd shell.Command) plan.Context {
 	ctx := plan.Context{Dir: cmd.Before.Dir, Env: map[string]bool{}}
 	for _, n := range cmd.Before.Env {
@@ -628,16 +586,10 @@ func contextOf(cmd shell.Command) plan.Context {
 	return ctx
 }
 
-// ---- existing gates ----
-
 const installURL = "tools.klar.ws/shearbolt/install.sh"
 
-// cloneDirs are the CI variables that hold the repository's checkout directory.
 var cloneDirs = []string{"$CI_PROJECT_DIR", "${CI_PROJECT_DIR}", "$BITBUCKET_CLONE_DIR", "${BITBUCKET_CLONE_DIR}", "$GITHUB_WORKSPACE", "${GITHUB_WORKSPACE}", "${{ github.workspace }}"}
 
-// gateCmd recognizes an existing gate: the install command (any command containing the install
-// URL) or `<...>shearbolt scan`, whose project is the directory of --config (default: the
-// command's directory, where ./shearbolt.yaml is read). An uncertain project is "".
 func gateCmd(cmd shell.Command, args []shell.Word, ctx plan.Context) *plan.GateCmd {
 	for _, w := range cmd.Words {
 		if strings.Contains(w.Raw, installURL) || strings.Contains(w.Value, installURL) {

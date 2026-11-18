@@ -18,24 +18,20 @@ import (
 	"time"
 )
 
-// DefaultBaseURL is where official Grype release archives are published.
 const DefaultBaseURL = "https://github.com/anchore/grype/releases/download"
 
 const maxArchiveBytes = 200 << 20
 
-// Installer downloads and verifies the pinned Grype release into a cache directory.
 type Installer struct {
-	CacheDir  string
-	BaseURL   string
-	Version   string
-	Checksums map[string]string
-	// BinaryChecksums holds the SHA-256 of the grype executable inside each archive, keyed like Checksums.
+	CacheDir        string
+	BaseURL         string
+	Version         string
+	Checksums       map[string]string
 	BinaryChecksums map[string]string
 	OS, Arch        string
 	Client          *http.Client
 }
 
-// NewInstaller returns an Installer for this release's pinned Grype on the current platform.
 func NewInstaller(cacheDir string) *Installer {
 	return &Installer{
 		CacheDir:        cacheDir,
@@ -49,7 +45,6 @@ func NewInstaller(cacheDir string) *Installer {
 	}
 }
 
-// Ensure returns the path of a verified Grype binary, downloading it when the cache is missing or altered.
 func (in *Installer) Ensure(ctx context.Context) (string, error) {
 	key := in.OS + "_" + in.Arch
 	want, ok := in.Checksums[key]
@@ -114,7 +109,6 @@ func (in *Installer) download(ctx context.Context, url string) ([]byte, error) {
 	return data, nil
 }
 
-// extractGrype writes the archive's "grype" executable to a temporary file in dir and returns its path.
 func extractGrype(archive []byte, dir string) (string, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {

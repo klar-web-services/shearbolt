@@ -76,7 +76,7 @@ printf 'This project has no lockfile.\n' > no-lockfile/README.md
 for d in npm-vulnerable npm-clean; do
   printf 'version: 1\nproject: %s\ntargets:\n  - name: repo\n    source: .\n' "$d" > "$d/shearbolt.yaml"
 done
-# the "supported" matrix (spec section 13): clean and broken inputs per ecosystem, plus a KEV case
+# the "supported" matrix: clean and broken inputs per ecosystem, plus a KEV case
 mkdir -p pnpm-clean yarn-clean bun-clean npm-kev pnpm-broken yarn-broken bun-broken cargo-clean/src cargo-broken
 for d in pnpm-clean yarn-clean bun-clean pnpm-broken yarn-broken bun-broken; do
   printf '{"name":"%s","version":"1.0.0","private":true,"dependencies":{"is-number":"7.0.0"}}\n' "$d" > "$d/package.json"

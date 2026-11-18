@@ -5,8 +5,6 @@ import (
 	"testing"
 )
 
-// stopping returns the indexes of the commands of script, run from the repository root, that can
-// stop the shell early.
 func stopping(t *testing.T, files map[string]string, script string) []int {
 	t.Helper()
 	_, cl := classifyAll(t, repo(t, files), script)
@@ -19,9 +17,6 @@ func stopping(t *testing.T, files map[string]string, script string) []int {
 	return out
 }
 
-// P6: exit without an argument, with 0 or with a variable, and exec with a command, can stop the
-// shell early and successfully; a literal non-zero exit fails it and does not count, and so does
-// a bare exit or exit $? right after ||.
 func TestStopsDirect(t *testing.T) {
 	for script, want := range map[string][]int{
 		"exit 0":                            {0},
@@ -62,7 +57,7 @@ func TestStopsDirect(t *testing.T) {
 	}
 }
 
-// A command that builds or pushes can stop too: Stops is computed apart from the first match.
+// Stops is computed apart from the first match.
 func TestStopsWithBuildOrPush(t *testing.T) {
 	cl := one(t, repo(t, nil), "exec docker push x")
 	if !cl.Stops || !cl.Push {
@@ -78,9 +73,6 @@ func TestStopsWithBuildOrPush(t *testing.T) {
 	}
 }
 
-// A sourced in-repo file stops the shell when it holds a stop anywhere (followed recursively), or
-// when it cannot be followed. A file sourced from outside the repository and a child shell never
-// count.
 func TestStopsSourced(t *testing.T) {
 	files := map[string]string{
 		"ci/skip.sh":     "#!/bin/sh\nif true; then exit 0; fi\n",

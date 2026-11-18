@@ -31,7 +31,6 @@ Exit codes: 0 passed, 1 blocked by policy, 2 error or incomplete scan.
 Flags:
 `
 
-// stringList is a repeatable string flag.
 type stringList []string
 
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
@@ -62,8 +61,6 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintf(stderr, "shearbolt scan: unexpected argument %q\n", flags.Arg(0))
 		return 2
 	}
-	// configError reports a problem found before scanning. In GitHub Actions it also goes to the
-	// job summary, so a broken config is explained there like any other failed scan.
 	configError := func(msg string) int {
 		fmt.Fprintf(stderr, "shearbolt scan: %s\n", msg)
 		if path := d.getenv("GITHUB_STEP_SUMMARY"); path != "" {
@@ -151,7 +148,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 		}
 	}
 	// One scan at a time per cache. Taken before Ctrl-C is caught, so a waiting scan can still be
-	// interrupted; the lock lasts until this function returns.
+	// interrupted.
 	release, err := scanlock.Acquire(cacheDir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "shearbolt scan: %v\n", err)
@@ -175,8 +172,6 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	} else {
 		runner := &grype.Runner{Binary: bin, CacheDir: cacheDir, Timeout: 15 * time.Minute, Environ: d.environ()}
 		if opts.DBArchive != "" {
-			// The archive's database replaces Grype's own updates. It is imported only when the
-			// cache does not already hold exactly this archive's database (grype.ImportDBIfNeeded).
 			runner.NoDBUpdate = true
 			if _, err := runner.ImportDBIfNeeded(ctx, opts.DBArchive); err != nil {
 				opts.SetupError = fmt.Errorf("import vulnerability database %s: %w", opts.DBArchive, err)
@@ -230,7 +225,6 @@ func isCI(v string) bool {
 	return v != "" && v != "false" && v != "0"
 }
 
-// within reports whether path is dir or inside it (both absolute and clean).
 func within(path, dir string) bool {
 	rel, err := filepath.Rel(dir, path)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))

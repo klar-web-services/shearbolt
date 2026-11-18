@@ -12,15 +12,6 @@ import (
 	"time"
 )
 
-// Run in the release workflow (and locally) against a built candidate:
-//
-//	SHEARBOLT_CANDIDATE=<binary> SHEARBOLT_CANDIDATE_VERSION=<version> \
-//	SHEARBOLT_TEST_DB_ARCHIVE=$(scripts/db-snapshot.sh fetch ~/.cache/shearbolt-db-snapshot) \
-//	  go test -tags behaviour -count=1 -timeout 30m ./internal/behaviour/ -v
-//
-// The Shearbolt cache (the pinned Grype and the imported database, about 3.5 GB) goes to
-// $SHEARBOLT_CACHE_DIR, else to the user cache dir's shearbolt-behaviour.
-
 func absEnv(t *testing.T, name string) string {
 	t.Helper()
 	v := os.Getenv(name)
@@ -34,8 +25,8 @@ func absEnv(t *testing.T, name string) string {
 	return abs
 }
 
-// TestCandidate runs every release case against the candidate. It does not read
-// SHEARBOLT_CANDIDATE_VERSION, so the negative control exercises only the cases.
+// TestCandidate does not read SHEARBOLT_CANDIDATE_VERSION, so the negative control exercises
+// only the cases.
 func TestCandidate(t *testing.T) {
 	binary := absEnv(t, "SHEARBOLT_CANDIDATE")
 	archive := absEnv(t, "SHEARBOLT_TEST_DB_ARCHIVE")
@@ -67,7 +58,6 @@ func TestCandidate(t *testing.T) {
 	}
 }
 
-// TestCandidateVersion checks the version stamped into the candidate with -ldflags.
 func TestCandidateVersion(t *testing.T) {
 	binary := absEnv(t, "SHEARBOLT_CANDIDATE")
 	version := os.Getenv("SHEARBOLT_CANDIDATE_VERSION")

@@ -1,6 +1,3 @@
-// Package rust is the setup plugin for Cargo projects. It finds them (R1), recognizes release
-// cargo builds and the binaries they write (R2, R6), and prepares those builds to embed their
-// crate list with cargo-auditable.
 package rust
 
 import (
@@ -19,16 +16,10 @@ import (
 
 const lockfile = "Cargo.lock"
 
-// Plugin is the Rust ecosystem. It keeps no state: every call reads the manifests it needs, which
-// is cheap, so one value can serve every run.
 type Plugin struct{}
 
-// Name returns "rust".
 func (Plugin) Name() string { return "rust" }
 
-// Find returns every directory with a Cargo.toml ([package] or [workspace]) and a Cargo.lock,
-// sorted by Dir. A Cargo.toml without a lockfile below a workspace root is a member and is
-// covered by that root; any other gets a NO_CARGO_LOCK note.
 func (Plugin) Find(r plan.Repo) ([]plan.Project, []plan.Note, error) {
 	type found struct {
 		dir  string
@@ -89,7 +80,6 @@ func dirName(r plan.Repo, dir string) string {
 	return path.Base(dir)
 }
 
-// under reports whether dir is strictly inside parent.
 func under(dir, parent string) bool {
 	if parent == "." {
 		return dir != "."
@@ -103,15 +93,11 @@ func escapes(p string) bool { return p == ".." || strings.HasPrefix(p, "../") }
 // not inside it (path.Dir never leaves "/" or "..").
 func top(d string) bool { return d == "." || d == "/" || d == "" || escapes(d) || path.IsAbs(d) }
 
-// ---- workspaces and binaries ----
-
-// crate is one package and the binaries Cargo discovers for it.
 type crate struct {
 	dir, name string
 	bins      []string
 }
 
-// workspace is the package or workspace at a Cargo.lock root.
 type workspace struct {
 	root     string
 	pkg      *crate // the root package; nil for a virtual manifest
@@ -152,7 +138,6 @@ func (ws workspace) crates() []crate {
 	return append(out, ws.members...)
 }
 
-// binaries returns every binary of the root package and the members.
 func (ws workspace) binaries() []string {
 	var out []string
 	for _, c := range ws.crates() {
@@ -169,8 +154,6 @@ func crateName(r plan.Repo, dir string, m cargoManifest) string {
 	return dirName(r, dir)
 }
 
-// expandMembers resolves workspace member patterns (dir/* is expanded with filepath.Glob) to the
-// repo-relative directories that hold a Cargo.toml, sorted.
 func expandMembers(r plan.Repo, root string, patterns []string) []string {
 	var out []string
 	add := func(d string) {
@@ -246,17 +229,14 @@ func binaries(r plan.Repo, dir string, m cargoManifest) []string {
 	return slices.Compact(out)
 }
 
-// ---- recognition ----
-
-// invocation is a parsed `cargo build` or `cross build`.
 type invocation struct {
 	cross, auditable bool
 	sub              shell.Word // the build subcommand word; "auditable " is inserted before it
 	profile          string     // output directory: "release", or a custom profile's name
-	uncertain        string     // why the output path is not certain; "" when it is
+	uncertain        string
 	triples          []string
 	targetDir        string
-	manifest         string // --manifest-path as written, "" when not given
+	manifest         string
 	packages         []string
 	excludes         []string
 	bins             []string
@@ -273,8 +253,8 @@ var cargoValueOpts = []string{
 func variable(s string) bool { return strings.ContainsAny(s, "$`") }
 
 // parseInvocation recognizes a release `cargo [+tc] [auditable] build` (or `b`), and any
-// `cross build`. `$(CARGO)`, `${CARGO}` and `$CARGO` count as cargo. A debug build, and one whose
-// only target selectors are --lib, --example(s), --test(s) or --bench(es), is not a build.
+// `cross build`. A debug build, and one whose only target selectors are --lib, --example(s),
+// --test(s) or --bench(es), is not a build.
 func parseInvocation(cmd shell.Command) (invocation, bool) {
 	var inv invocation
 	args := cmd.ArgWords()
@@ -389,8 +369,8 @@ func parseInvocation(cmd shell.Command) (invocation, bool) {
 	return inv, true
 }
 
-// dir is the build's directory for attribution (R3): the --manifest-path directory, otherwise
-// the command's; "" when it is not certain.
+// dir is the build's directory for attribution: the --manifest-path directory, otherwise the
+// command's; "" when it is not certain.
 func (inv invocation) dir(cur string) string {
 	m := inv.manifest
 	if m == "" || cur == "" {
@@ -406,11 +386,7 @@ func (inv invocation) dir(cur string) string {
 	return d
 }
 
-// Recognize classifies a cargo or cross build (R2). A release cargo build is a BuildBinary with
-// the paths it writes, relative to its Cargo.lock root (R6), or with nil Paths and a
-// RUST_PATH_UNKNOWN note when they are not certain. At Depth > 0 it is a BuildOther with
-// RUST_CONDITIONAL_BUILD. A cross build is a BuildOther. Notes carry no location: the caller
-// knows where the command is.
+// Notes carry no location: the caller knows where the command is.
 func (Plugin) Recognize(r plan.Repo, cmd shell.Command, ctx plan.Context) *plan.Build {
 	inv, ok := parseInvocation(cmd)
 	if !ok {
@@ -554,8 +530,6 @@ func nearestManifest(r plan.Repo, from, root string) string {
 	}
 }
 
-// selected returns the packages a build selects: -p, --workspace, the package in the manifest
-// directory, or for the workspace root its default members, its root package, or every member.
 func (ws workspace) selected(inv invocation, manifestDir string) ([]crate, string) {
 	all := ws.crates()
 	switch {
@@ -609,16 +583,9 @@ func (ws workspace) selected(inv invocation, manifestDir string) ([]crate, strin
 	return nil, manifestDir + " is not a member of the workspace at " + ws.root
 }
 
-// ---- preparation ----
-
 // dockerCargo finds a cargo build in a Dockerfile, in shell or exec form.
 var dockerCargo = regexp.MustCompile(`\bcargo\s+(\+\S+\s+)?(auditable\s+)?(build|b)\b|"cargo"\s*,\s*("auditable"\s*,\s*)?"(build|b)"`)
 
-// Prepare returns, for a release cargo build that is not yet auditable, the insert of
-// "auditable " before its build subcommand (in the CI script or in its Via file), and for any
-// release cargo build that is not RewriteOnly the cargo-auditable install. It notes cross builds
-// (RUST_CROSS), binary builds with unknown paths that carry no RUST_PATH_UNKNOWN yet, and image
-// builds whose Dockerfile runs cargo build (RUST_DOCKERFILE). RewriteOnly builds get no notes.
 func (Plugin) Prepare(r plan.Repo, _ plan.Project, b plan.Build) (plan.Prep, []plan.Note) {
 	var prep plan.Prep
 	var notes []plan.Note
@@ -669,8 +636,7 @@ func (Plugin) Prepare(r plan.Repo, _ plan.Project, b plan.Build) (plan.Prep, []p
 	return prep, notes
 }
 
-// location returns the Via file and line of a build found in a called file; for a build in the
-// CI file it returns "", 0, and the caller locates it from Pos.
+// For a build in the CI file it returns "", 0, and the caller locates it from Pos.
 func location(r plan.Repo, b plan.Build) (string, int) {
 	if b.Via == "" {
 		return "", 0

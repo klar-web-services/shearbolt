@@ -48,7 +48,6 @@ func TestContinuedIf(t *testing.T) {
 	}
 }
 
-// A condition in one of setup's marker forms is already safe: safeIf leaves it as it is.
 func TestNeedsWrapMarkerGuarded(t *testing.T) {
 	for _, cond := range []string{
 		"success() && (always()) && " + marker,
@@ -130,7 +129,6 @@ func TestStripAnyMarker(t *testing.T) {
 			t.Errorf("stripAnyMarker(%q) = %q, %q, %v; want %q, %q", c.cond, got, id, ok, c.stripped, c.id)
 		}
 	}
-	// What withMarker adds, stripAnyMarker removes.
 	for _, cond := range []string{"", "a || b", "github.ref == 'refs/heads/main'"} {
 		if got, id, ok := stripAnyMarker(withMarker(cond, "x")); !ok || got != cond || id != "x" {
 			t.Errorf("stripAnyMarker(withMarker(%q)) = %q, %q, %v", cond, got, id, ok)

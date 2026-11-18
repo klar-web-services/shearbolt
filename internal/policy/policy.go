@@ -1,4 +1,3 @@
-// Package policy decides whether each finding blocks a deployment.
 package policy
 
 import (
@@ -14,9 +13,6 @@ import (
 
 var severityRank = map[string]int{"negligible": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
-// Evaluate decides block, warn or excepted for every finding (spec section 6).
-// It returns the decided findings, the status of every exception, and warnings
-// for expired exceptions that would otherwise have matched.
 func Evaluate(findings []model.Finding, p config.Policy, exceptions []config.Exception, now time.Time) ([]model.Finding, []model.ExceptionStatus, []model.Diagnostic) {
 	statuses := make([]model.ExceptionStatus, len(exceptions))
 	active := make([]bool, len(exceptions))
@@ -73,7 +69,6 @@ func Evaluate(findings []model.Finding, p config.Policy, exceptions []config.Exc
 	return out, statuses, warnings
 }
 
-// Verdict aggregates a run: error over block over pass.
 func Verdict(findings []model.Finding, errs []model.Diagnostic) (string, int) {
 	if len(errs) > 0 {
 		return "error", 2
@@ -86,7 +81,6 @@ func Verdict(findings []model.Finding, errs []model.Diagnostic) (string, int) {
 	return "pass", 0
 }
 
-// matchException returns the best matching exception, preferring an active one.
 func matchException(f model.Finding, exceptions []config.Exception, active []bool) (int, bool) {
 	best := -1
 	for i, e := range exceptions {
@@ -142,7 +136,6 @@ func fixText(versions []string) string {
 	return strings.Join(versions, " or ")
 }
 
-// percent renders 0.83 as "83%" and 0.105 as "10.5%".
 func percent(v float64) string {
 	s := strconv.FormatFloat(v*100, 'f', 1, 64)
 	return strings.TrimSuffix(s, ".0") + "%"

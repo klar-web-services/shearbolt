@@ -7,14 +7,10 @@ import (
 )
 
 // This file is a minimal TOML reader for Cargo.toml and .cargo/config.toml, so setup needs no TOML
-// dependency. It understands table headers ([a.b], [[bin]]), dotted and quoted keys, basic and
-// literal strings (multi-line ones included), booleans, and string arrays that span lines with
-// comments and trailing commas. Other values (numbers, dates, inline tables, nested arrays) are
-// skipped. Unusual syntax can make it miss a value; callers fall back to the defaults.
+// dependency. Unusual syntax can make it miss a value; callers fall back to the defaults.
 
-// tomlValue is one value: a string, a boolean, or the strings of an array.
 type tomlValue struct {
-	kind byte // 's' string, 'b' boolean, 'a' array (its string elements), '?' anything else
+	kind byte
 	str  string
 	b    bool
 	list []string
@@ -22,13 +18,12 @@ type tomlValue struct {
 
 // tomlEntry is one `key = value` line, or a table header (key == "").
 type tomlEntry struct {
-	table string // dotted table name, "" at the top level
-	index int    // element of an array of tables ([[bin]]), from 0; -1 for a plain table
-	key   string // dotted key relative to the table
+	table string
+	index int // element of an array of tables ([[bin]]), from 0; -1 for a plain table
+	key   string
 	val   tomlValue
 }
 
-// full returns the entry's key from the top level: "package.name", "build.target".
 func (e tomlEntry) full() string {
 	switch {
 	case e.table == "":
@@ -102,7 +97,6 @@ func (p *tomlReader) skipSpace() {
 	}
 }
 
-// skipBlank skips whitespace, newlines and comments (inside arrays).
 func (p *tomlReader) skipBlank() {
 	for p.i < len(p.s) {
 		switch p.s[p.i] {
@@ -116,7 +110,6 @@ func (p *tomlReader) skipBlank() {
 	}
 }
 
-// restOfLine moves past the next newline.
 func (p *tomlReader) restOfLine() {
 	if j := strings.IndexByte(p.s[p.i:], '\n'); j >= 0 {
 		p.i += j + 1
@@ -129,7 +122,6 @@ func bare(c byte) bool {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
 }
 
-// key reads a dotted key of bare and quoted parts.
 func (p *tomlReader) key() (string, bool) {
 	var parts []string
 	for {
@@ -163,7 +155,6 @@ func (p *tomlReader) key() (string, bool) {
 	}
 }
 
-// str reads the string that starts at p.i.
 func (p *tomlReader) str() (string, bool) {
 	q := p.s[p.i]
 	if triple := strings.Repeat(string(q), 3); strings.HasPrefix(p.s[p.i:], triple) {
@@ -203,7 +194,6 @@ func (p *tomlReader) str() (string, bool) {
 	return "", false
 }
 
-// unescape decodes the escapes of a basic string.
 func unescape(s string) string {
 	if !strings.Contains(s, `\`) {
 		return s
@@ -272,7 +262,6 @@ func (p *tomlReader) value() tomlValue {
 	return tomlValue{kind: '?'}
 }
 
-// array reads an array and keeps its string elements.
 func (p *tomlReader) array() tomlValue {
 	v := tomlValue{kind: 'a', list: []string{}}
 	p.i++
@@ -304,7 +293,6 @@ func (p *tomlReader) array() tomlValue {
 	return v
 }
 
-// skipInline skips an inline table, including nested ones and the strings inside.
 func (p *tomlReader) skipInline() {
 	depth := 0
 	for p.i < len(p.s) {
@@ -330,18 +318,16 @@ func (p *tomlReader) skipInline() {
 	}
 }
 
-// cargoBin is one [[bin]] table.
 type cargoBin struct {
 	name, path       string
 	requiredFeatures bool
 }
 
-// cargoManifest is what setup reads from a Cargo.toml.
 type cargoManifest struct {
 	pkg, workspace bool
 	name           string
 	edition        string
-	autobins       *bool // nil when not set
+	autobins       *bool
 	bins           []cargoBin
 	members        []string
 	defaultMembers []string // nil when not set

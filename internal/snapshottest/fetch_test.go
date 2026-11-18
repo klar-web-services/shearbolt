@@ -16,7 +16,6 @@ const asset = "grype-db-v6.1.10-20261108T002204Z.tar.zst"
 
 var good = []byte("pinned snapshot bytes")
 
-// fakeGh logs its arguments and, for "release download", copies $FAKE_GH_CONTENT to <dir>/<pattern>.
 // Like the real gh it may write to stdout, which the script must keep off its own stdout.
 const fakeGh = `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
@@ -35,11 +34,9 @@ done
 
 type fixture struct {
 	repo, log, content string
-	env                []string // extra environment variables
+	env                []string
 }
 
-// newFixture lays out a repository with the script and a pin for good's checksum. content is
-// what the fake gh downloads (nil: gh downloads nothing).
 func newFixture(t *testing.T, pin string, content []byte) fixture {
 	t.Helper()
 	f := fixture{repo: t.TempDir(), log: filepath.Join(t.TempDir(), "gh.log")}
@@ -74,7 +71,6 @@ type result struct {
 	gh             []string
 }
 
-// run executes the script with a fake gh first on PATH, from cwd.
 func (f fixture) run(t *testing.T, cwd string, args ...string) result {
 	t.Helper()
 	bin := t.TempDir()

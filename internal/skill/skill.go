@@ -1,4 +1,3 @@
-// Package skill installs the embedded coding-agent skill (skills/shearbolt) for Claude Code.
 package skill
 
 import (
@@ -17,45 +16,31 @@ import (
 	"github.com/klar-web-services/shearbolt/skills"
 )
 
-// Name is the skill's name and the name of its folder.
 const Name = "shearbolt"
 
-// source is the provenance marker: an existing SKILL.md whose frontmatter has
-// metadata.source equal to it was written by shearbolt, and Install may replace it.
 const source = "shearbolt"
 
-// Outcome says what Install changed.
 type Outcome string
 
 const (
-	Installed Outcome = "installed" // there was no SKILL.md
-	Updated   Outcome = "updated"   // shearbolt's SKILL.md was there, and some file differed
-	Unchanged Outcome = "unchanged" // every file already had the right content
+	Installed Outcome = "installed"
+	Updated   Outcome = "updated"
+	Unchanged Outcome = "unchanged"
 )
 
-// ErrForeign means the target holds a SKILL.md that shearbolt did not write.
 var ErrForeign = errors.New("a different skill named shearbolt is already installed there")
 
-// ErrOutside means a project install would write outside the project through a symlink.
 var ErrOutside = errors.New("the skill folder leads outside the project through a symlink")
 
-// Dir is <base>/.claude/skills/shearbolt, where base is cwd, or home when global.
 func Dir(base string) string { return filepath.Join(base, ".claude", "skills", Name) }
 
-// Install writes every embedded file below dir and reports what changed. It follows symlinks
-// anywhere, so a global install works with dotfiles layouts (~/.claude -> ~/dotfiles/claude).
+// Install follows symlinks anywhere, so a global install works with dotfiles layouts
+// (~/.claude -> ~/dotfiles/claude).
 //
-// It refuses (ErrForeign, writing nothing) when dir holds a SKILL.md that is not a regular file
-// whose frontmatter has metadata.source: shearbolt. Files that already have the right content
-// are left alone, and so are files the skill does not ship. Files get mode 0644 and the
-// directories Install creates 0755. Each file is replaced through a temporary file and a rename,
-// and SKILL.md goes last, so a failed install never leaves a new SKILL.md pointing at missing
-// references.
+// Each file is replaced through a temporary file and a rename, and SKILL.md goes last, so a
+// failed install never leaves a new SKILL.md pointing at missing references.
 func Install(dir string) (Outcome, error) { return install(dir, nil) }
 
-// InstallInside is Install for a project install: it refuses (ErrOutside, writing nothing) when
-// dir, a folder below it, or a file it would write resolves, through symlinks, to a place
-// outside root.
 func InstallInside(dir, root string) (Outcome, error) {
 	realRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -104,8 +89,6 @@ func install(dir string, confine func(target string) error) (Outcome, error) {
 	return Unchanged, nil
 }
 
-// inside checks that target's deepest existing ancestor (target itself when it exists)
-// resolves, through symlinks, to realRoot or a place below it.
 func inside(target, realRoot string) error {
 	a := target
 	for {
@@ -131,8 +114,6 @@ func inside(target, realRoot string) error {
 	return nil
 }
 
-// ours reports whether skill holds shearbolt's SKILL.md. A missing one is fine (false); anything
-// else that is not a regular file from shearbolt is ErrForeign.
 func ours(skill string) (bool, error) {
 	info, err := os.Lstat(skill)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -154,7 +135,6 @@ func ours(skill string) (bool, error) {
 	return true, nil
 }
 
-// fromShearbolt reports whether a SKILL.md's YAML frontmatter has metadata.source: shearbolt.
 // Line endings may be CRLF, since an editor may have saved the file.
 func fromShearbolt(b []byte) bool {
 	text := strings.ReplaceAll(string(b), "\r\n", "\n")
@@ -182,7 +162,6 @@ type file struct {
 	data []byte
 }
 
-// skillFiles returns the embedded files, SKILL.md last.
 func skillFiles() ([]file, error) {
 	var out []file
 	err := fs.WalkDir(skills.Files, Name, func(p string, e fs.DirEntry, err error) error {
@@ -208,8 +187,6 @@ func skillFiles() ([]file, error) {
 	return out, nil
 }
 
-// put writes data to dir/rel unless that is already a regular file with this content, and
-// reports whether it wrote.
 func put(dir, rel string, data []byte) (bool, error) {
 	target := filepath.Join(dir, filepath.FromSlash(rel))
 	if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
@@ -241,8 +218,8 @@ func put(dir, rel string, data []byte) (bool, error) {
 	return true, nil
 }
 
-// mkdirs creates dir and its subdirectory sub (a slash path, "." for none). Parents of dir get
-// os.MkdirAll's 0755 under the umask; dir and sub, when created here, get exactly 0755.
+// Parents of dir get os.MkdirAll's 0755 under the umask; dir and sub, when created here, get
+// exactly 0755.
 func mkdirs(dir, sub string) error {
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err

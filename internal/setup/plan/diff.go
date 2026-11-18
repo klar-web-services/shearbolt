@@ -13,10 +13,9 @@ const (
 	maxLCSCells = 4_000_000
 )
 
-// UnifiedDiff returns a unified diff from old to new with a/ and b/ prefixes and 3 lines of
-// context, or "" when they are equal. old is nil when the file does not exist (the diff then
-// reads from /dev/null); new is nil when it is removed. Creating or removing a file always gives
-// a diff, even an empty file (headers only).
+// old is nil when the file does not exist (the diff then reads from /dev/null); new is nil when
+// it is removed. Creating or removing a file always gives a diff, even an empty file (headers
+// only).
 func UnifiedDiff(path string, old, new []byte) string {
 	if (old == nil) == (new == nil) && bytes.Equal(old, new) {
 		return ""
@@ -56,15 +55,14 @@ func UnifiedDiff(path string, old, new []byte) string {
 	return out.String()
 }
 
-// diffOp is one line of the edit script. a and b are the 0-based positions in the old and new
-// lines where the op happens (for an insert, a is the number of old lines before it).
+// a and b are the 0-based positions in the old and new lines where the op happens (for an
+// insert, a is the number of old lines before it).
 type diffOp struct {
 	kind byte // ' ', '-', '+'
 	text string
 	a, b int
 }
 
-// splitLines splits into lines that keep their "\n"; a last line without one stays as is.
 func splitLines(b []byte) []string {
 	if len(b) == 0 {
 		return nil
@@ -163,8 +161,7 @@ func hunks(ops []diffOp) [][2]int {
 	return out
 }
 
-// hunkRange formats one side of a hunk header. pos is the 0-based index of its first line; an
-// empty range names the line before it.
+// pos is the 0-based index of its first line; an empty range names the line before it.
 func hunkRange(pos, n int) string {
 	switch n {
 	case 0:

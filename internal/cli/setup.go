@@ -39,20 +39,17 @@ const (
 	setupNeedsTerminal = "setup needs a terminal; use --yes, or --plan --json and --apply --answer"
 	setupReview        = "Review the changes with git status and git diff (new files show only in git status), then commit them. Setup never commits."
 	setupMaxTries      = 3
-	maxAnswer          = 4 << 10 // longest answer line read from stdin, in bytes
+	maxAnswer          = 4 << 10
 )
 
-// errLongAnswer is an answer line longer than maxAnswer: an invalid answer.
 var errLongAnswer = errors.New("the answer is longer than 4 KiB")
 
-// ciSystemNames are the CI systems' names in human output.
 var ciSystemNames = map[string]string{
 	"github":    "GitHub Actions",
 	"bitbucket": "Bitbucket Pipelines",
 	"gitlab":    "GitLab CI",
 }
 
-// setupRun holds the output side of one setup run.
 type setupRun struct {
 	stdout, stderr io.Writer
 	d              deps
@@ -143,8 +140,6 @@ func runSetup(args []string, stdout, stderr io.Writer, d deps) int {
 	return s.write(root, p, true)
 }
 
-// interactive asks the applicable open questions on the terminal, one at a time, re-evaluating
-// which questions apply after each answer; then it shows the plan and asks before writing.
 func (s setupRun) interactive(root string, o setup.Options) int {
 	p := setup.Compute(o)
 	if p.Error != nil {
@@ -202,9 +197,6 @@ func (s setupRun) interactive(root string, o setup.Options) int {
 	return s.write(root, p, false)
 }
 
-// ask asks question q until it gets a valid answer, at most setupMaxTries times. Options are
-// numbered; an answer is option numbers or values (several, comma-separated, for a multi
-// question), and an empty line takes the default.
 func (s setupRun) ask(in *bufio.Reader, qs []plan.Question, answers map[string]string, q plan.Question) (string, error) {
 	fmt.Fprintf(s.stdout, "\n%s\n", termSafe(q.Prompt, false))
 	for i, o := range q.Options {
@@ -235,8 +227,6 @@ func (s setupRun) ask(in *bufio.Reader, qs []plan.Question, answers map[string]s
 	}
 }
 
-// checkAnswer turns a typed line into q's value (an empty line is the default) and validates it
-// with Resolve, next to the answers given so far.
 func checkAnswer(qs []plan.Question, answers map[string]string, q plan.Question, line string) (string, error) {
 	v := q.Default
 	if line != "" {
@@ -250,10 +240,10 @@ func checkAnswer(qs []plan.Question, answers map[string]string, q plan.Question,
 	return v, nil
 }
 
-// readLine reads one line without its line ending and surrounding spaces. A last line without a
-// newline counts; io.EOF means there was nothing left. A line longer than maxAnswer gives
-// errLongAnswer after at most the reader's buffer size (maxAnswer+2) is read, so an endless
-// stdin (`setup </dev/zero`) uses bounded memory; the rest of that line is read as the next one.
+// A last line without a newline counts; io.EOF means there was nothing left. A line longer than
+// maxAnswer gives errLongAnswer after at most the reader's buffer size (maxAnswer+2) is read, so
+// an endless stdin (`setup </dev/zero`) uses bounded memory; the rest of that line is read as the
+// next one.
 func readLine(in *bufio.Reader) (string, error) {
 	b, err := in.ReadSlice('\n')
 	if errors.Is(err, bufio.ErrBufferFull) || len(bytes.TrimRight(b, "\r\n")) > maxAnswer {
@@ -265,7 +255,6 @@ func readLine(in *bufio.Reader) (string, error) {
 	return strings.TrimSpace(string(b)), nil
 }
 
-// stdinProblem says why no answer could be read.
 func stdinProblem(err error) string {
 	if errors.Is(err, io.EOF) {
 		return "stdin was closed"
@@ -273,9 +262,8 @@ func stdinProblem(err error) string {
 	return "cannot read stdin: " + err.Error()
 }
 
-// answerValue turns typed option numbers into option values. The options are shown numbered, so
-// a word that is a valid option number selects that option, even when another option's value is
-// the same text; any other word is taken as a value.
+// The options are shown numbered, so a word that is a valid option number selects that option,
+// even when another option's value is the same text; any other word is taken as a value.
 func answerValue(q plan.Question, line string) string {
 	value := func(word string) string {
 		word = strings.TrimSpace(word)
@@ -294,8 +282,6 @@ func answerValue(q plan.Question, line string) string {
 	return strings.Join(words, ",")
 }
 
-// optionNumbers shows a value in --answer syntax as option numbers, or as written when a part
-// of it is not an option.
 func optionNumbers(q plan.Question, v string) string {
 	parts := []string{v}
 	if q.Kind == "multi" {
@@ -312,14 +298,10 @@ func optionNumbers(q plan.Question, v string) string {
 	return strings.Join(nums, ",")
 }
 
-// write applies p and ends the run. It writes first and prints afterwards, so a failed write
-// leaves stdout empty. show prints what was found, the diffs and the notes (interactive mode has
-// shown them already). In JSON mode it prints the plan instead, and the closing lines go to
-// stderr so stdout stays JSON.
+// It writes first and prints afterwards, so a failed write leaves stdout empty.
 func (s setupRun) write(root string, p *plan.Plan, show bool) int {
 	if len(p.Changes) > 0 {
 		if err := setup.Write(root, p); err != nil {
-			// Write checks every file before it writes any, but then writes them one at a time.
 			return s.fail(p, "WRITE", strings.TrimPrefix(err.Error(), "setup: ")+
 				" (files are written one at a time, so files before this one may already be written; check git status)")
 		}
@@ -339,7 +321,6 @@ func (s setupRun) write(root string, p *plan.Plan, show bool) int {
 	return 0
 }
 
-// finish prints the closing lines of a run that wrote, or had nothing to write.
 func (s setupRun) finish(p *plan.Plan) {
 	w := s.stdout
 	if s.json {
@@ -352,9 +333,6 @@ func (s setupRun) finish(p *plan.Plan) {
 	fmt.Fprintln(w, setupReview)
 }
 
-// nothingToChange is the line for a plan without changes. It claims that Shearbolt is set up
-// only when no note says a gate had to be left for the user to add by hand, or that something
-// runs unchecked by a gate (a push before it, a build after it, or an existing gate after a push).
 func nothingToChange(p *plan.Plan) string {
 	for _, n := range p.Notes {
 		switch n.Code {
@@ -365,8 +343,6 @@ func nothingToChange(p *plan.Plan) string {
 	return "Shearbolt is already set up here; nothing to change."
 }
 
-// fail reports an error with code and message, and returns exit code 2. p is the plan computed
-// so far (nil before Compute).
 func (s setupRun) fail(p *plan.Plan, code, msg string) int {
 	q := plan.Plan{SchemaVersion: plan.SchemaVersion, ShearboltVersion: s.d.version}
 	if p != nil {
@@ -376,9 +352,8 @@ func (s setupRun) fail(p *plan.Plan, code, msg string) int {
 	return s.failPlan(&q)
 }
 
-// failPlan reports p.Error, on stderr or, in JSON mode, as the plan JSON. The JSON has no
-// changes, because the plan's changes were not applied (after a failed write, some files may
-// have been; the WRITE message says so). It returns exit code 2.
+// The JSON has no changes, because the plan's changes were not applied (after a failed write,
+// some files may have been; the WRITE message says so).
 func (s setupRun) failPlan(p *plan.Plan) int {
 	msg := termSafe(p.Error.Message, true)
 	if s.json {
@@ -393,9 +368,8 @@ func (s setupRun) failPlan(p *plan.Plan) int {
 	return 2
 }
 
-// printJSON prints p indented. The encoder does not escape HTML characters, so shell text such
-// as `>> "$GITHUB_OUTPUT"` stays readable (json.Marshal would escape it again). An error means
-// stdout did not get the plan; the caller then exits 2.
+// The encoder does not escape HTML characters, so shell text such as `>> "$GITHUB_OUTPUT"` stays
+// readable (json.Marshal would escape it again).
 func (s setupRun) printJSON(p *plan.Plan) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -408,7 +382,6 @@ func (s setupRun) printJSON(p *plan.Plan) error {
 	return err
 }
 
-// printFound prints the projects and CI files setup found.
 func (s setupRun) printFound(p *plan.Plan) {
 	for _, pr := range p.Projects {
 		kind := pr.Ecosystem
@@ -426,7 +399,6 @@ func (s setupRun) printFound(p *plan.Plan) {
 	}
 }
 
-// printQuestions lists the applicable questions of a --plan with the value setup uses.
 func (s setupRun) printQuestions(p *plan.Plan, answers map[string]string, yes bool) {
 	values, _, err := plan.Resolve(p.Questions, answers, yes)
 	if err != nil || len(values) == 0 {
@@ -454,7 +426,6 @@ func (s setupRun) printQuestions(p *plan.Plan, answers map[string]string, yes bo
 	}
 }
 
-// printChanges prints each change's unified diff.
 func (s setupRun) printChanges(p *plan.Plan) {
 	for _, c := range p.Changes {
 		diff := c.Diff
@@ -465,8 +436,8 @@ func (s setupRun) printChanges(p *plan.Plan) {
 	}
 }
 
-// printNotes prints one bullet per note, each message in full: UNSUPPORTED_EDIT and
-// NO_GATE_PLACED carry the snippet to add by hand on their following lines.
+// Each message in full: UNSUPPORTED_EDIT and NO_GATE_PLACED carry the snippet to add by hand on
+// their following lines.
 func (s setupRun) printNotes(p *plan.Plan) {
 	if len(p.Notes) == 0 {
 		return
@@ -477,8 +448,6 @@ func (s setupRun) printNotes(p *plan.Plan) {
 	}
 }
 
-// noteLine is a note's bullet, safe for the terminal: its location (unless the message starts
-// with its file), then the message with its line breaks.
 func noteLine(n plan.Note) string {
 	loc := ""
 	switch {
@@ -492,11 +461,10 @@ func noteLine(n plan.Note) string {
 }
 
 // termSafe makes repository text safe to print on a terminal, so a package name, file name, job
-// key or snippet cannot send escape sequences. Control characters (unicode.IsControl, the set
-// report.clean replaces with a space) and bytes that are not UTF-8 are shown visibly as Go
-// escapes (\x1b, \u0085, \n), so the output shows that the text holds them instead of hiding it.
-// With multiline, newlines, tabs and CR LF line endings are kept; a lone CR is escaped, because
-// it would let a line overwrite itself.
+// key or snippet cannot send escape sequences. Control characters and bytes that are not UTF-8
+// are shown visibly as Go escapes, so the output shows that the text holds them instead of hiding
+// it. With multiline, newlines, tabs and CR LF line endings are kept; a lone CR is escaped,
+// because it would let a line overwrite itself.
 func termSafe(s string, multiline bool) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {

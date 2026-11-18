@@ -12,27 +12,12 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// This file decides where gates go: R3 (attribution, questions, gate jobs), R4 (placement), R5
-// (image slots, variables and scan tags) and R4 rule 8 (the targets each gate scans). Everything
-// here is a pure function of the projects, the editable jobs and the answers; the CI plugins
-// turn the resulting plan.Gate values into YAML. The steps run in this order:
-//
-//	m := newGateModel(projects, jobs, ciFiles)
-//	m.compose = keptCompose(r, projects)       // what the existing configs keep of the compose targets
-//	qs := m.questions()                        // R3, before the answers are resolved
-//	pl := m.place(values, version, snippet)    // R3 attribution, R4 rules 1-4 and 7
-//	pp := pl.projects[p.Dir]                   // per selected project: pp.targets are planned
-//	change, merged, names, vars, _ := configChange(r, p, pp.targets)
-//	gates := pp.finish(merged, names, vars, commit, used) // R4 rule 8, R5; used is shared by all projects
-
-// commitExprs are the CI systems' commit expressions, keyed by plan.CI.Name, for scan tags.
 var commitExprs = map[string]string{
 	"github":    "${{ github.sha }}",
 	"gitlab":    "$CI_COMMIT_SHA",
 	"bitbucket": "$BITBUCKET_COMMIT",
 }
 
-// located is one build and where it is in the jobs.
 type located struct {
 	plan.Build
 	i         int // index in gateModel.builds: the build's identity
@@ -46,7 +31,6 @@ func (a at) less(b at) bool { return a.step < b.step || a.step == b.step && a.cm
 
 func (l located) at() at { return at{l.step, l.Pos.Command} }
 
-// gateModel holds the projects, the editable jobs and their builds with their attribution.
 type gateModel struct {
 	projects []plan.Project
 	owners   []plan.Project // the projects that can own builds: npm and Rust; without them, the root project
@@ -57,18 +41,11 @@ type gateModel struct {
 	owner    []string  // per build: its owner when attributed without a question, else ""
 	question []string  // per build: its build-project question ID, else ""
 	// compose holds, per project dir, whether the project's merged config keeps a compose
-	// target (keptCompose); a project without an entry keeps one when it has compose files.
+	// target (keptCompose).
 	compose map[string]bool
 }
 
-// newGateModel attributes every build of jobs (R3) among the owners, the npm and Rust projects.
-// Without them, the root project (ecosystem docker) is the one owner (rootOwns), and it owns only
-// image builds: every other build belongs to no project. Where npm or Rust projects exist, the
-// root project never owns builds. A build belongs to the owner whose Dir is the longest prefix of
-// its directory; with one owner, every build belongs to it. A build whose directory is unknown,
-// or that matches no prefix, gets a build-project question when there is more than one owner.
-// RewriteOnly builds are attributed by prefix only and never get a question. A Via build found
-// twice in one command (a file reached by two calls) counts once.
+// A Via build found twice in one command (a file reached by two calls) counts once.
 func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *gateModel {
 	m := &gateModel{projects: projects, jobs: jobs, ciFiles: ciFiles}
 	for _, p := range projects {
@@ -103,8 +80,6 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 			}
 		}
 	}
-	// build-project questions: one per unattributable build, by file and line, with :n when
-	// builds share a line.
 	var open []int
 	for i, b := range m.builds {
 		if !b.RewriteOnly && m.owner[i] == "" && len(m.owners) > 1 {
@@ -136,8 +111,6 @@ func newGateModel(projects []plan.Project, jobs []plan.Job, ciFiles []string) *g
 	return m
 }
 
-// hasCompose reports whether project p's gates scan a compose target: whether its merged config
-// keeps one, or, when that is not known, whether p has compose files.
 func (m *gateModel) hasCompose(p plan.Project) bool {
 	if kept, ok := m.compose[p.Dir]; ok {
 		return kept
@@ -160,15 +133,9 @@ func (m *gateModel) prefixOwner(dir string) string {
 	return best
 }
 
-// questions returns R3's questions: projects (with more than one detected project, the root
-// (docker) project included), then build-project by file and line (options: the owners and none;
-// default: the owner whose existing gate follows the build, else the first owner), then gate-job
-// by project. A gate-job question is asked for each project without an attributed build when
-// there is an editable job; its default is the first job that already holds the project's gate,
-// otherwise the first job. The root (docker) project's gate-job, asked only when it owns no
-// build, asks which job checks its compose images; its default without an existing gate is the
-// first job that pushes or deploys (then the first job), so the deploy is gated. No
-// build-project answer makes it inapplicable: no build can be chosen for that project.
+// The root (docker) project's gate-job, asked only when it owns no build, asks which job checks
+// its compose images. No build-project answer makes it inapplicable: no build can be chosen for
+// that project.
 func (m *gateModel) questions() []plan.Question {
 	var qs []plan.Question
 	if len(m.projects) > 1 {
@@ -212,7 +179,7 @@ func (m *gateModel) questions() []plan.Question {
 		q.Options = append(q.Options, plan.Option{Value: "none", Label: "none (do not gate this build)"})
 		q.Default = q.Options[0].Value
 		if p := m.gateAfter(b); p != "" {
-			q.Default = p // a re-run with the defaults keeps the earlier answer (R8)
+			q.Default = p // a re-run with the defaults keeps the earlier answer
 		}
 		qs = append(qs, q)
 	}
@@ -259,10 +226,8 @@ func (m *gateModel) questions() []plan.Question {
 	return qs
 }
 
-// gateAfter returns the owner of the existing scan gate that follows build b most closely in its
-// job, among the gates of owners; "" when there is none. Only owners' gates count (the root
-// project's are passed over where npm or Rust projects own the builds), so the default is always
-// one of the build-project options (plan.Resolve does not check defaults).
+// Only owners' gates count, so the default is always one of the build-project options
+// (plan.Resolve does not check defaults).
 func (m *gateModel) gateAfter(b located) string {
 	best, bestAt := "", never
 	for s, st := range m.jobs[b.job].Steps {
@@ -279,8 +244,6 @@ func (m *gateModel) gateAfter(b located) string {
 	return best
 }
 
-// hasBuild reports whether project dir has a build attributed without a question (RewriteOnly
-// builds do not count).
 func (m *gateModel) hasBuild(dir string) bool {
 	for i, b := range m.builds {
 		if !b.RewriteOnly && m.owner[i] == dir {
@@ -298,7 +261,6 @@ func projectOption(p plan.Project) string {
 	return fmt.Sprintf("%s (%s)", p.Dir, kind)
 }
 
-// projectLabel names a project in messages: its directory, or its name for the root.
 func projectLabel(p plan.Project) string {
 	if p.Dir == "." && p.Name != "" {
 		return p.Name
@@ -306,7 +268,6 @@ func projectLabel(p plan.Project) string {
 	return p.Dir
 }
 
-// commandText is a short form of a build's command for prompts.
 func commandText(b plan.Build) string {
 	var words []string
 	for _, w := range b.Cmd.Words {
@@ -322,12 +283,10 @@ func commandText(b plan.Build) string {
 	return s
 }
 
-// never is a position after every step: the limit when nothing is pushed.
 var never = at{step: 1 << 30}
 
-// existingGate returns the last existing scan gate for project dir in job strictly before limit,
-// or nil. late is the first existing scan gate of dir at or after limit (nil when none): it
-// runs after a push, so it is not reused.
+// late is the first existing scan gate of dir at or after limit (nil when none): it runs after a
+// push, so it is not reused.
 func existingGate(job plan.Job, dir string, limit at) (found, late *plan.GateCmd) {
 	for _, st := range job.Steps {
 		for i := range st.Gates {
@@ -345,9 +304,6 @@ func existingGate(job plan.Job, dir string, limit at) (found, late *plan.GateCmd
 	return found, late
 }
 
-// lateGateNote is GATE_AFTER_PUSH for an existing gate of p that runs after a push. dropped says
-// that setup places no gate in that job (a root project's job with nothing to scan): the late
-// gate then scans images the job does not build, so the note asks for its removal.
 func lateGateNote(p plan.Project, late *plan.GateCmd, dropped bool) plan.Note {
 	msg := fmt.Sprintf("the existing Shearbolt gate for %s at %s:%d runs after a push or deploy in its job, so it cannot stop what is pushed; setup adds a gate before the push and leaves this one alone. Remove it once the new gate is in place.",
 		projectLabel(p), late.Pos.File, late.Pos.Line)
@@ -357,45 +313,34 @@ func lateGateNote(p plan.Project, late *plan.GateCmd, dropped bool) plan.Note {
 	return plan.Note{Code: "GATE_AFTER_PUSH", Message: msg, File: late.Pos.File, Line: late.Pos.Line}
 }
 
-// gatePlace is one gate before its targets are known.
 type gatePlace struct {
 	gate     plan.Gate
-	file     string       // the CI file
+	file     string
 	images   []plan.Build // gated image builds: slot k is images[k-1]
-	binaries []plan.Build // gated binary builds
-	drop     bool         // a root project's gate with nothing to scan: not placed; an existing one is left alone
+	binaries []plan.Build
+	drop     bool // a root project's gate with nothing to scan: not placed; an existing one is left alone
 }
 
-// placement is the result of attribution and placement for one set of answers. The gates are
-// in projects; only projectPlan.finish turns them into plan.Gate values.
 type placement struct {
 	projects map[string]*projectPlan // per selected project dir
 	// attributed holds, per selected project dir, every build attributed to it in job order,
 	// duplicates removed: gated or not (after a push, other kinds, Via builds), plus RewriteOnly
-	// builds attributed by prefix. It is the list Prepare is called for. Each build's Pos.Job
-	// (with Via) says where its Inserts and Install go, so grouping the non-RewriteOnly builds'
-	// Preps by Pos.Job gives CI.Edit its per-job preps.
+	// builds attributed by prefix. It is the list Prepare is called for.
 	attributed map[string][]plan.Build
 	notes      []plan.Note
 }
 
-// projectPlan is one selected project's gates and planned targets.
 type projectPlan struct {
 	project plan.Project
 	gates   []*gatePlace
-	targets []config.Target   // planned (R6 order): image slots, file targets, compose targets, source
+	targets []config.Target   // planned: image slots, file targets, compose targets, source
 	slots   []string          // planned name of image slot k at index k-1
 	files   map[string]string // binary path -> planned name
 	source  string            // planned name of the source target; "" for the root project (docker)
 }
 
-// place resolves attribution with the answers in values (from plan.Resolve) and places one
-// gate per gate job of each selected project (R3, R4 rules 1-4 and 7). Gates get version.
-// Builds attributed to selected projects contribute their notes, located at their CI command
-// when they carry no location. Without an npm or Rust project, every non-RewriteOnly binary
-// build, which no project owns, gets BUILD_NOT_GATED. A root project's gate with nothing to scan
-// is not placed (placeIn), so all of its gates can be gone. With no editable job at all, no gate
-// is placed and each selected project gets NO_GATE_PLACED with snippet's text for every CI file.
+// A root project's gate with nothing to scan is not placed (placeIn), so all of its gates can be
+// gone.
 func (m *gateModel) place(values map[string]string, version string, snippet func(file string, g plan.Gate) string) *placement {
 	pl := &placement{projects: map[string]*projectPlan{}, attributed: map[string][]plan.Build{}}
 	selected := map[string]bool{}
@@ -409,7 +354,6 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 		}
 	}
 
-	// Attribution, after the answers.
 	owner := make([]string, len(m.builds))
 	for i, b := range m.builds {
 		o := m.owner[i]
@@ -521,7 +465,6 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 	return pl
 }
 
-// jobFile returns the CI file of job j.
 func (m *gateModel) jobFile(j int) string {
 	id, best := m.jobs[j].ID, ""
 	for _, f := range m.ciFiles {
@@ -557,10 +500,8 @@ func (m *gateModel) pushes(j int, own func(located) bool) []at {
 	return out
 }
 
-// firstPush returns the position of the first push in job j, or never.
 func (m *gateModel) firstPush(j int) at { return m.firstPushFrom(j, at{-1, -1}) }
 
-// firstPushFrom returns the position of the first push in job j at or after from, or never.
 func (m *gateModel) firstPushFrom(j int, from at) at {
 	first := never
 	for _, a := range m.pushes(j, func(located) bool { return false }) {
@@ -571,10 +512,6 @@ func (m *gateModel) firstPushFrom(j int, from at) at {
 	return first
 }
 
-// placeAtStart places a gate for a job without builds of the project (R4 rule 4): after the
-// actions/checkout step when nothing is pushed at or before it, otherwise before the first step.
-// An existing gate of the project before the job's first push is updated instead; one after it
-// is left alone and gets GATE_AFTER_PUSH.
 func (m *gateModel) placeAtStart(p plan.Project, j int, version string) (*gatePlace, []plan.Note) {
 	job := m.jobs[j]
 	file := m.jobFile(j)
@@ -599,27 +536,15 @@ func isCheckout(uses string) bool {
 	return name == "actions/checkout"
 }
 
-// placeIn places project p's gate in job j, whose gated builds are g, in order (R4 rules 1-3
-// and 7). firstPush is the first push at or after the first build in g; a Via build in a
-// command that pushes counts as after it. B is the gateable builds of g before firstPush. The
-// gate goes after the last build in B, or, when B is empty, before the first build in g, where it
-// checks only the source (the root project has none: its compose files, or no gate at all, see
-// below). An existing gate of p strictly before firstPush is updated in place
-// instead (the last one); builds of B after it get BUILD_AFTER_GATE. An existing gate after
-// firstPush cannot stop the push: it is left alone, gets GATE_AFTER_PUSH, and a new gate is
-// placed. Builds of g that are not gated get MULTI_PLATFORM or PUSH_IN_BUILD (image builds that
-// cannot be gated), or BUILD_AFTER_PUSH.
+// placeIn places project p's gate in job j, whose gated builds are g, in order. firstPush is the
+// first push at or after the first build in g; a Via build in a command that pushes counts as
+// after it. B is the gateable builds of g before firstPush.
 //
 // The root project has no source to check, and its compose targets count only when its merged
 // config keeps one (gateModel.hasCompose): the user may remove a compose target that ships
 // nothing. Its gate is dropped (gatePlace.drop) when B is empty, it has no compose target and
 // there is no existing gate: its empty target list would mean every target, so it would scan an
-// image this job never built. A dropped gate returns the notes of its builds, which say that no
-// gate is placed, and GATE_AFTER_PUSH for an existing gate after the push, which asks for that
-// gate's removal; orderNotes, about where the gate runs, are left out. An existing root gate
-// before the push that keeps no gated image, without a compose target, is stale: it is dropped
-// too, so setup leaves it alone instead of editing its targets, and every note on the builds it
-// does not scan asks for its removal.
+// image this job never built.
 func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) (*gatePlace, []plan.Note) {
 	file := m.jobFile(j)
 	inG := func(b located) bool { return slices.ContainsFunc(g, func(x located) bool { return x.i == b.i }) }
@@ -678,8 +603,6 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 	// setup leaves it alone and every note about it asks for its removal.
 	stale := root && e != nil && len(bset) == 0 && !compose
 	const removeStale = "setup places no gate in this job and leaves that gate alone, but it now scans images this job does not build, or names a target shearbolt.yaml no longer has, so remove it and run setup again"
-	// The endings of the notes on builds the gate does not scan: what a gate after a
-	// multi-platform build still checks, and why a build after the push is not scanned.
 	still, unscanned := "; the source lockfiles are still checked", "so the gate, which runs before that push, does not scan it"
 	switch {
 	case compose:
@@ -695,7 +618,6 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 	case stale:
 		unscanned = "so the existing gate in this job, which runs before that push, does not scan it; " + removeStale
 	}
-	// gateBefore reports whether the gate runs before build b.
 	gateBefore := func(b located) bool {
 		a := at{gate.At.Step, gate.At.Command}
 		if gate.Before {
@@ -748,10 +670,6 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 	return gp, notes
 }
 
-// orderNotes reports what runs before the gate but is not checked by it: PUSH_BEFORE_GATE for
-// pushes ahead of the first build of g and of the gate, and COMMANDS_BEFORE_GATE for commands and
-// steps between the gated builds bset (and, for an existing gate, up to that gate). Builds,
-// gates, shell state and setup actions are not listed.
 func (m *gateModel) orderNotes(p plan.Project, j int, g, bset []located, gate plan.Gate, inG func(located) bool) []plan.Note {
 	var notes []plan.Note
 	job := m.jobs[j]
@@ -841,7 +759,6 @@ func (m *gateModel) orderNotes(p plan.Project, j int, g, bset []located, gate pl
 	})
 }
 
-// stateCommands only change the shell's state or print, so they cannot deploy.
 var stateCommands = []string{"cd", "pushd", "popd", "export", "set", "unset", "echo", "printf", "true", "false", ":", "shift", "local", "readonly", "declare", "umask",
 	"fi", "done", "esac", "}", ")"}
 
@@ -867,7 +784,6 @@ func (m *gateModel) harmless(j int, a at) bool {
 	return slices.ContainsFunc(cmd.Words, func(w shell.Word) bool { return strings.Contains(w.Raw, "cargo-auditable") })
 }
 
-// itemText describes the command or step at a for messages.
 func (m *gateModel) itemText(j int, a at) string {
 	st := m.jobs[j].Steps[a.step]
 	if a.cmd < 0 || a.cmd >= len(st.Commands) {
@@ -890,13 +806,6 @@ func (m *gateModel) itemText(j int, a at) string {
 	return s
 }
 
-// plan computes the project's planned targets from its gates (R5, R6): one image target per
-// slot (as many as the most gated image builds in one job), one file target per binary path of
-// its gated binary builds (only for Rust projects, whose paths are relative to the project's
-// Cargo.lock root), one compose target per compose file of the project (composeName), and
-// source with the project's excludes, except for the root project (docker), which has no
-// lockfiles. Slot 1 is named after the project, slot k >= 2 after the last path component of
-// its scan tag's repository in the first job that fills it (image-<k> when that is not usable).
 func (pp *projectPlan) plan() {
 	p := pp.project
 	taken := map[string]bool{"source": true}
@@ -966,10 +875,6 @@ func (pp *projectPlan) plan() {
 	}
 }
 
-// composeName is the target name of compose file f, a path relative to the project: f without
-// its extension, "/" replaced by "-", sanitized, with leading and trailing separators trimmed;
-// "compose" when nothing is left. So docker-compose.yml is docker-compose, test/compose.yml is
-// test-compose.
 func composeName(f string) string {
 	n := strings.ReplaceAll(strings.TrimSuffix(f, path.Ext(f)), "/", "-")
 	if n = strings.Trim(sanitizeName(n), ".-_"); n != "" {
@@ -978,19 +883,13 @@ func composeName(f string) string {
 	return "compose"
 }
 
-// finish completes the project's gates against its merged config (R4 rule 8, R5). names maps
-// planned names to the names in the file and vars gives each image target's variable (from
-// configChange); merged is nil when the config could not be edited, and the gates then scan
-// every target it has. commit returns the CI's commit expression for a CI file (commitExprs).
-// used holds the scan tags already given out per job; it is shared by every project's finish, so
-// scan tags are unique within a job.
+// merged is nil when the config could not be edited, and the gates then scan every target it
+// has. used holds the scan tags already given out per job; it is shared by every project's
+// finish, so scan tags are unique within a job.
 //
 // A gate scans the targets of its gated builds, source, every compose target, and every target
 // setup did not plan; Targets is nil when that is every target of the merged config, and
 // otherwise lists only targets the merged config has (a planned target can be missing from it).
-// Each gated image build whose target has a variable gets an ImageVar with the scan tag the
-// plugin adds to the build, and each file target of a gated binary build that the gate scans a
-// FileTarget.
 func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]string, commit func(file string) string, used map[string]map[string]bool) []plan.Gate {
 	name := func(planned string) string {
 		if n, ok := names[planned]; ok {
@@ -1068,7 +967,7 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 			}
 			slices.Sort(g.Targets)
 		}
-		// What the gate scans (P7): unknown without a merged config.
+		// What the gate scans: unknown without a merged config.
 		switch {
 		case merged == nil:
 		case g.Targets == nil:

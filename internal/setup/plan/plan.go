@@ -1,6 +1,3 @@
-// Package plan holds the setup plan model shared by the core and its plugins: the plan and its
-// JSON contract, the CI-neutral job model, the plugin interfaces, answers, diffs, and confined
-// repository access.
 package plan
 
 import (
@@ -17,10 +14,8 @@ import (
 // SchemaVersion is the plan JSON schema version; changing the contract bumps it.
 const SchemaVersion = 2
 
-// EcosystemDocker is the ecosystem of the root project that owns compose files (and image builds).
 const EcosystemDocker = "docker"
 
-// Context is what a command sees when it runs.
 type Context struct {
 	// Dir is the working directory: a clean repo-relative path ("." for the root), or "" when it
 	// is unknown. Consumers pass what they get through CleanDir, so an absolute or escaping
@@ -29,8 +24,6 @@ type Context struct {
 	Env map[string]bool // variables set for it: CI YAML env/variables, earlier export/assignments, its own VAR=x prefix
 }
 
-// CleanDir returns dir as a clean repo-relative path, or "" when it is unknown: empty, absolute,
-// or outside the repository.
 func CleanDir(dir string) string {
 	if dir == "" || path.IsAbs(dir) {
 		return ""
@@ -42,24 +35,20 @@ func CleanDir(dir string) string {
 	return d
 }
 
-// Ecosystem finds projects of one kind and recognizes their build commands.
 type Ecosystem interface {
-	Name() string // "npm", "rust"
-	// Find returns this ecosystem's projects (R1), sorted by Dir, and notes for directories
+	Name() string
+	// Find returns this ecosystem's projects, sorted by Dir, and notes for directories
 	// that look like projects but cannot be protected.
 	Find(r Repo) ([]Project, []Note, error)
-	// Recognize classifies one command. nil: not a build of this ecosystem. Rust finds the
-	// nearest Cargo.lock root above ctx.Dir (or --manifest-path) itself, and reads its binaries.
 	Recognize(r Repo, cmd shell.Command, ctx Context) *Build
-	// Prepare returns what a build of a selected project needs. It is called for every build
-	// attributed to a selected project: gated, after a push, image builds (Rust uses those to
-	// explain Dockerfile builds), and RewriteOnly builds attributed by prefix (R3).
+	// Prepare is called for every build attributed to a selected project: gated, after a push,
+	// image builds (Rust uses those to explain Dockerfile builds), and RewriteOnly builds
+	// attributed by prefix.
 	Prepare(r Repo, p Project, b Build) (Prep, []Note)
 }
 
-// CI parses one CI system's files into jobs and renders gates into them.
 type CI interface {
-	Name() string          // "github", "bitbucket", "gitlab"
+	Name() string
 	Files(r Repo) []string // existing files of this system, repo-relative, sorted
 	// Jobs parses file into editable jobs. It calls classify for every shell command, in order,
 	// and classifies non-shell steps itself (GitHub actions, Bitbucket pipes). Jobs it cannot
@@ -78,27 +67,23 @@ type CI interface {
 	Snippet(r Repo, file string, g Gate) string
 }
 
-// Edited is the result of CI.Edit.
 type Edited struct {
-	Src    []byte   // the edited file; src itself when nothing changes
-	Notes  []Note   // notes about the edits, UNSUPPORTED_EDIT for each failed job included
-	Failed []string // IDs of the jobs left unchanged because their edit could not be applied
+	Src    []byte // the edited file; src itself when nothing changes
+	Notes  []Note // notes about the edits, UNSUPPORTED_EDIT for each failed job included
+	Failed []string
 }
 
-// Classifier classifies one shell command in its context.
 type Classifier func(cmd shell.Command, ctx Context) Classified
 
-// Classified is what one command does.
 type Classified struct {
 	Builds []Build
 	Push   bool
-	Gate   *GateCmd // existing install or scan command
+	Gate   *GateCmd
 	// Stops: the command can end the shell it runs in early and successfully (exit 0, exec cmd,
-	// or a sourced in-repo file that can), whatever else it does (P6).
+	// or a sourced in-repo file that can), whatever else it does.
 	Stops bool
 }
 
-// Project is one protectable project (R1).
 type Project struct {
 	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "docker"
 	Dir       string   `json:"dir"`       // "." for the root; also the project's ID
@@ -107,35 +92,31 @@ type Project struct {
 	Framework string   `json:"framework,omitempty"` // "nextjs"
 	Compose   []string `json:"compose,omitempty"`   // compose files to gate, relative to Dir
 	Binaries  []string `json:"-"`
-	Excludes  []string `json:"-"` // R1 source excludes (nested projects, skipped dirs with lockfiles)
+	Excludes  []string `json:"-"` // source excludes (nested projects, skipped dirs with lockfiles)
 }
 
-// Pos locates a CI command or step.
 type Pos struct {
 	File    string
 	Job     string // Job.ID
-	Step    int    // index in Job.Steps
-	Command int    // index in Step.Commands; -1 = the step itself (action or pipe)
+	Step    int
+	Command int // index in Step.Commands; -1 = the step itself (action or pipe)
 	// Line is the 1-based line in File where the command starts (for Command -1, where the step
 	// starts); 0 when unknown. CI plugins set it: build-project question IDs and the locations
 	// of notes about CI commands come from it.
 	Line int
 }
 
-// BuildKind says what a build produces.
 type BuildKind string
 
-// Build kinds.
 const (
 	BuildImage  BuildKind = "image"
 	BuildBinary BuildKind = "binary"
 	BuildOther  BuildKind = "other" // npm build script, cross, conditional cargo, other exports, railpack without --name
 )
 
-// Build is one recognized build.
 type Build struct {
 	Kind        BuildKind
-	Dir         string        // for attribution (R3)
+	Dir         string
 	Pos         Pos           // the CI command or step that runs it (for Via builds: the calling command)
 	Via         string        // file the command was found in when the CI calls it ("" = the CI file)
 	Cmd         shell.Command // the recognized command; offsets relative to its script text, or to Via
@@ -145,7 +126,6 @@ type Build struct {
 	Notes       []Note
 }
 
-// Image describes an image build.
 type Image struct {
 	Tool         string   // "docker", "buildx", "railpack", "build-push-action"
 	Tags         []string // as written: raw shell words, or the action's tag entries
@@ -156,7 +136,7 @@ type Image struct {
 	OutputPush   bool // pushes through -o/--output or `outputs:` (not gateable)
 	Load         bool
 	Computed     string // GitHub: metadata-action step id that provides the tags
-	ComputedRepo string // GitHub: that step's first `images` entry, without `name=` and options (R5)
+	ComputedRepo string // GitHub: that step's first `images` entry, without `name=` and options
 	// Byte offsets in Build.Cmd's script text where CI plugins edit a docker or buildx command
 	// (0 when absent; railpack and action builds leave them 0):
 	SubEnd   int      // just after the build subcommand word ("build"), where --load is added
@@ -164,10 +144,8 @@ type Image struct {
 	PushArgs [][2]int // start and end of each --push option word, which becomes --load
 }
 
-// Gateable reports whether a gate can run between the build and its push.
 func (i Image) Gateable() bool { return i.Platforms <= 1 && !i.OutputPush }
 
-// Job is one editable CI job.
 type Job struct {
 	ID    string // "<file>#<path>", e.g. ".github/workflows/ci.yml#test", "bitbucket-pipelines.yml#branches/main/0", ".gitlab-ci.yml#build-image"
 	Label string // for prompts: "ci.yml: test"
@@ -175,12 +153,11 @@ type Job struct {
 	// PreludeStop is the line of the first command that can stop the job's shell early in the
 	// commands that run before its first step in the same shell (GitLab's before_script; for a
 	// job whose before_script is unknown, any before_script of the file), and PreludeStopCmd that
-	// command's name ("exit", "exec" or "source", also for .); 0 and "" when there is none (P6).
+	// command's name ("exit", "exec" or "source", also for .); 0 and "" when there is none.
 	PreludeStop    int
 	PreludeStopCmd string
 }
 
-// Step is one workflow step or script item.
 type Step struct {
 	Name     string
 	Dir      string          // working directory, repo-relative, before the step
@@ -199,41 +176,37 @@ type GateCmd struct {
 	Pos     Pos
 }
 
-// Gate is one gate to insert or update.
 type Gate struct {
 	Project  Project
 	Config   string // repo-relative path of the project's shearbolt.yaml
 	Job      string
 	At       Pos          // insert after this position; Command -1 = after the whole step
-	Before   bool         // insert before At instead (R4 rules 3 and 4)
+	Before   bool         // insert before At instead
 	Images   []ImageVar   // one per image target scanned here
-	Files    []FileTarget // one per file target of its gated binary builds that it scans (P7)
-	Targets  []string     // nil = every target in the merged config (R4 rule 8)
+	Files    []FileTarget // one per file target of its gated binary builds that it scans
+	Targets  []string     // nil = every target in the merged config
 	Builds   []Build      // gated builds (the plugin adds tags, --load, splits, converts)
 	Existing *GateCmd     // update this gate instead of inserting one
 	Version  string       // "dev" = unpinned
 	// Scans is the sorted names of every target the gate scans, resolved also when Targets is nil;
-	// nil when the config could not be read or edited, so what the gate scans is unknown (P7).
+	// nil when the config could not be read or edited, so what the gate scans is unknown.
 	Scans []string
 	// OnlyOwnImages: the gate scans something, and every target it scans is an image target with
 	// a variable that one of its own builds fills (in Images). A source or compose target, an
-	// image target with a fixed reference, or a target setup did not plan makes it false (P7).
+	// image target with a fixed reference, or a target setup did not plan makes it false.
 	OnlyOwnImages bool
 }
 
-// ImageVar passes one scanned image to the gate.
 type ImageVar struct {
 	Var     string // SHEARBOLT_IMAGE, SHEARBOLT_IMAGE_<NAME>
-	Build   Build  // which build provides the tag
-	ScanTag string // R5: the local shearbolt-<commit> tag setup adds and the gate scans, in the CI's syntax
-	Target  string // the name of its image target, as Scans and Targets name it (P7)
+	Build   Build
+	ScanTag string // the local shearbolt-<commit> tag setup adds and the gate scans, in the CI's syntax
+	Target  string // the name of its image target, as Scans and Targets name it
 }
 
-// FileTarget is one file target the gate scans and the gated build that writes its file, so a
-// plugin can tell which build the file comes from.
 type FileTarget struct {
-	Build  Build  // the gated binary build
-	Target string // the name of its file target, as Scans and Targets name it (P7)
+	Build  Build
+	Target string // the name of its file target, as Scans and Targets name it
 }
 
 // Prep is what a build needs before it can be gated (Rust: the auditable rewrite and its install).
@@ -254,7 +227,6 @@ type Insert struct {
 	Text   string // "auditable "
 }
 
-// Install is a tool a build needs.
 type Install struct {
 	Name   string            // GitHub step name: "Install cargo-auditable"
 	Uses   string            // GitHub: action for that step: "taiki-e/install-action@v2"
@@ -263,9 +235,8 @@ type Install struct {
 	Marker string            // "cargo-auditable": skip when an earlier step/command of the job contains it
 }
 
-// Plan is the result of setup: everything it found, asks and would change.
 type Plan struct {
-	SchemaVersion    int          `json:"schemaVersion"` // 2
+	SchemaVersion    int          `json:"schemaVersion"`
 	ShearboltVersion string       `json:"shearboltVersion"`
 	Projects         []Project    `json:"projects"`
 	CI               []CIFile     `json:"ci"`
@@ -276,13 +247,11 @@ type Plan struct {
 	Error            *Note        `json:"error,omitempty"`
 }
 
-// CIFile is one CI configuration file setup found.
 type CIFile struct {
 	System string `json:"system"` // github | bitbucket | gitlab
 	File   string `json:"file"`
 }
 
-// Question is one decision setup needs.
 type Question struct {
 	ID           string   `json:"id"`
 	Prompt       string   `json:"prompt"`
@@ -294,13 +263,11 @@ type Question struct {
 	UnlessChosen []string `json:"unlessChosen,omitempty"` // does not apply if any of these questions resolves to Project
 }
 
-// Option is one possible answer.
 type Option struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
 }
 
-// FileChange is one file setup creates or modifies.
 type FileChange struct {
 	Path    string      `json:"path"`    // repo-relative
 	Action  string      `json:"action"`  // "create" | "modify"
@@ -310,8 +277,6 @@ type FileChange struct {
 	Mode    fs.FileMode `json:"-"`
 }
 
-// UnpinnedNote is UNPINNED_VERSION for file: a development build rendered an install line
-// without a version pin (R9).
 func UnpinnedNote(file string) Note {
 	return Note{
 		Code:    "UNPINNED_VERSION",
@@ -320,7 +285,6 @@ func UnpinnedNote(file string) Note {
 	}
 }
 
-// Note is a message about the plan, or its error.
 type Note struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

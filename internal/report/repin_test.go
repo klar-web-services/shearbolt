@@ -170,7 +170,6 @@ func TestSkippedImagesListed(t *testing.T) {
 	if text := Text(r, false); !strings.Contains(text, "Skipped stack (busybox:1): image needs a build") {
 		t.Errorf("text:\n%s", text)
 	}
-	// a skipped compose target lists its images too
 	r.Targets[1].Status, r.Targets[1].Note = "skipped", "all skipped"
 	r.Targets[1].Images[0].Status, r.Targets[1].Images[0].Note = "skipped", "no network"
 	text := Text(r, false)

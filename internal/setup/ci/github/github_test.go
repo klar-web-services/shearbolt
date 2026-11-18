@@ -17,7 +17,7 @@ import (
 
 const wf = ".github/workflows/ci.yml"
 
-// tree writes files under a new temp dir. A path ending in "*" is made executable.
+// A path ending in "*" is made executable.
 func tree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -37,7 +37,6 @@ func tree(t *testing.T, files map[string]string) string {
 	return root
 }
 
-// npmRepo is an npm project named name with a Dockerfile, plus the workflow and extra files.
 func npmRepo(name, workflow string, extra map[string]string) map[string]string {
 	files := map[string]string{
 		"package.json":      `{"name":"` + name + `"}`,
@@ -240,7 +239,6 @@ func TestGitHubSplitCombinedStep(t *testing.T) {
 	}
 }
 
-// P1: any command after the last gated build, recognized push or not, moves after the gate.
 func TestGitHubSplitUnrecognizedDeploy(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: npm ci && npm run build && npx vercel deploy --prebuilt",
@@ -277,7 +275,6 @@ func TestGitHubPushBuild(t *testing.T) {
 	}
 }
 
-// The remainder of every --push step goes after the gate, even when the gate follows a later build.
 func TestGitHubPushBuildBeforeLaterBuild(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: docker buildx build --push -t web:1 -t web:latest .",
@@ -359,7 +356,6 @@ func indent(s, pad string) string {
 	return b.String()
 }
 
-// Only edits that need a POSIX shell are refused in other shells; the Rust rewrite works anywhere.
 func TestGitHubNonPOSIXShell(t *testing.T) {
 	unsupported(t, npmRepo("web", head+lines(
 		"      - shell: pwsh",
@@ -447,7 +443,6 @@ func TestGitHubRust(t *testing.T) {
 		"        run: ./upload.sh",
 	))
 
-	// A release build after a push is rewritten and gets the install, though it is not gated.
 	files[wf] = head + lines(
 		"      - run: cargo build --release",
 		"      - run: gh release upload v1 target/release/demo",
@@ -469,7 +464,6 @@ func TestGitHubRust(t *testing.T) {
 		t.Errorf("notes = %v", noteCodes(p))
 	}
 
-	// An install already in the job is not added again.
 	files[wf] = head + lines(
 		"      - run: cargo install cargo-auditable --locked",
 		"      - run: cargo build --release",
@@ -536,7 +530,6 @@ const gated = "      - name: Build\n" +
 	"          echo shearbolt-image=web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n"
 
 func TestGitHubExistingGates(t *testing.T) {
-	// A stale image variable is replaced; nothing else changes.
 	_, got := result(t, npmRepo("web", head+gated+lines(
 		"      - name: shearbolt  # keep",
 		"        uses: klar-web-services/shearbolt@v1",
@@ -555,7 +548,6 @@ func TestGitHubExistingGates(t *testing.T) {
 		"      - run: docker push web:1",
 	))
 
-	// A stale targets input is removed, and the image variable is added.
 	_, got = result(t, npmRepo("web", head+gated+lines(
 		"      - uses: klar-web-services/shearbolt@v1",
 		"        with:",
@@ -675,8 +667,6 @@ func rustFiles(workflow string) map[string]string {
 	}
 }
 
-// A job that cannot be edited is left completely unchanged: no gate, no install, and the
-// Makefile its build reaches keeps its plain cargo build. Another job is still edited.
 func TestGitHubFailedJobIsAtomic(t *testing.T) {
 	src := lines(
 		"on: push",
@@ -724,7 +714,6 @@ func TestGitHubFailedJobIsAtomic(t *testing.T) {
 	wantWorkflow(t, got, want)
 }
 
-// Rule 3 can point at a command in the middle of a step; the gate then goes before the step.
 func TestGitHubBeforeGateMidStep(t *testing.T) {
 	files := rustFiles(head + lines(
 		"      - run: echo start && make ship",
@@ -745,7 +734,6 @@ func TestGitHubBeforeGateMidStep(t *testing.T) {
 	}
 }
 
-// An existing gate is not moved; the push of a --push build goes after it.
 func TestGitHubExistingGateAfterPushBuild(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - name: Image",
@@ -768,7 +756,6 @@ func TestGitHubExistingGateAfterPushBuild(t *testing.T) {
 	))
 }
 
-// A shearbolt scan in a run step is an existing gate; the image variable goes in its step env.
 func TestGitHubExistingRunStepGate(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: docker build -t web:1 .",
@@ -791,8 +778,7 @@ func TestGitHubExistingRunStepGate(t *testing.T) {
 	))
 }
 
-// A project in a subdirectory gets with.working-directory; a project without a build is checked
-// at the start of the gate-job default (the first job).
+// A project without a build is checked at the start of the gate-job default (the first job).
 func TestGitHubMonorepoGate(t *testing.T) {
 	files := map[string]string{
 		"apps/web/package.json":      `{"name":"web"}`,
@@ -895,7 +881,6 @@ func TestGitHubCRLFAndCopiedKeys(t *testing.T) {
 	wantWorkflow(t, got, strings.ReplaceAll(want, "\n", "\r\n"))
 }
 
-// Two projects building in one step would need two splits: the job is left alone.
 func TestGitHubTwoProjectsInOneStep(t *testing.T) {
 	files := map[string]string{
 		"a/package.json": `{"name":"a"}`, "a/package-lock.json": "{}", "a/Dockerfile": "FROM x\n",
@@ -908,7 +893,6 @@ func TestGitHubTwoProjectsInOneStep(t *testing.T) {
 	}
 }
 
-// An existing gate that must now list its targets gets them.
 func TestGitHubExistingGateGetsTargets(t *testing.T) {
 	src := lines(
 		"on: push",
@@ -984,7 +968,6 @@ func TestGitHubActionSteps(t *testing.T) {
 		t.Fatalf("jobs = %+v, %v", jobs, err)
 	}
 	st := jobs[0].Steps
-	// build-push-action is an image build whose push comes from Image.Push, never Step.Push.
 	imagePush := func(i int) bool {
 		return len(st[i].Builds) == 1 && st[i].Builds[0].Image != nil && st[i].Builds[0].Image.Push
 	}
@@ -999,7 +982,6 @@ func TestGitHubActionSteps(t *testing.T) {
 	}
 }
 
-// A user's step after the output line is split off without taking the output line along.
 func TestGitHubSplitKeepsOutputLine(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+gated+lines(
 		"          ./deploy.sh",
@@ -1010,8 +992,7 @@ func TestGitHubSplitKeepsOutputLine(t *testing.T) {
 	if got != "" {
 		t.Errorf("an up-to-date job changed:\n%s", got)
 	}
-	// The existing gate is after the step, so no split is made (COMMANDS_BEFORE_GATE covers it);
-	// without the existing gate, the split keeps the output line in part 1.
+	// The existing gate is after the step, so no split is made (COMMANDS_BEFORE_GATE covers it).
 	_, got = result(t, npmRepo("web", head+gated+lines(
 		"          ./deploy.sh",
 	), map[string]string{"deploy.sh*": "#!/bin/sh\necho deploy\n"}))
@@ -1026,7 +1007,6 @@ func TestGitHubSplitKeepsOutputLine(t *testing.T) {
 	))
 }
 
-// Odd but valid workflows parse without errors or panics, and nothing breaks in them.
 func TestGitHubOddWorkflows(t *testing.T) {
 	for name, src := range map[string]string{
 		"empty":        "",
@@ -1056,7 +1036,6 @@ func TestGitHubOddWorkflows(t *testing.T) {
 	}
 }
 
-// Per-platform builds of one repository get distinct scan tags, and a re-run keeps them.
 func TestGitHubSameRepositoryTwice(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: |",
@@ -1075,7 +1054,6 @@ func TestGitHubSameRepositoryTwice(t *testing.T) {
 	}
 }
 
-// wantUnsupported checks that the job is left unchanged with UNSUPPORTED_EDIT giving reason.
 func wantUnsupported(t *testing.T, files map[string]string, why, reason string) *plan.Plan {
 	t.Helper()
 	p := unsupported(t, files, why)
@@ -1095,9 +1073,6 @@ func noteMessages(p *plan.Plan) []string {
 
 const differentIfs = "the gated builds run under different if: conditions, so one gate cannot follow them all"
 
-// Review 1: the gate copies an if: only when every step holding one of its builds has that same
-// condition. Copying the last build step's condition let an earlier build be pushed unscanned
-// where the gate is skipped; the reverse scanned an image that was never built.
 func TestGitHubGateIfMustMatchAllBuildSteps(t *testing.T) {
 	main := "        if: github.ref == 'refs/heads/main'\n"
 	wantUnsupported(t, npmRepo("web", head+lines(
@@ -1117,7 +1092,6 @@ func TestGitHubGateIfMustMatchAllBuildSteps(t *testing.T) {
 		"      - run: docker push web:1 && docker push worker:1",
 	), nil), "conditional, then unconditional build", differentIfs)
 
-	// The same condition on every build step is copied.
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: docker build -t web:1 .",
 	)+main+lines(
@@ -1132,9 +1106,6 @@ func TestGitHubGateIfMustMatchAllBuildSteps(t *testing.T) {
 
 const staleOutputs = "remove setup's output lines from this step and run setup again"
 
-// Review 2: an output line counts only when setup's own line for that build follows it. After a
-// build is inserted before an already set-up one, matching on the output name alone pointed both
-// gate variables at the same image.
 func TestGitHubOutputLineBelongsToItsBuild(t *testing.T) {
 	gate := lines(
 		"      - name: shearbolt",
@@ -1179,7 +1150,6 @@ func twoProjects(workflow string, a, b string) map[string]string {
 	}
 }
 
-// Review 3: builds of two projects in one step are each edited with their own gate.
 func TestGitHubTwoGatesOneStepNoSplit(t *testing.T) {
 	_, got := result(t, twoProjects(head+lines(
 		"      - run: |",
@@ -1220,8 +1190,6 @@ func TestGitHubTwoGatesOneStepNoSplit(t *testing.T) {
 	), "a", "b"), "a command between two projects' builds", "two projects")
 }
 
-// Review 3: scan tags are unique per job, so two projects pushing tags of one repository do not
-// share a local scan tag.
 func TestGitHubScanTagsUniquePerJob(t *testing.T) {
 	_, got := result(t, twoProjects(head+lines(
 		"      - run: docker build -t ghcr.io/acme/mono:api api",
@@ -1238,8 +1206,6 @@ func TestGitHubScanTagsUniquePerJob(t *testing.T) {
 	}
 }
 
-// Two builds of a job that already carry the same shearbolt- tag cannot both be scanned: the job
-// is left alone instead of scanning one image twice.
 func TestGitHubDuplicateExistingScanTags(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - run: docker build -t web:1 -t web:shearbolt-${{ github.sha }} .",
@@ -1248,8 +1214,8 @@ func TestGitHubDuplicateExistingScanTags(t *testing.T) {
 	), nil), "duplicate existing scan tags", "share the scan tag")
 }
 
-// Review 4: a --push build whose tags setup cannot read exactly would lose its push when it is
-// converted to --load, so the job is left alone.
+// A --push build whose tags setup cannot read exactly would lose its push when it is converted
+// to --load, so the job is left alone.
 func TestGitHubPushBuildWithUnreadableTags(t *testing.T) {
 	for _, script := range []string{
 		"docker buildx build --push $TAG_ARGS .",
@@ -1270,8 +1236,8 @@ func TestGitHubPushBuildWithUnreadableTags(t *testing.T) {
 	}
 }
 
-// Batch 4 decision: an unquoted expansion that is the value of a flag taking a value is accepted,
-// and the push line repeats the tag word as written, so it expands the same way.
+// An unquoted expansion that is the value of a flag taking a value is accepted, and the push line
+// repeats the tag word as written, so it expands the same way.
 func TestGitHubPushBuildWithExpandedFlagValues(t *testing.T) {
 	for script, push := range map[string]string{
 		"docker buildx build --push -t $IMAGE:$TAG .":                        "docker push $IMAGE:$TAG",
@@ -1286,9 +1252,9 @@ func TestGitHubPushBuildWithExpandedFlagValues(t *testing.T) {
 	}
 }
 
-// Review 5: a job that fails after its edits are queued is rolled back completely. Here the gate,
-// the --push conversion, the split and the id are queued before the aliased push step, whose
-// if: always() must be wrapped but cannot be changed in place, fails the job.
+// A job that fails after its edits are queued is rolled back completely. Here the gate, the
+// --push conversion, the split and the id are queued before the aliased push step, whose if:
+// always() must be wrapped but cannot be changed in place, fails the job.
 func TestGitHubRollbackAfterQueuedEdits(t *testing.T) {
 	src := lines(
 		"x-push: &p {if: always(), uses: softprops/action-gh-release@v2}",
@@ -1304,8 +1270,8 @@ func TestGitHubRollbackAfterQueuedEdits(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", src, nil), "late failure", "runs even when the gate fails")
 }
 
-// Review 5: the per-job check that the edited file still parses also rolls a job back. GitHub
-// rejects a mapping that repeats a key, so a job that has one is not edited.
+// The per-job check that the edited file still parses also rolls a job back. GitHub rejects a
+// mapping that repeats a key, so a job that has one is not edited.
 func TestGitHubRollbackOnInvalidResult(t *testing.T) {
 	src := strings.Replace(head, "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    timeout-minutes: 10\n", 1)
 	wantUnsupported(t, npmRepo("web", src+lines(
@@ -1314,7 +1280,6 @@ func TestGitHubRollbackOnInvalidResult(t *testing.T) {
 	), nil), "repeated key", "would not be valid YAML")
 }
 
-// An empty id: is filled in, not repeated.
 func TestGitHubEmptyIDIsFilled(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - name: Build",
@@ -1326,8 +1291,6 @@ func TestGitHubEmptyIDIsFilled(t *testing.T) {
 		t.Errorf("workflow:\n%s", got)
 	}
 }
-
-// Minor review fixes.
 
 func TestGitHubPartialExpressionConditionRefused(t *testing.T) {
 	// Wrapping a condition that holds ${{ }} next to other text would nest expressions and break
@@ -1367,7 +1330,6 @@ func TestGitHubInstallMarkerIgnoresComments(t *testing.T) {
 	if !strings.Contains(got, "uses: taiki-e/install-action@v2") {
 		t.Errorf("a comment suppressed the install:\n%s", got)
 	}
-	// The marker in the same script, before the build, does count.
 	files[wf] = head + lines("      - run: cargo install cargo-auditable --locked && cargo build --release")
 	_, got = result(t, files)
 	if strings.Contains(got, "taiki-e/install-action") || !strings.Contains(got, "cargo auditable build --release") {
@@ -1394,8 +1356,6 @@ func TestGitHubBuildPushActionPushCase(t *testing.T) {
 		t.Fatalf("push: TRUE is a push: %+v, %v", jobs, err)
 	}
 }
-
-// Guards the review found untested.
 
 func TestGitHubIfCopiedOnlyFromBuildSteps(t *testing.T) {
 	_, got := result(t, npmRepo("web", lines(
@@ -1429,7 +1389,6 @@ func TestGitHubPushLinesSkipScanTag(t *testing.T) {
 	}
 }
 
-// x and ${{ x }} are the same condition for the gate's if: copy.
 func TestGitHubGateIfComparesBareExpressions(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: docker build -t web:1 .",
@@ -1443,7 +1402,6 @@ func TestGitHubGateIfComparesBareExpressions(t *testing.T) {
 	}
 }
 
-// A step's name does not count as mentioning the install marker.
 func TestGitHubInstallMarkerIgnoresNames(t *testing.T) {
 	_, got := result(t, rustFiles(head+lines(
 		"      - name: cargo-auditable comes later",
@@ -1455,8 +1413,6 @@ func TestGitHubInstallMarkerIgnoresNames(t *testing.T) {
 	}
 }
 
-// A run-step scan whose failure would not stop the job is not a gate setup can keep (Batch 5
-// review): the job fails.
 func TestGitHubExistingRunStepGateMustStop(t *testing.T) {
 	for name, line := range map[string]string{
 		"or true":  `          "$HOME/.local/bin/shearbolt" scan --ci || true`,
@@ -1475,7 +1431,6 @@ func TestGitHubExistingRunStepGateMustStop(t *testing.T) {
 	}
 }
 
-// docker push --all-tags of a scanned repository would push the local scan tag: the job fails.
 func TestGitHubAllTagsPushRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - run: docker build -t ghcr.io/acme/web:1 .",
@@ -1483,8 +1438,6 @@ func TestGitHubAllTagsPushRefused(t *testing.T) {
 	), nil), "all-tags push", "--all-tags")
 }
 
-// An existing gate step that may continue on error cannot stop the job: the job fails (Batch 5
-// re-review). continue-on-error: false is fine.
 func TestGitHubExistingGateContinueOnError(t *testing.T) {
 	runGate := lines(
 		"        run: |",
@@ -1509,7 +1462,6 @@ func TestGitHubExistingGateContinueOnError(t *testing.T) {
 	}
 }
 
-// A run-step scan after set +e in its step would not fail the step: the job fails.
 func TestGitHubRunStepScanAfterSetE(t *testing.T) {
 	for _, off := range []string{"set +e", "set +o errexit"} {
 		wantUnsupported(t, npmRepo("web", head+lines(
@@ -1524,8 +1476,6 @@ func TestGitHubRunStepScanAfterSetE(t *testing.T) {
 	}
 }
 
-// The sh a user's own install pipes into belongs to the install: a run step that installs and
-// scans gives no COMMANDS_BEFORE_GATE.
 func TestGitHubUserInstallIsPartOfTheGate(t *testing.T) {
 	for _, install := range []string{
 		"curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh",
@@ -1544,8 +1494,6 @@ func TestGitHubUserInstallIsPartOfTheGate(t *testing.T) {
 	}
 }
 
-// A run-step gate under a custom shell without errexit does not stop the step when a command
-// follows the scan: the job fails. bash, sh and shells with -e are fine (Batch 5 final review).
 func TestGitHubCustomShellWithoutErrexit(t *testing.T) {
 	gate := func(shellLine string, after ...string) string {
 		return head + lines(append([]string{
@@ -1557,7 +1505,6 @@ func TestGitHubCustomShellWithoutErrexit(t *testing.T) {
 		}, append(after, "      - run: docker push web:1")...)...)
 	}
 	wantUnsupported(t, npmRepo("web", gate("      - shell: bash {0}", "          echo done"), nil), "bash {0}", "errexit")
-	// Through defaults.run.shell too.
 	wf := strings.Replace(gate("      - name: Gate", "          echo done"), "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: sh {0}\n", 1)
 	wantUnsupported(t, npmRepo("web", wf, nil), "defaults sh {0}", "errexit")
 
@@ -1574,7 +1521,6 @@ func TestGitHubCustomShellWithoutErrexit(t *testing.T) {
 	}
 }
 
-// reading is the GitHub plugin, recording the jobs it reads with the classifier setup passes.
 type reading struct {
 	github.Plugin
 	jobs *[]plan.Job
@@ -1586,7 +1532,6 @@ func (p reading) Jobs(r plan.Repo, file string, src []byte, classify plan.Classi
 	return js, ns, err
 }
 
-// jobsOf returns the jobs setup reads from the workflow in files, classified by the core.
 func jobsOf(t *testing.T, files map[string]string) []plan.Job {
 	t.Helper()
 	var jobs []plan.Job
@@ -1597,7 +1542,6 @@ func jobsOf(t *testing.T, files map[string]string) []plan.Job {
 	return jobs
 }
 
-// P6: Step.Stops lists the commands of a run step that can stop it early, next to its builds.
 func TestGitHubStepStops(t *testing.T) {
 	jobs := jobsOf(t, map[string]string{
 		"Dockerfile": "FROM alpine\n",
@@ -1625,8 +1569,6 @@ func TestGitHubStepStops(t *testing.T) {
 	}
 }
 
-// snippetOf returns the gate snippet of p's UNSUPPORTED_EDIT note for the workflow: the note's
-// text from the gate step on.
 func snippetOf(t *testing.T, p *plan.Plan) string {
 	t.Helper()
 	for _, n := range p.Notes {
@@ -1663,10 +1605,7 @@ func snippetEnv(t *testing.T, snippet string) map[string]string {
 	return steps[1].Env
 }
 
-// P11 (design §5): the hand-written gate passes each image's scan tag as a value GitHub can
-// expand: ${{ env.NAME }} for a plain variable of the job's or workflow's env:, ${{ github.* }}
-// for GitHub's default variables, and otherwise a step output the build step must write, with
-// the two lines to add in comments. The shell function makes setup refuse to split the step.
+// The shell function makes setup refuse to split the step.
 func TestGitHubSnippetShellVariables(t *testing.T) {
 	const fn = "f() { :; }"
 	job := func(workflowEnv, jobEnv, stepHead string, script ...string) string {
@@ -1754,7 +1693,6 @@ func TestGitHubSnippetShellVariables(t *testing.T) {
 		}
 	}
 
-	// Two such builds in one step write two outputs.
 	p := unsupported(t, npmRepo("web", job("", "", "", fn, "A=ghcr.io/acme/web", "B=ghcr.io/acme/worker",
 		`docker build -t "$A:1" .`, `docker build -f Dockerfile -t "$B:1" .`, `docker push "$A:1"`, `docker push "$B:1"`), nil), "two builds")
 	snippet := snippetOf(t, p)

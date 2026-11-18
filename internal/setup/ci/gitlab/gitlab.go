@@ -1,5 +1,3 @@
-// Package gitlab is the GitLab CI plugin of shearbolt setup: it reads the jobs of .gitlab-ci.yml
-// into the CI-neutral job model, and edits their scripts (through scriptci), variables and caches.
 package gitlab
 
 import (
@@ -30,16 +28,12 @@ const (
 	snippetIndent = 4
 )
 
-// keywords are the top-level keys that are not jobs.
 var keywords = []string{"stages", "variables", "default", "include", "workflow", "image", "services", "cache", "before_script", "after_script"}
 
-// Plugin is the GitLab CI plugin.
 type Plugin struct{}
 
-// Name implements plan.CI.
 func (Plugin) Name() string { return "gitlab" }
 
-// Files returns .gitlab-ci.yml when the repository has one.
 func (Plugin) Files(r plan.Repo) []string {
 	if _, err := r.ReadDir(ciFile); err == nil || !r.Exists(ciFile) {
 		return nil
@@ -47,10 +41,9 @@ func (Plugin) Files(r plan.Repo) []string {
 	return []string{ciFile}
 }
 
-// job is one editable job.
 type job struct {
 	key, id string
-	m       *yaml.Node // the job mapping
+	m       *yaml.Node
 	line    int
 	extends bool // the job extends a template, whose keys setup does not read
 	inherit bool // the job has inherit:, which setup does not evaluate
@@ -63,7 +56,6 @@ type job struct {
 	after  *scriptci.Script // the after_script it runs (its own, default's or the top-level one), when readable
 }
 
-// config is a parsed .gitlab-ci.yml.
 type config struct {
 	file    string
 	doc     *yamledit.Doc
@@ -109,7 +101,6 @@ func keys(m *yaml.Node) []string {
 
 func flow(n *yaml.Node) bool { return n != nil && n.Style&yaml.FlowStyle != 0 }
 
-// hasAnchor reports whether n or anything inside it defines an anchor.
 func hasAnchor(n *yaml.Node) bool {
 	if n == nil {
 		return false
@@ -127,10 +118,6 @@ func specHeader(src []byte) bool {
 	return slices.Contains(keys(first.Content[0]), "spec")
 }
 
-// parse reads the jobs of a .gitlab-ci.yml (R4 rule 6, Task 17). A job needs its own block
-// script sequence of plain strings; jobs whose script comes from extends, holds !reference or is
-// one string, and jobs with a merge key or YAML anchors, are left out and listed in skipped.
-// extends, !reference, include and merges are never resolved.
 func parse(file string, src []byte) (*config, error) {
 	c := &config{file: file}
 	d, err := yamledit.Parse(src)
@@ -239,10 +226,9 @@ func parse(file string, src []byte) (*config, error) {
 	return c, nil
 }
 
-// startState returns the shell state the job's script starts in and the before_script it runs
-// (its own, default's, or the top-level one), which shares the script's shell. A job with extends
-// or inherit: and no own before_script may run one setup cannot see: its directory is unknown and
-// before is nil. A before_script setup cannot read is an error.
+// startState returns the shell state the job's script starts in and the before_script it runs,
+// which shares the script's shell. A job with extends or inherit: and no own before_script may run
+// one setup cannot see: its directory is unknown and before is nil.
 func (c *config) startState(j *job, root, def *yaml.Node) (shell.State, *scriptci.Script, error) {
 	bn := rawValue(j.m, "before_script")
 	if bn == nil {
@@ -271,9 +257,6 @@ func (c *config) startState(j *job, root, def *yaml.Node) (shell.State, *scriptc
 	return end, bs, nil
 }
 
-// allBeforeScripts returns every before_script of the file setup can read: the top-level one,
-// default's, and those of every job and template. It records in c.opaque where one cannot be
-// read (an alias of something else, !reference, an item that is not a plain string).
 func (c *config) allBeforeScripts(root *yaml.Node) []*scriptci.Script {
 	type src struct {
 		where string
@@ -299,8 +282,6 @@ func (c *config) allBeforeScripts(root *yaml.Node) []*scriptci.Script {
 	return out
 }
 
-// errexitOffAnywhere returns the command that turns errexit off in any before_script of the
-// file, or "".
 func (c *config) errexitOffAnywhere() string {
 	for _, bs := range c.befores {
 		var cmds []shell.Command
@@ -323,9 +304,6 @@ func (c *config) job(id string) *job {
 	return nil
 }
 
-// Jobs reads the jobs: each script item is a step, and each command sees the top-level and job
-// variables. Jobs that cannot be edited are listed in one UNSUPPORTED_EDIT note, and so is a file
-// with a spec: header. A push in the after_script a job runs gets PUSH_IN_AFTER_SCRIPT.
 func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {
 	c, err := parse(file, src)
 	if err != nil {
@@ -342,8 +320,6 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 	var jobs []plan.Job
 	var notes []plan.Note
 	for _, j := range c.jobs {
-		// The before_script it runs, or every one of the file when it may take one from extends
-		// or inherit: (Batch 5 re-review).
 		befores, whose := []*scriptci.Script{j.before}, "its before_script"
 		if j.unseen {
 			befores, whose = c.befores, "a before_script of this file it may run through extends or inherit:"
@@ -396,13 +372,10 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 	return jobs, notes, nil
 }
 
-// Snippet renders gate g as the two script items a user adds by hand.
 func (Plugin) Snippet(r plan.Repo, file string, g plan.Gate) string {
 	return scriptci.Snippet(g, cloneDir, snippetIndent)
 }
 
-// Edit applies the gates and preps of the file's jobs through scriptci, and gives every job with
-// a gate the cache variable and the shearbolt cache (Task 17).
 func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gates []plan.Gate, preps map[string][]plan.Prep) (plan.Edited, error) {
 	c, err := parse(file, src)
 	if err != nil {
@@ -427,7 +400,6 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 	})
 }
 
-// cache lines, relative to the job's key column.
 func cacheItem(pad string) []string {
 	return []string{"key: " + cacheKey, "paths:", pad + "- " + cachePath}
 }
@@ -446,11 +418,6 @@ func (c *config) notAdded(j *job, why string, withVar bool) []plan.Note {
 	}}
 }
 
-// cacheEdits gives job j, which gets a gate, variables.SHEARBOLT_CACHE_DIR (a new variables:
-// goes before the first of before_script and script) and a shearbolt entry in its cache list (a
-// mapping becomes a one-item list first; with no cache, a new list goes after variables:). A
-// cache inherited from default: or the top level, GitLab's limit of 4 caches, a flow-style or
-// shared cache, and a job whose template may hold a cache give CACHE_NOT_ADDED instead.
 func (c *config) cacheEdits(j *job, unit int) ([]plan.Note, error) {
 	d := c.doc
 	pad := strings.Repeat(" ", unit)
@@ -459,7 +426,6 @@ func (c *config) cacheEdits(j *job, unit int) ([]plan.Note, error) {
 	if first < 0 {
 		return c.notAdded(j, "the job has no script: key", true), nil
 	}
-	// insertAt queues a new key before the first of before_script and script.
 	insertAt := func(key, value string) error {
 		if first > 0 {
 			return d.SetKey(j.m, key, value, ks[first-1])
@@ -478,8 +444,8 @@ func (c *config) cacheEdits(j *job, unit int) ([]plan.Note, error) {
 	}
 	entry := cacheVar + ": " + yamledit.Scalar(cacheDir)
 	vars := rawValue(j.m, "variables")
-	// setVar queues the variable. It runs after an edit at the end of an existing cache, which
-	// may be where a new variables: goes too, and before a new cache, which follows variables.
+	// setVar runs after an edit at the end of an existing cache, which may be where a new
+	// variables: goes too, and before a new cache, which follows variables.
 	setVar := func() error {
 		switch {
 		case vars == nil:
@@ -552,8 +518,6 @@ func scalarAt(m *yaml.Node, key string) string {
 	return ""
 }
 
-// listify turns job j's cache mapping cn into a one-item list (a dash before its first key, the
-// rest of the block indented by 2) and appends item.
 func (c *config) listify(j *job, cn *yaml.Node, item []string) error {
 	d := c.doc
 	k0 := cn.Content[0]

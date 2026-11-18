@@ -59,8 +59,6 @@ func TestIsTerminalRejectsDevNullAndPipes(t *testing.T) {
 	}
 }
 
-// version takes no arguments: any argument, -h included, is a usage error with exit 2, the
-// usage on stderr and nothing on stdout. version and --version alone print the versions.
 func TestVersionRejectsArguments(t *testing.T) {
 	for _, args := range [][]string{{"version", "extra"}, {"version", "-h"}, {"version", "--json"}, {"--version", "x"}} {
 		var out, errb bytes.Buffer

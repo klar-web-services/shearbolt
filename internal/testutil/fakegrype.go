@@ -1,4 +1,3 @@
-// Package testutil holds helpers shared by Shearbolt's tests.
 package testutil
 
 import (
@@ -41,7 +40,6 @@ if [ -n "$FAKE_GRYPE_SLEEP" ]; then exec sleep "$FAKE_GRYPE_SLEEP"; fi
 exit "${FAKE_GRYPE_EXIT:-0}"
 `
 
-// FakeGrype writes an executable that imitates Grype's command line and returns its path.
 // Variables: FAKE_GRYPE_LOG (file receiving the arguments; "<log>.env", ".pwd", ".cfg" get the
 // environment, working directory and config), FAKE_GRYPE_JSON and FAKE_GRYPE_SBOM (content
 // written for -o json= / -o cyclonedx-json=), FAKE_GRYPE_EXIT, FAKE_GRYPE_STDERR, FAKE_GRYPE_SLEEP.

@@ -1,6 +1,3 @@
-// Package npm is the setup plugin for npm, pnpm, Yarn and Bun projects: it finds them (R1) and
-// recognizes their build scripts (R2). Their builds produce no artifact Shearbolt scans, so they
-// are gate locations only, and Prepare has nothing to do.
 package npm
 
 import (
@@ -16,18 +13,14 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// lockfiles make a directory with package.json an npm project. Every name is in scan.Lockfiles.
+// Every name is in scan.Lockfiles.
 var lockfiles = []string{"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock"}
 
-// Plugin is the npm ecosystem.
 type Plugin struct{}
 
-// Name returns "npm".
 func (Plugin) Name() string { return "npm" }
 
-// Find returns every directory with package.json and an npm lockfile, sorted by Dir. A workspace
-// member has no lockfile of its own, so it is covered by its root and is not a project. A
-// directory whose only lockfile is the binary bun.lockb gets a BUN_LOCKB note instead.
+// A workspace member has no lockfile of its own, so it is covered by its root and is not a project.
 func (Plugin) Find(r plan.Repo) ([]plan.Project, []plan.Note, error) {
 	var projects []plan.Project
 	var notes []plan.Note
@@ -68,8 +61,7 @@ func (Plugin) Find(r plan.Repo) ([]plan.Project, []plan.Note, error) {
 	return projects, notes, nil
 }
 
-// manifest returns the name in dir/package.json and "nextjs" when next is a dependency. A
-// package.json that cannot be read gives "", "": the lockfile still makes it a project.
+// A package.json that cannot be read gives "", "": the lockfile still makes it a project.
 func manifest(r plan.Repo, dir string) (name, framework string) {
 	b, err := r.Read(path.Join(dir, "package.json"))
 	if err != nil {
@@ -107,10 +99,6 @@ var valueFlags = map[string][]string{
 // dirFlags name the directory a runner works in: npm --prefix, pnpm -C/--dir, yarn and bun --cwd.
 var dirFlags = []string{"--prefix", "-C", "--dir", "--cwd"}
 
-// Recognize returns a BuildOther for an npm build script (`npm run build[:x]`, `pnpm build`,
-// `yarn run build`, `bun run build`, ...) or `next build` run directly or through npx, bunx or
-// a runner's exec. Its Dir is the runner's directory option joined to ctx.Dir, or "" when that
-// is not certain (unknown ctx.Dir, a variable, an absolute path or a path outside the repo).
 func (Plugin) Recognize(_ plan.Repo, cmd shell.Command, ctx plan.Context) *plan.Build {
 	args := cmd.ArgWords()
 	if len(args) == 0 {
@@ -163,8 +151,6 @@ func (Plugin) Recognize(_ plan.Repo, cmd shell.Command, ctx plan.Context) *plan.
 	return &plan.Build{Kind: plan.BuildOther, Dir: buildDir(ctx.Dir, dirArg), Cmd: cmd}
 }
 
-// split returns the positional argument values (everything after "--" included) and the raw
-// value of the last directory option, or nil when there is none.
 func split(args []shell.Word, withValue []string) (pos []string, dir *shell.Word) {
 	for i := 0; i < len(args); i++ {
 		w := args[i]
@@ -214,7 +200,6 @@ func buildDir(cur string, arg *shell.Word) string {
 	return d
 }
 
-// Prepare has nothing to do: npm builds need no rewrite or tool.
 func (Plugin) Prepare(plan.Repo, plan.Project, plan.Build) (plan.Prep, []plan.Note) {
 	return plan.Prep{}, nil
 }

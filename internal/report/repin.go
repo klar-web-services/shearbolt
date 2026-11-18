@@ -9,16 +9,13 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Repin is one compose image with blocking findings (design section 5).
 type Repin struct {
-	Target, Image, File string // File: the compose target's ref
+	Target, Image, File string
 	Line                int
 	Services            []string
-	Count, Unfixed      int // blocking findings, and those without a fix
+	Count, Unfixed      int
 }
 
-// Repins returns one Repin per (target, image) of the blocked compose findings, in the order of
-// their first finding. Line and Services come from the target's images[] entry.
 func Repins(r *model.Run, blocked []model.Finding) []Repin {
 	type key struct{ target, image string }
 	idx := map[key]int{}
@@ -68,10 +65,8 @@ func Repins(r *model.Run, blocked []model.Finding) []Repin {
 
 var digestRe = regexp.MustCompile(`(@sha256:[0-9a-f]{12})[0-9a-f]+`)
 
-// shortImage shortens a sha256 digest in ref to its first 12 hex digits, for display.
 func shortImage(ref string) string { return digestRe.ReplaceAllString(ref, "$1") }
 
-// repinSentence counts a Repin's blocking findings and says whether a newer image can clear them.
 func repinSentence(p Repin) string {
 	n := plural(p.Count, "blocking vulnerability", "blocking vulnerabilities")
 	switch {
@@ -101,7 +96,6 @@ func repinText(p Repin) string {
 	return fmt.Sprintf("  re-pin %s (%s:%d): %s\n", clean(shortImage(p.Image)), clean(p.File), p.Line, clean(repinSentence(p)))
 }
 
-// skippedImage is a skipped image of a compose target, for the Skipped lists.
 type skippedImage struct{ Target, Image, Note string }
 
 func skippedImages(r *model.Run) []skippedImage {

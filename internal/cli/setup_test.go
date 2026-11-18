@@ -35,8 +35,6 @@ var setupFixtures = func() string {
 	return dir
 }()
 
-// setupDeps are deps for setup tests: stdin is the given text and the terminal check is fixed.
-// Setup never needs Grype, so getting it fails.
 func setupDeps(tty bool, stdin string) deps {
 	d := defaultDeps()
 	d.stdin = strings.NewReader(stdin)
@@ -55,7 +53,6 @@ func setupCmd(t *testing.T, d deps, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-// tree returns every regular file under dir by slash-separated path, with its mode.
 func tree(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -98,7 +95,6 @@ func sameTree(t *testing.T, dir string, want map[string]string) {
 	}
 }
 
-// writeFiles writes files (slash paths) under dir.
 func writeFiles(t *testing.T, dir string, files map[string]string) {
 	t.Helper()
 	for rel, content := range files {
@@ -112,7 +108,6 @@ func writeFiles(t *testing.T, dir string, files map[string]string) {
 	}
 }
 
-// fixtureRepo copies testdata/setup/<name>/before into a temp dir and changes into it.
 func fixtureRepo(t *testing.T, name string) string {
 	t.Helper()
 	dir := copyFixture(t, name)
@@ -120,7 +115,6 @@ func fixtureRepo(t *testing.T, name string) string {
 	return dir
 }
 
-// copyFixture copies testdata/setup/<name>/before into a new temp dir, keeping executable bits.
 func copyFixture(t *testing.T, name string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "repo")
@@ -158,7 +152,6 @@ func copyFixture(t *testing.T, name string) string {
 	return dir
 }
 
-// tempRepo writes files into a temp dir and changes into it.
 func tempRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -528,8 +521,6 @@ func TestSetupPlanHumanWritesNothing(t *testing.T) {
 	sameTree(t, dir, before)
 }
 
-// TestSetupPrintsUnsupportedEditInFull checks that a multi-line UNSUPPORTED_EDIT, which carries
-// the job, the reason and the snippet to add by hand, is printed verbatim.
 func TestSetupPrintsUnsupportedEditInFull(t *testing.T) {
 	dir := tempRepo(t, map[string]string{
 		"package.json":      `{"name":"web"}`,
@@ -550,7 +541,6 @@ func TestSetupPrintsUnsupportedEditInFull(t *testing.T) {
 	if !strings.Contains(out, p.Notes[i].Message+"\n") {
 		t.Errorf("stdout lacks the full note:\n%s\nstdout:\n%s", p.Notes[i].Message, out)
 	}
-	// A re-run has nothing to change, but must not claim that Shearbolt is set up.
 	code, out, errb = setupCmd(t, setupDeps(false, ""), "--yes")
 	want := "Setup has nothing more to change automatically; add what the notes above describe by hand.\n" + reviewLine
 	if code != 0 || !strings.HasSuffix(out, want) || strings.Contains(out, "already set up") || !strings.Contains(out, p.Notes[i].Message) {
@@ -583,8 +573,6 @@ func TestSetupInteractiveLastLineWithoutNewline(t *testing.T) {
 	}
 }
 
-// TestSetupNumbersWinOverValues: the options are numbered, so a typed option number selects
-// that option even when another option's value is the same text.
 func TestSetupNumbersWinOverValues(t *testing.T) {
 	dir := tempRepo(t, map[string]string{
 		"2/package.json": `{"name":"two"}`, "2/package-lock.json": "{}",
@@ -603,7 +591,6 @@ func TestSetupNumbersWinOverValues(t *testing.T) {
 	}
 }
 
-// zeros is an endless stdin without newlines, like /dev/zero.
 type zeros struct{}
 
 func (zeros) Read(b []byte) (int, error) {
@@ -683,7 +670,6 @@ func TestSetupWriteError(t *testing.T) {
 	}
 }
 
-// failWriter is a stdout that cannot be written, such as a closed pipe.
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
@@ -781,9 +767,8 @@ func TestTermSafe(t *testing.T) {
 
 var updatePlanJSON = flag.Bool("update", false, "rewrite testdata/setup/monorepo/plan.json")
 
-// TestSetupPlanJSONGolden pins the JSON contract the agent skill reads (Task 13): the exact
-// `shearbolt setup --plan --json` output on the monorepo fixture, with defaults for the open
-// questions. Changing it requires bumping schemaVersion.
+// TestSetupPlanJSONGolden pins the JSON contract the agent skill reads. Changing it requires
+// bumping schemaVersion.
 func TestSetupPlanJSONGolden(t *testing.T) {
 	golden := filepath.Join(setupFixtures, "monorepo", "plan.json")
 	fixtureRepo(t, "monorepo")
@@ -807,7 +792,6 @@ func TestSetupPlanJSONGolden(t *testing.T) {
 	if p.Complete || len(p.Questions) != 2 || p.Questions[1].ID != "gate-job:apps/api" || p.Questions[1].Project != "apps/api" {
 		t.Errorf("plan: complete %v, questions %+v", p.Complete, p.Questions)
 	}
-	// The plan's contents are the golden after/ files.
 	for _, c := range p.Changes {
 		want, err := os.ReadFile(filepath.Join(setupFixtures, "monorepo", "after", filepath.FromSlash(c.Path)))
 		if err != nil || c.Content != string(want) {
@@ -816,8 +800,6 @@ func TestSetupPlanJSONGolden(t *testing.T) {
 	}
 }
 
-// A re-run without changes does not claim Shearbolt is set up while a note says something runs
-// unchecked: PUSH_BEFORE_GATE, BUILD_AFTER_GATE or GATE_AFTER_PUSH (Batch 5 review).
 func TestSetupNoAlreadySetUpWithOrderNotes(t *testing.T) {
 	tempRepo(t, map[string]string{
 		"package.json":      `{"name":"web"}`,
@@ -836,8 +818,6 @@ func TestSetupNoAlreadySetUpWithOrderNotes(t *testing.T) {
 	}
 }
 
-// nothingToChange claims Shearbolt is set up only when no note says something is left by hand or
-// runs unchecked (Batch 5 review and re-review).
 func TestNothingToChangeCodes(t *testing.T) {
 	const notSetUp = "Setup has nothing more to change automatically; add what the notes above describe by hand."
 	for _, code := range []string{"UNSUPPORTED_EDIT", "NO_GATE_PLACED", "BUILD_AFTER_GATE", "PUSH_BEFORE_GATE", "GATE_AFTER_PUSH"} {
@@ -855,7 +835,6 @@ func TestNothingToChangeCodes(t *testing.T) {
 	}
 }
 
-// typedNumbers is value v of q typed as option numbers, the way a user answers on the terminal.
 func typedNumbers(t *testing.T, q plan.Question, v string) string {
 	t.Helper()
 	parts := []string{v}
@@ -873,9 +852,6 @@ func typedNumbers(t *testing.T, q plan.Question, v string) string {
 	return strings.Join(nums, ",")
 }
 
-// interactiveAnswers follows interactive mode's loop: it asks the first applicable unanswered
-// question, re-resolving after each answer. Each answer is the fixture's (given), else the
-// default. It returns the answers in the order asked and the final answer set.
 func interactiveAnswers(t *testing.T, qs []plan.Question, given map[string]string) ([]plan.Question, map[string]string) {
 	t.Helper()
 	var asked []plan.Question
@@ -898,7 +874,6 @@ func interactiveAnswers(t *testing.T, qs []plan.Question, given map[string]strin
 	}
 }
 
-// sameTrees compares two tree() results.
 func sameTrees(t *testing.T, what string, got, want map[string]string) {
 	t.Helper()
 	for p, w := range want {
@@ -915,8 +890,6 @@ func sameTrees(t *testing.T, what string, got, want map[string]string) {
 	}
 }
 
-// setupIn copies the fixture, runs setup in the copy and returns the resulting tree. The run
-// must succeed and end with the review line.
 func setupIn(t *testing.T, fixture string, d deps, args ...string) (map[string]string, string) {
 	t.Helper()
 	dir := copyFixture(t, fixture)
@@ -928,11 +901,6 @@ func setupIn(t *testing.T, fixture string, d deps, args ...string) (map[string]s
 	return tree(t, dir), out
 }
 
-// TestSetupModesAgree is AC-5 (Task 18). On every testdata/setup fixture, with the fixture's
-// answers: --plan --json writes nothing; --apply with every applicable question answered (the
-// way an agent answers after --plan --json), interactive mode (Enter for defaults, or every
-// answer typed as option numbers) and, for a defaults-only fixture, --apply --yes write
-// byte-identical trees; and each changed file holds the plan's content.
 func TestSetupModesAgree(t *testing.T) {
 	befores, err := filepath.Glob(filepath.Join(setupFixtures, "*", "before"))
 	if err != nil || len(befores) == 0 {
@@ -947,7 +915,6 @@ func TestSetupModesAgree(t *testing.T) {
 				answerArgs = append(answerArgs, "--answer", id+"="+given[id])
 			}
 
-			// A: --plan --json changes no file.
 			dirA := copyFixture(t, name)
 			orig := tree(t, dirA)
 			t.Chdir(dirA)
@@ -962,7 +929,6 @@ func TestSetupModesAgree(t *testing.T) {
 			sameTree(t, dirA, orig)
 			asked, all := interactiveAnswers(t, p.Questions, given)
 
-			// B: --apply, every applicable question answered.
 			applyArgs := []string{"--apply"}
 			for _, id := range slices.Sorted(maps.Keys(all)) {
 				applyArgs = append(applyArgs, "--answer", id+"="+all[id])
@@ -992,8 +958,6 @@ func TestSetupModesAgree(t *testing.T) {
 				}
 			}
 
-			// C: interactive, each asked question answered with its option numbers, or with
-			// Enter for the default; then y.
 			var enter, numbers strings.Builder
 			for _, q := range asked {
 				v := all[q.ID]
@@ -1014,7 +978,6 @@ func TestSetupModesAgree(t *testing.T) {
 				sameTrees(t, "interactive ("+variant+") vs --apply", got, want)
 			}
 
-			// D: --apply --yes takes the same defaults.
 			if len(given) == 0 {
 				got, _ := setupIn(t, name, setupDeps(false, ""), "--apply", "--yes")
 				sameTrees(t, "--apply --yes vs --apply", got, want)
@@ -1023,8 +986,6 @@ func TestSetupModesAgree(t *testing.T) {
 	}
 }
 
-// The monorepo has open questions, so --apply without answers is an error naming them, and
-// writes nothing (Task 18).
 func TestSetupApplyWithoutAnswersOnMonorepo(t *testing.T) {
 	dir := fixtureRepo(t, "monorepo")
 	before := tree(t, dir)
@@ -1035,10 +996,8 @@ func TestSetupApplyWithoutAnswersOnMonorepo(t *testing.T) {
 	sameTree(t, dir, before)
 }
 
-// The config setup generates scans (Task 19): right after setup --yes, a scan with a fake Grype
-// loads it, resolves its target names and finds the lockfile, without errors. The fake Grype
-// "pulls" any image, so the Next.js image target is scanned; the Rust binary is not built, so
-// its target is skipped (local mode).
+// The fake Grype "pulls" any image, so the Next.js image target is scanned; the Rust binary is not
+// built, so its target is skipped (local mode).
 func TestSetupConfigScans(t *testing.T) {
 	cases := []struct {
 		fixture, sbom, artifact, artifactStatus string

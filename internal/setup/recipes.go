@@ -6,13 +6,8 @@ import (
 	"strings"
 )
 
-// This file reads Makefiles and justfiles just far enough to know which recipe lines a make or
-// just invocation runs. It is not make or just: variables are not expanded.
-
-// span is a byte range of shell text in a called file.
 type span struct{ start, end int }
 
-// lines splits text into lines; each span excludes its line ending.
 func lines(text string) []span {
 	var out []span
 	for start := 0; start < len(text); {
@@ -33,13 +28,10 @@ func lines(text string) []span {
 	return out
 }
 
-// continued reports a line that ends in an odd number of backslashes.
 func continued(line string) bool {
 	n := len(line) - len(strings.TrimRight(line, `\`))
 	return n%2 == 1
 }
-
-// ---- Makefiles ----
 
 type makeRule struct {
 	targets, prereqs []string
@@ -76,7 +68,6 @@ func (mf *makefile) assign(lhs, value string) string {
 
 var makeRef = regexp.MustCompile(`^\$[({]([A-Za-z_][A-Za-z0-9_]*)[)}]$`)
 
-// expand resolves a prerequisite that is one variable reference to the variable's words.
 func (mf *makefile) expand(p string) ([]string, bool) {
 	m := makeRef.FindStringSubmatch(p)
 	if m == nil {
@@ -86,9 +77,7 @@ func (mf *makefile) expand(p string) ([]string, bool) {
 	return strings.Fields(v), ok
 }
 
-// parseMakefile reads rules (targets, prerequisites before any "|", and recipe lines with their
-// `\` continuations and leading @, - and + removed), .DEFAULT_GOAL, and exported variables. It
-// is not make: variables are not expanded, and conditionals are ignored (both branches count).
+// It is not make: variables are not expanded, and conditionals are ignored (both branches count).
 // Each recipe line runs in its own shell; .ONESHELL is not supported.
 func parseMakefile(text string) *makefile {
 	mf := &makefile{vars: map[string]string{}}
@@ -231,7 +220,6 @@ func parseMakefile(text string) *makefile {
 	return mf
 }
 
-// stripMakeComment removes a # comment that is not escaped.
 func stripMakeComment(s string) string {
 	for k := 0; k < len(s); k++ {
 		if s[k] == '\\' {
@@ -245,10 +233,6 @@ func stripMakeComment(s string) string {
 	return s
 }
 
-// reachable returns the rules that run for goals (the default goal when there are none): their
-// own rules and, transitively, their prerequisites'. A target or prerequisite that is one
-// variable reference resolves through vars, so `release: $(BIN)` reaches the `$(BIN):` rule.
-//
 // maybe holds the rules that are not reached but may run: those with a target that does not
 // resolve (they may run under any name) and, transitively, the rules of their prerequisites,
 // literal or resolved through vars. Their prerequisites that do not resolve are skipped, not
@@ -319,8 +303,6 @@ func (mf *makefile) reachable(goals []string) (reach, maybe map[*makeRule]bool, 
 			unknown = true
 		}
 	}
-	// A maybe rule may run, and so may its prerequisites' rules, transitively. A $ prerequisite
-	// that resolves is followed; one that does not is skipped, not counted as unknown.
 	maybe = map[*makeRule]bool{}
 	var pending []*makeRule
 	mark := func(rl *makeRule) {
@@ -379,15 +361,13 @@ func (mf *makefile) firstRule() *makeRule {
 	return nil
 }
 
-// ---- justfiles ----
-
 type justRecipe struct {
 	name     string
 	params   int
 	variadic bool
 	deps     []string
 	lines    []span // one per shell line; one for the whole body of a shebang recipe
-	shebang  string // the #! line of a shebang recipe
+	shebang  string
 }
 
 type justfile struct {
@@ -406,9 +386,7 @@ var (
 	justSetExp = regexp.MustCompile(`^set\s+export(\s*:=\s*true)?\s*(#.*)?$`)
 )
 
-// parseJustfile reads recipes (name, parameters, dependencies, and body lines with leading @ and
-// - removed), aliases and exported variables. Settings other than `set export`, modules,
-// imports and attributes are ignored; recipes run in the justfile's directory.
+// Settings other than `set export`, modules, imports and attributes are ignored.
 func parseJustfile(text string) *justfile {
 	jf := &justfile{aliases: map[string]string{}}
 	ls := lines(text)
@@ -517,10 +495,6 @@ func justDeps(s string) []string {
 	return slices.DeleteFunc(out, func(s string) bool { return s == "" })
 }
 
-// reachable returns the recipes that run for the command-line arguments (the first recipe when
-// there are none): each named recipe consumes its parameters' arguments, and dependencies are
-// followed.
-//
 // unknown reports what cannot be seen and counts as a push: a named recipe or dependency that
 // does not exist (it may come from an import), or no recipe at all in a justfile with imports.
 func (jf *justfile) reachable(args []string) (reach map[*justRecipe]bool, unknown bool) {

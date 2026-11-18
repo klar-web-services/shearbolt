@@ -16,19 +16,15 @@ import (
 	"time"
 )
 
-// ImportMarker is the file in the Shearbolt cache that records the last successful import of a
-// database archive (SHEARBOLT_DB_ARCHIVE), so the same archive is not imported again.
 const ImportMarker = "grype-db-import.json"
 
-// importMarker is the content of ImportMarker.
 type importMarker struct {
 	ArchiveSHA256 string `json:"archiveSha256"`
 	GrypeVersion  string `json:"grypeVersion"`
-	Built         string `json:"built"` // the database build time db status reported after the import, RFC 3339
+	Built         string `json:"built"`
 	SchemaVersion string `json:"schemaVersion"`
 }
 
-// DBStatus is what `grype db status -o json` reports about the cached database.
 type DBStatus struct {
 	SchemaVersion string
 	From          string
@@ -36,8 +32,8 @@ type DBStatus struct {
 	Valid         bool
 }
 
-// DBStatus runs Grype's status check on the cached database. A database that does not exist
-// or cannot be read makes Grype exit non-zero, which is an error here.
+// A database that does not exist or cannot be read makes Grype exit non-zero, which is an error
+// here.
 func (r *Runner) DBStatus(ctx context.Context) (DBStatus, error) {
 	var out bytes.Buffer
 	if err := r.runOutput(ctx, []string{"db", "status", "-o", "json"}, &out); err != nil {
@@ -59,12 +55,9 @@ func (r *Runner) DBStatus(ctx context.Context) (DBStatus, error) {
 	return DBStatus{SchemaVersion: raw.SchemaVersion, From: raw.From, Built: built.UTC(), Valid: raw.Valid}, nil
 }
 
-// ImportDBIfNeeded imports a database archive unless the cache's import marker shows that the
-// last successful import was the same archive (by SHA-256) under the same Grype version, and the
-// cached database still reports the recorded build time and schema and passes Grype's status
-// check. Any doubt means importing again. The archive must be a regular file. The old marker is
-// removed before an import and a new one written only after it succeeded and the archive still
-// has the same SHA-256, so a failed import leaves no marker. It reports whether it imported.
+// Any doubt means importing again. The old marker is removed before an import and a new one
+// written only after it succeeded and the archive still has the same SHA-256, so a failed
+// import leaves no marker.
 func (r *Runner) ImportDBIfNeeded(ctx context.Context, archive string) (bool, error) {
 	archive, err := filepath.Abs(archive)
 	if err != nil {
@@ -117,8 +110,8 @@ func (r *Runner) alreadyImported(ctx context.Context, marker, sum string) bool {
 	return err == nil && st.Valid && st.Built.Equal(built) && st.SchemaVersion == m.SchemaVersion
 }
 
-// regularFileSHA256 hashes a regular file. The file is opened without blocking and checked
-// before it is read, so a FIFO or a device cannot make the scan wait forever.
+// The file is opened without blocking and checked before it is read, so a FIFO or a device
+// cannot make the scan wait forever.
 func regularFileSHA256(path string) (string, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {

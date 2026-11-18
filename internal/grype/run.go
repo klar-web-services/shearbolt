@@ -16,25 +16,22 @@ import (
 
 var errGrypeTimeout = errors.New("grype timeout")
 
-// Request describes one Grype scan.
 type Request struct {
-	Source   string   // Grype source, e.g. "dir:/path", "docker:ref", "registry:ref", "file:/path"
-	Exclude  []string // --exclude globs (directory sources only)
-	Platform string   // --platform for image sources ("" = Grype's default: the scanning machine's)
-	RawJSON  string   // where Grype writes its JSON report
-	SBOM     string   // where Grype writes its CycloneDX SBOM
+	Source   string
+	Exclude  []string
+	Platform string
+	RawJSON  string
+	SBOM     string
 }
 
-// Runner runs a verified Grype binary isolated from project and user configuration.
 type Runner struct {
 	Binary     string
-	CacheDir   string        // Shearbolt cache; the vulnerability database lives in CacheDir/grype-db
-	Timeout    time.Duration // per invocation; default 15 minutes
-	Environ    []string      // parent environment, usually os.Environ()
-	NoDBUpdate bool          // true after importing a database archive
+	CacheDir   string
+	Timeout    time.Duration
+	Environ    []string
+	NoDBUpdate bool // true after importing a database archive
 }
 
-// Scan runs Grype once, writing the JSON report and the SBOM.
 func (r *Runner) Scan(ctx context.Context, req Request) error {
 	var err error
 	if req.RawJSON, err = filepath.Abs(req.RawJSON); err != nil {
@@ -63,7 +60,6 @@ func (r *Runner) Scan(ctx context.Context, req Request) error {
 	return r.run(ctx, args)
 }
 
-// ImportDB loads a Grype database archive into the cache.
 func (r *Runner) ImportDB(ctx context.Context, archive string) error {
 	archive, err := filepath.Abs(archive)
 	if err != nil {
@@ -76,7 +72,6 @@ func (r *Runner) run(ctx context.Context, args []string) error {
 	return r.runOutput(ctx, args, io.Discard)
 }
 
-// runOutput runs Grype with the isolated configuration, writing its stdout to stdout.
 func (r *Runner) runOutput(ctx context.Context, args []string, stdout io.Writer) error {
 	binary, err := filepath.Abs(r.Binary)
 	if err != nil {
@@ -149,7 +144,6 @@ func (r *Runner) configYAML(cacheDir string) []byte {
 	return out
 }
 
-// isolatedEnv drops GRYPE_*/SYFT_* settings and points XDG_CONFIG_HOME at the private work dir.
 func isolatedEnv(parent []string, work string) []string {
 	env := make([]string, 0, len(parent)+1)
 	for _, kv := range parent {
@@ -161,7 +155,6 @@ func isolatedEnv(parent []string, work string) []string {
 	return append(env, "XDG_CONFIG_HOME="+filepath.Join(work, "xdg"))
 }
 
-// tailBuffer keeps the last 8 KiB written to it.
 type tailBuffer struct{ buf []byte }
 
 func (t *tailBuffer) Write(p []byte) (int, error) {

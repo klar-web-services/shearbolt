@@ -14,10 +14,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Deterministic tests on the pinned database snapshot. Fixtures are grouped into one config per
-// test, because every scan re-imports the snapshot. Expectations are spec section 13's
-// "supported" matrix and, for advisories, Grype 0.121.2 on the pinned snapshot (2026-11-09).
-
 func TestVulnerableLockfilesBlock(t *testing.T) {
 	lockfiles := map[string]string{
 		"npm-vulnerable":  "package-lock.json",
@@ -81,8 +77,7 @@ func TestSourceWithoutLockfileIsAnError(t *testing.T) {
 	}
 }
 
-// Grype skips devDependencies for yarn and bun, so these lockfiles yield no packages. The scan
-// passes with a warning instead of failing as an unread lockfile.
+// Grype skips devDependencies for yarn and bun, so these lockfiles yield no packages.
 func TestDevOnlyLockfilesPassWithWarning(t *testing.T) {
 	names := []string{"yarn-dev-only", "bun-dev-only"}
 	code, r := snapshotScan(t, sourceTarget(names[0], "projects", names[0])+sourceTarget(names[1], "projects", names[1]))
@@ -165,13 +160,12 @@ func TestRustBinaries(t *testing.T) {
 	})
 }
 
-// With no source target covering the lockfile, the fallback scans the lockfile itself.
 func TestRustFallbackScansTheLockfileItself(t *testing.T) {
 	code, r := snapshotScan(t, fmt.Sprintf("  - name: cli\n    file: %s\n    lockfileFallback: %s\n", quoted("rust", "bin", "demo-plain-linux-amd64"), quoted("rust", "demo", "Cargo.lock")))
 	if code != 1 || !hasCode(r.Warnings, "NOT_AUDITABLE", "cli") || !blocked(r, "cli", "smallvec", "1.6.0") {
 		t.Fatalf("exit = %d, warnings = %+v, errors = %+v, findings = %+v", code, r.Warnings, r.Errors, r.Findings)
 	}
-	raw := "raw/cli+lockfile.grype.json" // Plan 1: fallback raw files are named <target>+lockfile
+	raw := "raw/cli+lockfile.grype.json"
 	if !slices.Contains(target(r, "cli").Raw, raw) {
 		t.Errorf("target cli lists raw files %v, want %s", target(r, "cli").Raw, raw)
 	}

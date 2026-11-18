@@ -12,14 +12,9 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// cleanImage is gcr.io/distroless/static-debian12 pinned by digest (multi-arch index). Chosen on
-// 2026-11-09: the candidates distroless static, distroless base, busybox and alpine were to be
-// tried smallest first with `shearbolt scan --image` on the pinned snapshot under snapshotPolicy;
-// distroless static was the first and passed with exit 0, so the others were not needed.
+// cleanImage is gcr.io/distroless/static-debian12 pinned by digest (multi-arch index).
 const cleanImage = "gcr.io/distroless/static-debian12@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2"
 
-// composeTarget is a config target for a compose file with the given content, written into a temp
-// folder and referenced by absolute path.
 func composeTarget(t *testing.T, name, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "compose.yml")

@@ -17,20 +17,14 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// This file writes R6: a new shearbolt.yaml per selected project, or the missing targets
-// appended to an existing one, which is never rewritten otherwise.
-
-// configHeader is the first line of a generated shearbolt.yaml.
 const configHeader = "# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme"
 
-// configFile returns the repo-relative path of project p's shearbolt.yaml.
 func configFile(p plan.Project) string { return path.Join(p.Dir, "shearbolt.yaml") }
 
 // imageVar matches an image reference that is one variable, with or without a default:
 // ${SHEARBOLT_IMAGE:-web:local}. The CI sets that variable to the tag the job built.
 var imageVar = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}$`)
 
-// imageVarOf returns the variable of an image reference written as ${VAR:-default}, or "".
 func imageVarOf(image string) string {
 	if m := imageVar.FindStringSubmatch(image); m != nil {
 		return m[1]
@@ -38,10 +32,9 @@ func imageVarOf(image string) string {
 	return ""
 }
 
-// configChange plans project p's shearbolt.yaml for the planned targets (R6).
+// configChange plans project p's shearbolt.yaml for the planned targets.
 //
-//   - Without a file, it renders a new one: image targets, then file targets, then compose
-//     targets, then source, with COMPOSE_ADDED when it holds compose targets.
+//   - Without a file, it renders a new one.
 //   - With one, it appends the targets that are not present after the last item of the block
 //     targets sequence, and touches nothing else. A planned target is present when an existing
 //     target has the same kind and value (its name is then used everywhere), or the same name:
@@ -76,7 +69,6 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 				file, reason, strings.Join(targetItems(listed, "  "), "\n")),
 			File: file,
 		}}
-		// Compose targets left out of the snippet get their own note each.
 		for _, t := range planned {
 			if t.Kind() == "compose" && !slices.ContainsFunc(listed, func(l config.Target) bool { return l.Name == t.Name }) {
 				notes = append(notes, composeNotGated(t, file))
@@ -218,9 +210,6 @@ func configChange(r plan.Repo, p plan.Project, planned []config.Target) (change 
 	}, merged, names, vars, notes
 }
 
-// editableTargets parses an existing shearbolt.yaml the way configChange edits it: the document,
-// its block-style targets list and the targets in that list. reason says why configChange cannot
-// edit the file, and is "" when it can.
 func editableTargets(src []byte) (doc *yamledit.Doc, seq *yaml.Node, existing []config.Target, reason string) {
 	doc, err := yamledit.Parse(src)
 	if err != nil {
@@ -279,8 +268,6 @@ func normalizeTargets(ts []config.Target) []config.Target {
 	return out
 }
 
-// sortTargets returns ts in R6 order: image targets, then dir and file targets, then compose
-// targets, then source, keeping the order within each kind.
 func sortTargets(ts []config.Target) []config.Target {
 	rank := map[string]int{"image": 0, "dir": 1, "file": 2, "compose": 3, "source": 4}
 	out := slices.Clone(ts)
@@ -296,8 +283,6 @@ func addVars(vars map[string]string, ts []config.Target) {
 	}
 }
 
-// sameValue reports whether two targets scan the same thing: the same kind and value. Paths are
-// compared cleaned, so ./target/release/demo matches target/release/demo.
 func sameValue(a, b config.Target) bool {
 	if a.Kind() != b.Kind() || a.Kind() == "" {
 		return false
@@ -308,7 +293,6 @@ func sameValue(a, b config.Target) bool {
 	return path.Clean(a.Ref()) == path.Clean(b.Ref())
 }
 
-// uniqueName returns name, or name-2, name-3, ... when it is taken, and marks the result taken.
 func uniqueName(name string, taken map[string]bool) string {
 	n := name
 	for k := 2; taken[n]; k++ {
@@ -318,8 +302,7 @@ func uniqueName(name string, taken map[string]bool) string {
 	return n
 }
 
-// renderConfig renders a new shearbolt.yaml (R6) with targets in the given order. No policy or
-// exceptions: the defaults apply.
+// No policy or exceptions: the defaults apply.
 func renderConfig(p plan.Project, targets []config.Target) string {
 	project := p.Name
 	if strings.TrimSpace(project) == "" {
@@ -330,7 +313,6 @@ func renderConfig(p plan.Project, targets []config.Target) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// targetItems renders targets as block sequence items with the dash at indent.
 func targetItems(ts []config.Target, indent string) []string {
 	var out []string
 	for _, t := range ts {
@@ -345,7 +327,6 @@ func targetItems(ts []config.Target, indent string) []string {
 	return out
 }
 
-// targetLines renders one target's keys, relative to its item's content column.
 func targetLines(t config.Target) []string {
 	out := []string{"name: " + yamledit.Scalar(t.Name)}
 	switch t.Kind() {
@@ -373,8 +354,6 @@ func targetLines(t config.Target) []string {
 	return out
 }
 
-// flowScalar renders s for a flow sequence: plain when Scalar keeps it plain and it holds no
-// flow indicator, otherwise single-quoted.
 func flowScalar(s string) string {
 	if v := yamledit.Scalar(s); v != s || strings.ContainsAny(s, ",[]{}") {
 		if strings.HasPrefix(v, "\"") {
@@ -388,8 +367,6 @@ func flowScalar(s string) string {
 // targetName is config's pattern for target names.
 var targetName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-// readsBack reports whether out's targets decode to want, as config.Load would read them, with
-// valid and distinct names.
 func readsBack(out []byte, want []config.Target) bool {
 	var got struct {
 		Targets []config.Target `yaml:"targets"`
@@ -412,9 +389,6 @@ func readsBack(out []byte, want []config.Target) bool {
 	return true
 }
 
-// shortName is project p's target name (R6): its name without an npm @scope/, lower-cased, with
-// characters outside [a-z0-9._-] replaced by "-" and leading or trailing separators trimmed;
-// "app" when nothing is left.
 func shortName(p plan.Project) string {
 	n := p.Name
 	if strings.HasPrefix(n, "@") {
@@ -429,7 +403,6 @@ func shortName(p plan.Project) string {
 	return n
 }
 
-// sanitizeName lower-cases s and replaces every character outside [a-z0-9._-] with "-".
 func sanitizeName(s string) string {
 	var b strings.Builder
 	for _, c := range strings.ToLower(s) {
@@ -442,7 +415,6 @@ func sanitizeName(s string) string {
 	return b.String()
 }
 
-// composeNotGated is the COMPOSE_NOT_GATED note for compose target t, which file has no target for.
 func composeNotGated(t config.Target, file string) plan.Note {
 	return plan.Note{
 		Code: "COMPOSE_NOT_GATED",

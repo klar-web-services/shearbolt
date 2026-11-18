@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// earlyStop is a run step that can stop before its build, as in design §3.1.
+// earlyStop is a run step that can stop before its build.
 const earlyStop = "      - name: Ship\n" +
 	"        run: |\n" +
 	"          set -eu\n" +
@@ -32,17 +32,12 @@ const continuedRun = "        run: |\n" +
 	"          set -eu\n" +
 	"          docker push ghcr.io/acme/edge:latest\n"
 
-// Design §3.2: a split step that can stop before its build sets setup's marker right after the
-// build, and its continued step runs only when the marker is set.
 func TestGitHubEarlyStopMarker(t *testing.T) {
 	want := head + earlyStopEdited + lines("        if: steps.shearbolt-build.outputs.shearbolt-reached != ''") + continuedRun
 	_, got := result(t, npmRepo("edge", head+earlyStop, nil))
 	wantWorkflow(t, got, want)
-	// The root project's gate, which scans only that image, is skipped too: see
-	// TestGitHubEarlyStopSkipsGate.
 }
 
-// The continued step keeps the step's own if:, unwrapped, in front of the marker.
 func TestGitHubEarlyStopKeepsStepIf(t *testing.T) {
 	for _, cond := range []string{"github.ref == 'refs/heads/main'", "${{ github.ref == 'refs/heads/main' }}"} {
 		step := strings.Replace(earlyStop, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
@@ -57,7 +52,7 @@ func TestGitHubEarlyStopKeepsStepIf(t *testing.T) {
 
 // A copied if: with a status function needs no success() && (...) wrap of its own: the
 // continued step's success() && (<copied>) && <marker> is already safe, and a re-run leaves it
-// alone (R8) instead of wrapping it as a push step that would run after a failed gate.
+// alone instead of wrapping it as a push step that would run after a failed gate.
 func TestGitHubEarlyStopStatusIfSurvivesReRun(t *testing.T) {
 	for cond, bare := range map[string]string{"${{ !cancelled() }}": "!cancelled()", "always()": "always()"} {
 		step := strings.Replace(earlyStop, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
@@ -105,7 +100,6 @@ func TestGitHubEarlyStopExec(t *testing.T) {
 	))
 }
 
-// A stop after the split point does not end part 1, so the split gets no marker.
 func TestGitHubStopAfterSplitNoMarker(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+lines(
 		"      - name: Ship",
@@ -131,7 +125,6 @@ func TestGitHubStopAfterSplitNoMarker(t *testing.T) {
 	))
 }
 
-// A source build (no image output) that can stop early gets the marker and an id as well.
 func TestGitHubEarlyStopSourceBuild(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - run: |",
@@ -153,13 +146,12 @@ func TestGitHubEarlyStopSourceBuild(t *testing.T) {
 }
 
 // An if: that mixes ${{ }} with other text is a non-empty string, which is always true, so it
-// cannot carry the marker: the job is left unchanged rather than continued on early stops.
+// cannot carry the marker.
 func TestGitHubEarlyStopMixedIfRefused(t *testing.T) {
 	step := strings.Replace(earlyStop, "        run: |\n", "        if: github.ref == ${{ env.REF }}\n        run: |\n", 1)
 	wantUnsupported(t, npmRepo("edge", head+step, nil), "mixed if: on an early-stop step", "cannot be combined with the check that the build ran")
 }
 
-// shipWith is a run step that runs pre before its build and post after it.
 func shipWith(pre, post string) string {
 	return "      - name: Ship\n        run: |\n" + indent(pre, "          ") +
 		"          docker build -t ghcr.io/acme/edge:latest .\n" + indent(post, "          ")
@@ -187,20 +179,15 @@ const (
 	pipeMsg    = "runs only under a condition or in a pipeline, so a split step cannot re-create its state"
 )
 
-// CS-1 (design §4): a value computed before the build that nothing after it reads does not
-// block the split, and the continued step does not compute it again.
 func TestGitHubUnreadSubstitutionDropped(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+shipWith(pulled, pushLatest), nil))
 	wantWorkflow(t, got, head+shipEdited(pulled)+pushRun)
 }
 
-// CS-2: a value that the rest of the step reads fails the split with today's message.
 func TestGitHubReadSubstitutionRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("edge", head+shipWith(pulled, pushLatest+"\necho \"$live\""), nil), "direct read", substMsg)
 }
 
-// Reads that never name the variable directly, or name it only in arithmetic or a test, count
-// as reads too, and so do an export, readonly or allexport anywhere around it.
 func TestGitHubIndirectReadsRefused(t *testing.T) {
 	for why, c := range map[string]struct{ pre, post string }{
 		"arithmetic":           {pulled, "(( live )) || ./deploy.sh"},
@@ -231,8 +218,6 @@ func TestGitHubIndirectReadsRefused(t *testing.T) {
 	}
 }
 
-// An assignment inside an if that nothing after the build reads is left out of the continued
-// step; one that is read fails with today's message about conditionals.
 func TestGitHubUnreadConditionalAssignmentDropped(t *testing.T) {
 	cond := `if [ -n "$X" ]; then n=1; fi`
 	_, got := result(t, npmRepo("edge", head+shipWith(cond, pushLatest), nil))
@@ -244,7 +229,6 @@ func TestGitHubUnreadConditionalAssignmentDropped(t *testing.T) {
 	wantUnsupported(t, npmRepo("edge", head+shipWith(and, pushLatest+"\necho \"$n\""), nil), "read assignment after &&", pipeMsg)
 }
 
-// A plain assignment is still carried, read or not.
 func TestGitHubPlainAssignmentCarried(t *testing.T) {
 	_, got := result(t, npmRepo("edge", head+shipWith("FOO=bar", pushLatest+"\necho \"$FOO\""), nil))
 	wantWorkflow(t, got, head+shipEdited("FOO=bar")+lines(
@@ -255,8 +239,6 @@ func TestGitHubPlainAssignmentCarried(t *testing.T) {
 	))
 }
 
-// An assignment in a pipeline or in the background still fails, read or not, and so does a
-// state change inside an if that assigns no name.
 func TestGitHubUnsplittableAssignmentsStillRefused(t *testing.T) {
 	for why, c := range map[string]struct{ pre, msg string }{
 		"pipeline":   {"n=$(date) | cat", pipeMsg},
@@ -267,9 +249,6 @@ func TestGitHubUnsplittableAssignmentsStillRefused(t *testing.T) {
 	}
 }
 
-// Names that may be inherited environment variables count as read, so their assignments are
-// never dropped: a name with no lowercase letter, or a key of the workflow's, the job's or the
-// step's env:. A child process reads them without naming them.
 func TestGitHubInheritedAssignmentsRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("edge", head+shipWith("PATH=$(go env GOPATH)/bin:$PATH", pushLatest+"\ngolangci-lint run"), nil), "PATH", substMsg)
 	jobEnv := strings.Replace(head, "    steps:\n", "    env:\n      IMAGE: ghcr.io/acme/edge\n    steps:\n", 1)
@@ -280,10 +259,6 @@ func TestGitHubInheritedAssignmentsRefused(t *testing.T) {
 
 const hiddenMsg = "assigns a variable inside an expansion or arithmetic, which a split step cannot re-create"
 
-// A command before the split point that assigns a variable inside an expansion, in arithmetic
-// or through a builtin fails the split unless it is carried, whatever command it is and whether
-// or not the rest reads the name: the split step would neither carry nor re-create the
-// assignment.
 func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
 	for _, pre := range []string{
 		`if [ -n "$X" ]; then x=${y:=v}; fi`,
@@ -320,13 +295,10 @@ func TestGitHubHiddenAssignmentsRefused(t *testing.T) {
 	} {
 		wantUnsupported(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil), pre, hiddenMsg)
 	}
-	// The build itself is before the split point too.
 	step := strings.Replace(shipWith("echo pre", pushLatest), "-t ghcr.io/acme/edge:latest", `-t "ghcr.io/acme/edge:${TAG:=latest}"`, 1)
 	wantUnsupported(t, npmRepo("edge", head+step, nil), "assignment in the build", hiddenMsg)
 }
 
-// Arithmetic and expansions that only read are fine, and an unread $((…)) assignment is still
-// left out.
 func TestGitHubReadOnlyArithmeticSplits(t *testing.T) {
 	for _, pre := range []string{
 		"echo $((a+1))",
@@ -340,13 +312,11 @@ func TestGitHubReadOnlyArithmeticSplits(t *testing.T) {
 		_, got := result(t, npmRepo("edge", head+shipWith(pre, pushLatest), nil))
 		wantWorkflow(t, got, head+shipEdited(pre)+pushRun)
 	}
-	// On the build line too.
 	arg := "docker build --build-arg N=$(( $(git rev-list --count HEAD) + 100 )) -t"
 	_, got := result(t, npmRepo("edge", head+strings.Replace(shipWith("echo pre", pushLatest), "docker build -t", arg, 1), nil))
 	wantWorkflow(t, got, head+strings.Replace(shipEdited("echo pre"), "docker build -t", arg, 1)+pushRun)
 }
 
-// A carried command re-runs in the continued step, so it re-creates its own hidden assignment.
 func TestGitHubCarriedHiddenAssignmentStaysCarried(t *testing.T) {
 	pre := "X=${X:=d}\nexport REGISTRY=${REGISTRY:=ghcr.io}\nreg=${reg:=ghcr.io}"
 	_, got := result(t, npmRepo("edge", head+shipWith(pre, pushLatest+"\necho \"$X $REGISTRY\""), nil))
@@ -372,7 +342,6 @@ func TestGitHubPart1EnvWritesRefused(t *testing.T) {
 	}
 }
 
-// A shell run with allexport exports every assignment, so every name counts as read.
 func TestGitHubAllexportShellRefused(t *testing.T) {
 	step := strings.Replace(shipWith(pulled, pushLatest), "        run: |\n", "        shell: bash -ae {0}\n        run: |\n", 1)
 	wantUnsupported(t, npmRepo("edge", head+step, nil), "shell: bash -ae", substMsg)
@@ -380,8 +349,6 @@ func TestGitHubAllexportShellRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("edge", defaults+shipWith(pulled, pushLatest), nil), "defaults shell allexport", substMsg)
 }
 
-// A lowercase name may be inherited too: from an env: setup cannot read, the job's container
-// env:, a $GITHUB_ENV write of an earlier step, or as a proxy variable.
 func TestGitHubMoreInheritedNamesRefused(t *testing.T) {
 	ship := shipWith(pulled, pushLatest)
 	withJobEnv := func(env string) string {
@@ -400,7 +367,6 @@ func TestGitHubMoreInheritedNamesRefused(t *testing.T) {
 	} {
 		wantUnsupported(t, npmRepo("edge", workflow, map[string]string{"vars.env": "A=1\n"}), why, substMsg)
 	}
-	// A container with only an image, and a $GITHUB_ENV write of another name, change nothing.
 	image := strings.Replace(head, "    steps:\n", "    container: node:22\n    steps:\n", 1)
 	_, got := result(t, npmRepo("edge", image+ship, nil))
 	wantWorkflow(t, got, image+shipEdited(pulled)+pushRun)

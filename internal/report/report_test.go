@@ -118,7 +118,6 @@ func TestAppendGitHubSummaryTruncates(t *testing.T) {
 	}
 }
 
-// lodashRun is blocked by the four lodash findings of testdata/projects/npm-vulnerable.
 func lodashRun() *model.Run {
 	r := blockedRun()
 	r.Findings = append(lodashFindings(), r.Findings[1])
@@ -207,8 +206,6 @@ func TestTextUpgradeLineStripsControlCharacters(t *testing.T) {
 	}
 }
 
-// The renderers compute upgrades from the blocking findings only: an excepted finding with a
-// higher fix and a warned finding without a fix change neither the version nor the count.
 func TestUpgradeLineIgnoresExceptedAndWarned(t *testing.T) {
 	r := lodashRun()
 	excepted := fixed("npm", "lodash", "4.17.20", "9.0.0")

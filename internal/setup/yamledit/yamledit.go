@@ -2,9 +2,7 @@
 // never by re-serializing, so comments, anchors, quoting and every untouched line stay as written.
 //
 // Lines are 1-based, as in yaml.v3. Columns are 0-based and count characters (runes), as
-// yaml.v3 does; they double as indentation widths. Edits are queued and applied by Result,
-// which also checks that the edited file still parses; an edit that overlaps an earlier one is
-// refused when it is queued.
+// yaml.v3 does; they double as indentation widths.
 package yamledit
 
 import (
@@ -22,40 +20,33 @@ import (
 )
 
 var (
-	// ErrMultiDoc is returned for a file with more than one YAML document.
 	ErrMultiDoc = errors.New("the YAML file has more than one document")
 	// ErrLineBreak is returned for a file with a line break other than \n or \r\n (a lone \r,
 	// U+0085, U+2028 or U+2029). yaml.v3 counts those as lines, so its positions would not
 	// match the file's lines.
 	ErrLineBreak = errors.New("the YAML file has line breaks other than \\n and \\r\\n")
-	// ErrFlowStyle is returned when an edit would have to change a flow-style mapping or sequence.
 	ErrFlowStyle = errors.New("flow-style YAML ({...} or [...]) cannot be edited in place")
-	// ErrOverlap is returned for an edit that overlaps an edit queued earlier.
-	ErrOverlap = errors.New("overlapping YAML edits")
-	// ErrLastEntry is returned when DeleteEntry would empty a mapping; delete its parent entry instead.
+	ErrOverlap   = errors.New("overlapping YAML edits")
 	ErrLastEntry = errors.New("cannot delete the only entry of a mapping")
-	// ErrAnchor is returned when an edit would replace or delete text that defines an anchor.
-	ErrAnchor = errors.New("the edit would remove an anchor")
+	ErrAnchor    = errors.New("the edit would remove an anchor")
 	// ErrDuplicateKey is returned by Result for a mapping with the same key twice; GitHub and
 	// config.Load reject those, although yaml.v3 accepts them.
 	ErrDuplicateKey = errors.New("a mapping has the same key twice")
-	// ErrEncoding is returned for a file that is not valid UTF-8, such as a UTF-16 file.
-	ErrEncoding = errors.New("the YAML file is not valid UTF-8; save it as UTF-8 (UTF-16 is not supported)")
+	ErrEncoding     = errors.New("the YAML file is not valid UTF-8; save it as UTF-8 (UTF-16 is not supported)")
 )
 
-// bom is the UTF-8 byte order mark. yaml.v3 skips it, so Parse strips it before splitting lines
-// (positions on line 1 then match) and Result puts it back.
+// yaml.v3 skips it, so Parse strips it before splitting lines (positions on line 1 then match)
+// and Result puts it back.
 const bom = "\xef\xbb\xbf"
 
-// Doc is a parsed YAML file plus its queued edits.
 type Doc struct {
-	doc    *yaml.Node // the document node; nil for a file without content
-	src    []byte     // the file as given, BOM included
+	doc    *yaml.Node
+	src    []byte // the file as given, BOM included
 	bom    bool
-	lines  []string // each line without its line ending (and line 1 without the BOM)
-	ends   []string // each line's ending as written; "" for a last line without one
-	eol    string   // line ending for inserted lines
-	docEnd int      // last line of the document: before a "..." end marker, else the last line
+	lines  []string
+	ends   []string
+	eol    string
+	docEnd int // last line of the document: before a "..." end marker, else the last line
 	parent map[*yaml.Node]*yaml.Node
 	edits  []edit
 }
@@ -67,8 +58,6 @@ type edit struct {
 
 func (e edit) insert() bool { return e.last < e.first }
 
-// Parse parses src, which must be UTF-8, hold at most one YAML document and use only \n or
-// \r\n line breaks. A leading BOM is allowed and kept.
 func Parse(src []byte) (*Doc, error) {
 	d := &Doc{src: src, eol: "\n", parent: map[*yaml.Node]*yaml.Node{}}
 	body := src
@@ -138,7 +127,6 @@ func (d *Doc) index(n *yaml.Node) {
 	}
 }
 
-// Root returns the document's top-level node, or nil for a file without content.
 func (d *Doc) Root() *yaml.Node {
 	if d.doc == nil || len(d.doc.Content) == 0 {
 		return nil
@@ -146,13 +134,10 @@ func (d *Doc) Root() *yaml.Node {
 	return d.doc.Content[0]
 }
 
-// Parent returns the container n is in (a mapping, sequence or the document node).
 func (d *Doc) Parent(n *yaml.Node) *yaml.Node { return d.parent[n] }
 
-// EOL returns the line ending used for inserted lines: "\r\n" when the file uses CRLF.
 func (d *Doc) EOL() string { return d.eol }
 
-// NumLines returns the number of lines in the original file.
 func (d *Doc) NumLines() int { return len(d.lines) }
 
 // Line returns line n of the original file without its line ending (and line 1 without a BOM).
@@ -163,7 +148,7 @@ func (d *Doc) Line(n int) string {
 	return d.lines[n-1]
 }
 
-// offset returns the byte offset of node n in its line. yaml.v3 columns count runes.
+// yaml.v3 columns count runes.
 func (d *Doc) offset(n *yaml.Node) int {
 	line, col := d.Line(n.Line), n.Column-1
 	for i := range line {
@@ -175,12 +160,10 @@ func (d *Doc) offset(n *yaml.Node) int {
 	return len(line)
 }
 
-// column returns the rune column of byte offset i in line.
 func column(line string, i int) int { return utf8.RuneCountInString(line[:min(i, len(line))]) }
 
-// Get follows path from n: mapping keys and sequence indexes, given as strings. Aliases are
-// resolved, so edits on the result land at the anchor. It returns nil when the path is missing.
-// Merge keys (<<) are not resolved.
+// Aliases are resolved, so edits on the result land at the anchor. Merge keys (<<) are not
+// resolved.
 func (d *Doc) Get(n *yaml.Node, path ...string) *yaml.Node {
 	n = resolve(n)
 	for _, p := range path {
@@ -236,7 +219,6 @@ func findKey(m *yaml.Node, key string) int {
 	return -1
 }
 
-// inFlow reports whether n is, or is inside, a flow-style mapping or sequence.
 func (d *Doc) inFlow(n *yaml.Node) bool {
 	for ; n != nil; n = d.parent[n] {
 		if (n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode) && n.Style&yaml.FlowStyle != 0 {
@@ -246,7 +228,6 @@ func (d *Doc) inFlow(n *yaml.Node) bool {
 	return false
 }
 
-// hasAnchor reports whether n or anything inside it defines an anchor (aliases are not followed).
 func hasAnchor(n *yaml.Node) bool {
 	if n == nil {
 		return false
@@ -279,10 +260,7 @@ func (d *Doc) sequence(s *yaml.Node) (*yaml.Node, error) {
 	return s, nil
 }
 
-// ---- columns ----
-
-// KeyColumn returns the indentation of mapping m's keys, taken from its first key. The
-// mapping's own position is never used: yaml.v3 reports an anchor or tag there.
+// The mapping's own position is never used: yaml.v3 reports an anchor or tag there.
 func (d *Doc) KeyColumn(m *yaml.Node) (int, error) {
 	m, err := d.mapping(m)
 	if err != nil {
@@ -291,8 +269,6 @@ func (d *Doc) KeyColumn(m *yaml.Node) (int, error) {
 	return m.Content[0].Column - 1, nil
 }
 
-// contentNode is the node whose position starts a sequence item's content: a mapping's first
-// key, otherwise the item itself.
 func contentNode(n *yaml.Node) *yaml.Node {
 	if n.Kind == yaml.MappingNode && n.Style&yaml.FlowStyle == 0 && len(n.Content) > 0 {
 		return n.Content[0]
@@ -305,7 +281,6 @@ func emptyNull(n *yaml.Node) bool {
 	return n.Kind == yaml.ScalarNode && n.Tag == "!!null" && n.Value == "" && n.Style == 0
 }
 
-// ContentColumn returns the column where sequence s's items start (after "- ").
 func (d *Doc) ContentColumn(s *yaml.Node) (int, error) {
 	s, err := d.sequence(s)
 	if err != nil {
@@ -321,7 +296,6 @@ func (d *Doc) contentColumn(s *yaml.Node) int {
 	return d.dashColumn(s) + 2
 }
 
-// DashColumn returns the column of sequence s's dashes, from the "-" before its first item.
 func (d *Doc) DashColumn(s *yaml.Node) (int, error) {
 	s, err := d.sequence(s)
 	if err != nil {
@@ -353,7 +327,6 @@ func (d *Doc) dashColumn(s *yaml.Node) int {
 	return max(col-2, 0)
 }
 
-// dashLine returns the line of item i's dash.
 func (d *Doc) dashLine(s *yaml.Node, i int) int {
 	dc := d.dashColumn(s)
 	line := contentNode(s.Content[i]).Line
@@ -369,8 +342,7 @@ func (d *Doc) dashLine(s *yaml.Node, i int) int {
 	return line
 }
 
-// parentIndent returns the indentation a block scalar n must exceed: its mapping's key column,
-// or its sequence's dash column; -1 at the top level.
+// parentIndent returns the indentation a block scalar n must exceed.
 func (d *Doc) parentIndent(n *yaml.Node) int {
 	switch p := d.parent[n]; {
 	case p == nil || p.Kind == yaml.DocumentNode:
@@ -383,8 +355,6 @@ func (d *Doc) parentIndent(n *yaml.Node) int {
 	return -1
 }
 
-// IndentUnit returns the smallest positive indentation step between a key and its block
-// mapping or sequence value, or 2 when there is none.
 func IndentUnit(d *Doc) int {
 	unit := 0
 	var walk func(n *yaml.Node)
@@ -421,10 +391,6 @@ func IndentUnit(d *Doc) int {
 	return unit
 }
 
-// ---- spans ----
-
-// ItemStart returns the first line of item i: its dash line, moved up over directly preceding
-// comment lines indented less than the item's content column.
 func (d *Doc) ItemStart(s *yaml.Node, i int) (int, error) {
 	s, err := d.sequence(s)
 	if err != nil {
@@ -441,8 +407,6 @@ func (d *Doc) ItemStart(s *yaml.Node, i int) (int, error) {
 	return l, nil
 }
 
-// ItemEnd returns the last line of item i: the line before item i+1's dash line, or the
-// sequence's end, trimmed back over blank lines and comments at or left of the dash column.
 func (d *Doc) ItemEnd(s *yaml.Node, i int) (int, error) {
 	s, err := d.sequence(s)
 	if err != nil {
@@ -454,8 +418,6 @@ func (d *Doc) ItemEnd(s *yaml.Node, i int) (int, error) {
 	return d.itemEnd(s, i), nil
 }
 
-// EntryEnd returns the last line of key's entry in m: the line before the next key, or the
-// mapping's end, trimmed back over blank lines and comments at or left of the key column.
 func (d *Doc) EntryEnd(m *yaml.Node, key string) (int, error) {
 	m, err := d.mapping(m)
 	if err != nil {
@@ -501,7 +463,6 @@ func (d *Doc) keepFloor(n *yaml.Node) int {
 	return last
 }
 
-// end returns the last line of node n: its parent entry's or item's end, or the document's.
 func (d *Doc) end(n *yaml.Node) int {
 	switch p := d.parent[n]; {
 	case p == nil || p.Kind == yaml.DocumentNode:
@@ -522,7 +483,6 @@ func (d *Doc) end(n *yaml.Node) int {
 	return d.docEnd
 }
 
-// trim moves end up over blank lines and comment lines at or left of col, but not above start.
 func (d *Doc) trim(end, col, start int) int {
 	end = min(end, len(d.lines))
 	for end > start {
@@ -535,15 +495,10 @@ func (d *Doc) trim(end, col, start int) int {
 	return max(end, start)
 }
 
-// ---- edits ----
-
-// InsertBefore queues lines to be inserted before line (len+1 appends).
 func (d *Doc) InsertBefore(line int, lines []string) error { return d.queue(line, line-1, lines) }
 
-// InsertAfter queues lines to be inserted after line (0 inserts at the top).
 func (d *Doc) InsertAfter(line int, lines []string) error { return d.queue(line+1, line, lines) }
 
-// ReplaceLines queues lines first..last to be replaced by lines (nil deletes them).
 func (d *Doc) ReplaceLines(first, last int, lines []string) error {
 	if last < first {
 		return fmt.Errorf("yamledit: empty line range %d-%d", first, last)
@@ -570,9 +525,8 @@ func (d *Doc) queue(first, last int, lines []string) error {
 	return nil
 }
 
-// overlaps reports whether two edits touch the same text. Inserts at the same point do not
-// overlap; they are applied in the order they were queued. An insert at either edge of a
-// replaced range does not overlap it.
+// Inserts at the same point do not overlap; they are applied in the order they were queued.
+// An insert at either edge of a replaced range does not overlap it.
 func overlaps(a, b edit) bool {
 	switch {
 	case a.insert() && b.insert():
@@ -585,11 +539,8 @@ func overlaps(a, b edit) bool {
 	return a.first <= b.last && b.first <= a.last
 }
 
-// Checkpoint returns a mark for Rollback: the number of edits queued so far.
 func (d *Doc) Checkpoint() int { return len(d.edits) }
 
-// Rollback drops every edit queued after checkpoint cp, so a caller can give up a group of
-// edits (one CI job's, say) and keep the others.
 func (d *Doc) Rollback(cp int) {
 	if cp >= 0 && cp < len(d.edits) {
 		d.edits = d.edits[:cp]
@@ -615,7 +566,7 @@ func (d *Doc) Result() ([]byte, error) {
 }
 
 // duplicateKey returns the second occurrence of a repeated mapping key under n (merge keys may
-// repeat), or nil. Aliases are not followed.
+// repeat), or nil.
 func duplicateKey(n *yaml.Node) *yaml.Node {
 	if n == nil {
 		return nil
@@ -692,12 +643,11 @@ func (d *Doc) bytes() []byte {
 	return b.Bytes()
 }
 
-// ReplaceScalar replaces scalar n with text, which may span several lines (a block scalar
-// rendering, for example from RenderScript). For a scalar on one line, the text from its column
-// to its end is replaced and anything after it, such as a trailing comment, is kept; further
-// lines of text follow that line. For a block scalar, the header and content lines are replaced,
-// keeping a comment after the header. A multi-line flow scalar is replaced up to its entry's end.
-// Anchored or tagged scalars are refused.
+// ReplaceScalar replaces scalar n with text, which may span several lines. For a scalar on one
+// line, the text from its column to its end is replaced and anything after it, such as a
+// trailing comment, is kept; further lines of text follow that line. For a block scalar, the
+// header and content lines are replaced, keeping a comment after the header. A multi-line flow
+// scalar is replaced up to its entry's end.
 func (d *Doc) ReplaceScalar(n *yaml.Node, text string) error {
 	first, last, lines, err := d.scalarLines(n, text)
 	if err != nil {
@@ -706,7 +656,6 @@ func (d *Doc) ReplaceScalar(n *yaml.Node, text string) error {
 	return d.ReplaceLines(first, last, lines)
 }
 
-// scalarLines returns the lines ReplaceScalar replaces (first..last) and their replacement.
 func (d *Doc) scalarLines(n *yaml.Node, text string) (int, int, []string, error) {
 	if n == nil || n.Kind != yaml.ScalarNode {
 		return 0, 0, nil, errors.New("yamledit: not a scalar")
@@ -734,7 +683,6 @@ func (d *Doc) scalarLines(n *yaml.Node, text string) (int, int, []string, error)
 	return line, max(d.end(n), line), append([]string{src[:col] + repl[0]}, repl[1:]...), nil
 }
 
-// singleLineEnd returns the byte offset after a flow scalar that ends on its first line.
 func (d *Doc) singleLineEnd(n *yaml.Node) (int, bool) {
 	src, col := d.Line(n.Line), d.offset(n)
 	switch {
@@ -770,8 +718,6 @@ func (d *Doc) singleLineEnd(n *yaml.Node) (int, bool) {
 	return 0, false
 }
 
-// blockHeader returns block scalar n's header: the indicator and its chomping and indentation
-// indicators ("|", "|-", ">2+").
 func (d *Doc) blockHeader(n *yaml.Node) string {
 	src := d.Line(n.Line)
 	col := d.offset(n)
@@ -820,8 +766,6 @@ func (d *Doc) block(n *yaml.Node) (int, int) {
 	return ci, last
 }
 
-// ReplaceScript re-renders script scalar n with value (RenderScript), keeping a block's content
-// indentation and using IndentUnit for a scalar that becomes a block.
 func (d *Doc) ReplaceScript(n *yaml.Node, value string) error {
 	first, last, lines, err := d.ScriptLines(n, value)
 	if err != nil {
@@ -830,9 +774,6 @@ func (d *Doc) ReplaceScript(n *yaml.Node, value string) error {
 	return d.ReplaceLines(first, last, lines)
 }
 
-// ScriptLines returns what ReplaceScript would queue, without queuing it: the lines first..last
-// it replaces and their replacement. A caller can then change those lines (for example, insert a
-// key before a script that shares its line with a sequence dash) and queue them itself.
 func (d *Doc) ScriptLines(n *yaml.Node, value string) (first, last int, lines []string, err error) {
 	if n == nil || n.Kind != yaml.ScalarNode {
 		return 0, 0, nil, errors.New("yamledit: not a scalar")
@@ -847,11 +788,7 @@ func (d *Doc) ScriptLines(n *yaml.Node, value string) (first, last int, lines []
 	return d.scalarLines(n, strings.Join(RenderScript(value, n.Style, keyIndent, content), "\n"))
 }
 
-// SetKey sets key in mapping m to value, which is raw YAML: pass Scalar(v) for a string. An
-// existing scalar value is replaced in place (keeping a trailing comment) when value is one line;
-// otherwise the whole entry is re-rendered, which is refused if it would remove an anchor. A new
-// key is inserted after entry after (after the last entry when after is ""; an error when after
-// is missing) at the mapping's key column.
+// SetKey sets key in mapping m to value, which is raw YAML: pass Scalar(v) for a string.
 //
 // The first line of value goes on the key's line; further lines are indented relative to the key
 // column, so "\n  a: 1" renders a nested mapping.
@@ -885,9 +822,7 @@ func (d *Doc) SetKey(m *yaml.Node, key, value, after string) error {
 }
 
 // keyText returns key node k as written, so a re-rendered entry keeps its quoting: a quoted
-// "on" must stay quoted, because YAML 1.1 parsers such as GitHub's read a plain on as true. Only
-// a plain or quoted key on its own line (after indentation and sequence dashes) is accepted; an
-// explicit (?) or tagged key is refused.
+// "on" must stay quoted, because YAML 1.1 parsers such as GitHub's read a plain on as true.
 func (d *Doc) keyText(k *yaml.Node) (string, error) {
 	src, col := d.Line(k.Line), d.offset(k)
 	if strings.Trim(src[:col], " \t-") == "" {
@@ -920,9 +855,9 @@ func renderEntry(prefix, key, value string, kc int) []string {
 	return out
 }
 
-// DeleteEntry removes key's entry from mapping m; a missing key is not an error. It refuses to
-// delete a mapping's only entry (ErrLastEntry), an entry that defines an anchor (ErrAnchor), and
-// a key that shares its line with a sequence dash, because each would break the YAML around it.
+// DeleteEntry refuses to delete a mapping's only entry (ErrLastEntry), an entry that defines an
+// anchor (ErrAnchor), and a key that shares its line with a sequence dash, because each would
+// break the YAML around it.
 func (d *Doc) DeleteEntry(m *yaml.Node, key string) error {
 	m, err := d.mapping(m)
 	if err != nil {
@@ -945,9 +880,6 @@ func (d *Doc) DeleteEntry(m *yaml.Node, key string) error {
 	return d.ReplaceLines(k.Line, d.entryEnd(m, i), nil)
 }
 
-// InsertItem inserts a new item after item after (-1: before the first item, above its head
-// comments). itemLines are the item's lines relative to the content column: the first goes after
-// "- ", the others are indented to the content column.
 func (d *Doc) InsertItem(s *yaml.Node, after int, itemLines []string) error {
 	s, err := d.sequence(s)
 	if err != nil {
@@ -978,15 +910,12 @@ func (d *Doc) InsertItem(s *yaml.Node, after int, itemLines []string) error {
 	return d.InsertAfter(d.itemEnd(s, after), out)
 }
 
-// ---- line helpers ----
-
 func indent(s string) int { return len(s) - len(strings.TrimLeft(s, " ")) }
 
 func blank(s string) bool { return strings.TrimSpace(s) == "" }
 
 func isComment(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " \t"), "#") }
 
-// commentStart returns the index of the whitespace before a " #" comment in s, or -1.
 func commentStart(s string) int {
 	for i := 1; i < len(s); i++ {
 		if s[i] == '#' && (s[i-1] == ' ' || s[i-1] == '\t') {

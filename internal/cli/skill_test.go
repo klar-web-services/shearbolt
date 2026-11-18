@@ -84,7 +84,6 @@ func TestSkillInstallGlobal(t *testing.T) {
 	if want := "Installed the Shearbolt skill in " + installed + ". In Claude Code, type /shearbolt setup.\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
 	}
-	// --global, which 1.0.0 needed for this, still means the user install.
 	if code, out, _ := skillCmd(t, "install", "--global"); code != 0 || out != "The Shearbolt skill in "+installed+" is up to date.\n" {
 		t.Errorf("--global: exit = %d, stdout = %q", code, out)
 	}
@@ -185,8 +184,7 @@ func TestSkillInstallRefusesForeignSkill(t *testing.T) {
 	}
 }
 
-// The commands the skill documents, as whole lines in SKILL.md. The scripted flows below run
-// exactly these, with each `--answer 'ID=VALUE'` passed as the shell would.
+// The commands the skill documents, as whole lines in SKILL.md.
 const (
 	skillPlanLine  = "shearbolt setup --plan --json"
 	skillApplyLine = "shearbolt setup --apply --json --answer 'ID=VALUE' ..."
@@ -199,7 +197,6 @@ var skillRule = []string{
 	"- any question ID in its `unlessChosen` list has a chosen value equal to its `project`.",
 }
 
-// documented returns the setup flags of a documented command line, up to its first --answer.
 func documented(line string) []string {
 	words := strings.Fields(line)[2:] // drop "shearbolt setup"
 	if i := slices.Index(words, "--answer"); i >= 0 {
@@ -208,10 +205,6 @@ func documented(line string) []string {
 	return words
 }
 
-// applicable is the skill's section 3.3 rule for a question without an answer: its project, if
-// set, is selected, and no question in its unlessChosen list has a chosen value equal to that
-// project. chosen holds the values chosen so far (answers, or accepted defaults); without a
-// projects question every project is selected.
 func applicable(q plan.Question, chosen map[string]string) bool {
 	if q.Project != "" {
 		if sel, ok := chosen["projects"]; ok && !slices.Contains(strings.Split(sel, ","), q.Project) {
@@ -226,9 +219,6 @@ func applicable(q plan.Question, chosen map[string]string) bool {
 	return true
 }
 
-// skillAnswers walks p's questions in order as the skill does: a question that already has an
-// answer keeps it, an applicable one is asked (pick returns the user's value), others are
-// skipped. It returns every chosen value.
 func skillAnswers(p plan.Plan, pick func(plan.Question) string) map[string]string {
 	chosen := map[string]string{}
 	for _, q := range p.Questions {
@@ -242,7 +232,6 @@ func skillAnswers(p plan.Plan, pick func(plan.Question) string) map[string]strin
 	return chosen
 }
 
-// answerArgs renders chosen values as --answer arguments, in question order.
 func answerArgs(p plan.Plan, chosen map[string]string) []string {
 	var args []string
 	for _, q := range p.Questions {
@@ -253,8 +242,6 @@ func answerArgs(p plan.Plan, chosen map[string]string) []string {
 	return args
 }
 
-// fixtureAnswers reads testdata/setup/<name>/answers.txt: one id=value per line; blank lines and
-// # comments are ignored.
 func fixtureAnswers(t *testing.T, name string) map[string]string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(setupFixtures, name, "answers.txt"))
@@ -301,17 +288,13 @@ func setupPlan(t *testing.T, args ...string) (int, plan.Plan) {
 	return code, decodePlan(t, out)
 }
 
-// TestSkillSetupFlowFollowsTheSkill is AC-16: the skill's setup flow on Plan 2's monorepo
-// fixture gives Plan 2's golden result.
 func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := fixtureRepo(t, "monorepo")
 
-	// 1. Install the skill into the repository.
 	if code, _, errb := skillCmd(t, "install", "--project"); code != 0 {
 		t.Fatalf("skill install: exit = %d, stderr = %s", code, errb)
 	}
-	// 2. The installed skill documents the commands this test runs.
 	b, err := os.ReadFile(filepath.Join(dir, ".claude", "skills", "shearbolt", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -322,7 +305,6 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 			t.Fatalf("SKILL.md lacks the command line %q", l)
 		}
 	}
-	// ...the question rule that applicable implements, and never --yes.
 	for _, l := range skillRule {
 		if !slices.Contains(lines, l) {
 			t.Errorf("SKILL.md lacks the rule line %q", l)
@@ -336,7 +318,6 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	}
 	planArgs, applyArgs := documented(skillPlanLine), documented(skillApplyLine)
 
-	// 3. The plan writes nothing.
 	before := tree(t, dir)
 	code, p := setupPlan(t, planArgs...)
 	if code != 0 || p.Error != nil {
@@ -344,8 +325,6 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	}
 	sameTree(t, dir, before)
 
-	// 4. Every applicable question gets the fixture's answer or, as a user accepting it, its
-	// default, passed explicitly.
 	given := fixtureAnswers(t, "monorepo")
 	var asked []string
 	chosen := skillAnswers(p, func(q plan.Question) string {
@@ -360,19 +339,16 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	}
 	answers := answerArgs(p, chosen)
 
-	// 5. The plan with those answers is complete.
 	if code, p := setupPlan(t, append(planArgs, answers...)...); code != 0 || !p.Complete {
 		t.Fatalf("plan with answers: exit = %d, complete = %v, error = %+v", code, p.Complete, p.Error)
 	}
 	sameTree(t, dir, before)
 
-	// 6. Apply with exactly those answers and no --yes.
 	code, applied := setupPlan(t, append(applyArgs, answers...)...)
 	if code != 0 || !applied.Complete || applied.Error != nil {
 		t.Fatalf("apply: exit = %d, complete = %v, error = %+v", code, applied.Complete, applied.Error)
 	}
 
-	// 7. The tree, without .claude/, is Plan 2's golden result.
 	want := contents(t, filepath.Join(setupFixtures, "monorepo", "before"), "")
 	for rel, c := range contents(t, filepath.Join(setupFixtures, "monorepo", "after"), "") {
 		want[rel] = c
@@ -392,8 +368,8 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 	}
 }
 
-// TestSkillSkipsQuestionsMadeMootByAnswers checks the skill's unlessChosen rule: assigning an
-// unattributed build to a project makes that project's gate-job question moot, and setup agrees.
+// Assigning an unattributed build to a project makes that project's gate-job question moot, and
+// setup agrees.
 func TestSkillSkipsQuestionsMadeMootByAnswers(t *testing.T) {
 	dir := tempRepo(t, map[string]string{
 		"apps/a/package.json":      `{"name":"a"}`,
@@ -420,7 +396,6 @@ jobs:
 	})
 	planArgs, applyArgs := documented(skillPlanLine), documented(skillApplyLine)
 
-	// 1. The questions, and the unlessChosen links.
 	_, p := setupPlan(t, planArgs...)
 	if p.Error != nil {
 		t.Fatalf("plan error: %+v", p.Error)
@@ -442,8 +417,6 @@ jobs:
 		}
 	}
 
-	// 2–3. The user keeps both projects and gives the build to apps/b; then gate-job:apps/b is
-	// moot and gate-job:apps/a is asked, and the user accepts its default.
 	user := map[string]string{"projects": "apps/a,apps/b", bp: "apps/b"}
 	var asked []string
 	chosen := skillAnswers(p, func(q plan.Question) string {
@@ -461,13 +434,10 @@ jobs:
 	}
 	answers := answerArgs(p, chosen)
 
-	// 4. Those three answers complete the plan.
 	if _, p := setupPlan(t, append(planArgs, answers...)...); !p.Complete || p.Error != nil {
 		t.Fatalf("plan with answers: complete = %v, error = %+v", p.Complete, p.Error)
 	}
 
-	// 6. Control, before anything is written: without the gate-job:apps/a answer the plan is
-	// not complete, and --apply names that question and writes nothing.
 	partial := maps.Clone(chosen)
 	delete(partial, "gate-job:apps/a")
 	if _, p := setupPlan(t, append(planArgs, answerArgs(p, partial)...)...); p.Complete {
@@ -480,7 +450,6 @@ jobs:
 	}
 	sameTree(t, dir, before)
 
-	// 5. Apply with the three answers and no --yes.
 	code, applied := setupPlan(t, append(applyArgs, answers...)...)
 	if code != 0 || applied.Error != nil || !applied.Complete {
 		t.Fatalf("apply: exit = %d, complete = %v, error = %+v", code, applied.Complete, applied.Error)
@@ -502,9 +471,8 @@ jobs:
 	}
 }
 
-// TestSkillFixFieldsExistInRunJSON checks every run.json path the skill's fixing reference lists
-// against run.json's shape: model.Run's types, walked by their json tags. One sample run cannot
-// show every path (errors is often empty, and targets[].note is omitted when empty).
+// One sample run cannot show every path (errors is often empty, and targets[].note is omitted
+// when empty).
 func TestSkillFixFieldsExistInRunJSON(t *testing.T) {
 	b, err := fs.ReadFile(skills.Files, "shearbolt/references/fixing.md")
 	if err != nil {
@@ -525,7 +493,6 @@ func TestSkillFixFieldsExistInRunJSON(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	// The walker itself rejects what run.json does not have.
 	for _, bad := range []string{"-", "nope", "findings[].nope", "verdict[]", "findings.id", "targets[].note.x", "evidenceDir", "startedAt.wall"} {
 		if jsonPath(runType, bad) == nil {
 			t.Errorf("jsonPath accepts %q", bad)
@@ -533,8 +500,6 @@ func TestSkillFixFieldsExistInRunJSON(t *testing.T) {
 	}
 }
 
-// jsonPath checks that path (dot-separated json names, "[]" after a list) exists in the JSON
-// encoding of typ.
 func jsonPath(typ reflect.Type, path string) error {
 	for _, part := range strings.Split(path, ".") {
 		name, list := strings.CutSuffix(part, "[]")
@@ -562,7 +527,6 @@ func jsonPath(typ reflect.Type, path string) error {
 	return nil
 }
 
-// jsonField finds the field encoding/json writes as name.
 func jsonField(typ reflect.Type, name string) (reflect.StructField, bool) {
 	for i := range typ.NumField() {
 		f := typ.Field(i)
@@ -587,7 +551,6 @@ func jsonField(typ reflect.Type, name string) (reflect.StructField, bool) {
 	return reflect.StructField{}, false
 }
 
-// TestSkillFixingCoversCompose checks that the fixing reference teaches the compose fix flow.
 func TestSkillFixingCoversCompose(t *testing.T) {
 	b, err := fs.ReadFile(skills.Files, "shearbolt/references/fixing.md")
 	if err != nil {

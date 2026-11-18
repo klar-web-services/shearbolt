@@ -17,8 +17,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/config"
 )
 
-// Lockfiles are dependency files Grype reads. A source target must contain at least one.
-// npm, pnpm, Yarn, Bun and Cargo have setup support; the others are scanned but not yet set up.
 var Lockfiles = []string{
 	"package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",
 	"Cargo.lock",
@@ -27,13 +25,10 @@ var Lockfiles = []string{
 	"mix.lock", "pubspec.lock", "Podfile.lock", "Package.resolved", "conan.lock",
 }
 
-// defaultExcludes are directory names never scanned as part of a source target.
 var defaultExcludes = []string{"node_modules", ".git", "target", ".shearbolt"}
 
-// DockerInspector reports whether an image exists in the local Docker daemon.
 type DockerInspector func(ctx context.Context, ref string) bool
 
-// DockerHasImage asks the docker CLI, when installed, whether the image exists locally.
 func DockerHasImage(ctx context.Context, ref string) bool {
 	docker, err := exec.LookPath("docker")
 	if err != nil {
@@ -51,7 +46,6 @@ func LocalTag(ref string) bool {
 	return !strings.Contains(ref, "@") && i > strings.LastIndex(ref, "/") && ref[i+1:] == "local"
 }
 
-// GrypeExcludes turns a source target's exclude list into Grype --exclude globs.
 func GrypeExcludes(user []string) []string {
 	out := make([]string, 0, len(defaultExcludes)+len(user))
 	for _, d := range defaultExcludes {
@@ -65,8 +59,6 @@ func GrypeExcludes(user []string) []string {
 	return out
 }
 
-// FindLockfiles returns the slash-separated paths, relative to root, of every known lockfile
-// outside excluded paths, in walk order.
 func FindLockfiles(root string, exclude []string) ([]string, error) {
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		root = r
@@ -102,7 +94,6 @@ func FindLockfiles(root string, exclude []string) ([]string, error) {
 	return found, err
 }
 
-// Covers reports whether a source target's tree, after excludes, contains the lockfile.
 func Covers(source config.Target, lockfile string) bool {
 	if !slices.Contains(Lockfiles, filepath.Base(lockfile)) {
 		return false
@@ -121,7 +112,6 @@ func Covers(source config.Target, lockfile string) bool {
 	return !excluded(rel, source.Exclude)
 }
 
-// excluded reports whether rel (slash-separated, relative to the source root) is excluded.
 func excluded(rel string, user []string) bool {
 	for _, part := range strings.Split(rel, "/") {
 		if slices.Contains(defaultExcludes, part) {
@@ -157,9 +147,8 @@ func fileDigest(path string) (string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// devOnlyNodeProject reports whether dir holds a package.json that ships nothing: it parses,
-// has no non-empty dependencies or optionalDependencies, and has no workspaces field. Grype
-// skips devDependencies for yarn and bun projects, so a lockfile next to such a file yields no
+// devOnlyNodeProject reports whether dir holds a package.json that ships nothing. Grype skips
+// devDependencies for yarn and bun projects, so a lockfile next to such a file yields no
 // packages. Anything unexpected returns false, which keeps the lockfile fail-closed.
 func devOnlyNodeProject(dir string) bool {
 	path := filepath.Join(dir, "package.json")
@@ -191,10 +180,6 @@ func devOnlyNodeProject(dir string) bool {
 	return true
 }
 
-// yarnWorkspaceLockfile reports whether lockfile is a yarn.lock whose sibling package.json
-// parses and has a workspaces field, whatever its value. Syft drops every package reachable
-// from such a root's devDependencies, even when a workspace member ships it. A missing or
-// unparseable package.json returns false, so the ordinary lockfile rules apply.
 func yarnWorkspaceLockfile(lockfile string) bool {
 	if filepath.Base(lockfile) != "yarn.lock" {
 		return false

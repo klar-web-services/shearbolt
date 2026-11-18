@@ -19,11 +19,9 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// listCI is a minimal script-list CI built from scriptci alone: ci.yml maps job names to
-// mappings with a block script sequence. It is named "gitlab", so scan tags use $CI_COMMIT_SHA,
-// and its clone directory is $CI_PROJECT_DIR.
+// listCI is named "gitlab", so scan tags use $CI_COMMIT_SHA.
 type listCI struct {
-	failExtra bool // the jobs' Extra hook fails
+	failExtra bool
 }
 
 const file = "ci.yml"
@@ -94,7 +92,6 @@ func (listCI) Snippet(r plan.Repo, f string, g plan.Gate) string {
 	return scriptci.Snippet(g, "$CI_PROJECT_DIR", 4)
 }
 
-// tree writes files under a new temp dir.
 func tree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -110,7 +107,6 @@ func tree(t *testing.T, files map[string]string) string {
 	return root
 }
 
-// npmRepo is an npm project at dir (with a Dockerfile) plus ci.yml.
 func npmRepo(dir, ci string) map[string]string {
 	return map[string]string{
 		path(dir, "package.json"):      `{"name":"web"}`,
@@ -154,7 +150,6 @@ func result(t *testing.T, files map[string]string, version string) (*plan.Plan, 
 	return p, out
 }
 
-// rerun is result that also returns the second run's plan.
 func rerun(t *testing.T, files map[string]string, version string) (*plan.Plan, string, *plan.Plan) {
 	t.Helper()
 	root := tree(t, files)
@@ -195,7 +190,6 @@ const (
 	installDev = "(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | sh"
 )
 
-// Test 1: a combined line is split at the gate; the push follows it as its own item.
 func TestScriptCombinedLine(t *testing.T) {
 	p, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -215,7 +209,6 @@ func TestScriptCombinedLine(t *testing.T) {
 	}
 }
 
-// Test 2: a multi-line block is split at the line boundary into block-free items.
 func TestScriptBlockSplit(t *testing.T) {
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -233,7 +226,6 @@ func TestScriptBlockSplit(t *testing.T) {
 		"    - docker push x:$C",
 	))
 
-	// A longer remainder stays one block item; a multi-line first part stays a block.
 	_, got = result(t, npmRepo(".", lines(
 		"build:",
 		"  script:",
@@ -257,7 +249,6 @@ func TestScriptBlockSplit(t *testing.T) {
 	))
 }
 
-// Test 3: builds that cannot be followed by a gate leave the job unchanged.
 func TestScriptUnsupported(t *testing.T) {
 	for name, item := range map[string][]string{
 		"conditional": {`    - if [ -n "$X" ]; then docker build -t x . ; fi`},
@@ -303,7 +294,6 @@ func TestScriptUnsupported(t *testing.T) {
 	))
 }
 
-// Test 4: a development build installs the latest release and says so.
 func TestScriptDevVersion(t *testing.T) {
 	p, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -322,7 +312,6 @@ func TestScriptDevVersion(t *testing.T) {
 	}
 }
 
-// Test 5: an existing gate gets only its pin updated by a release, and nothing from dev.
 func TestScriptExistingGatePin(t *testing.T) {
 	ci := lines(
 		"build:",
@@ -342,7 +331,6 @@ func TestScriptExistingGatePin(t *testing.T) {
 	}
 }
 
-// Test 6: cd carries across items, and a gate after a cd names its config by the clone dir.
 func TestScriptParseItemsCarriesState(t *testing.T) {
 	cmds, end := scriptci.ParseItems([]string{"cd services/api", "export IMAGE=x", "docker build -t $IMAGE:$C ."}, shell.State{Dir: "."})
 	if len(cmds) != 3 || len(cmds[2]) != 1 {
@@ -370,7 +358,6 @@ func TestScriptParseItemsCarriesState(t *testing.T) {
 		`    - SHEARBOLT_IMAGE=x:shearbolt-$CI_COMMIT_SHA "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/services/api/shearbolt.yaml"`,
 	))
 
-	// The root project after a cd also names its config.
 	files := npmRepo(".", lines(
 		"build:",
 		"  script:",
@@ -383,7 +370,6 @@ func TestScriptParseItemsCarriesState(t *testing.T) {
 	}
 }
 
-// Test 7: --push becomes --load, and the original tags are pushed after the gate.
 func TestScriptPushBuild(t *testing.T) {
 	p, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -408,8 +394,6 @@ func TestScriptPushBuild(t *testing.T) {
 		t.Error("the scan tag is pushed")
 	}
 
-	// The rest of a --push build's item moves after the gate with its pushes, and an earlier
-	// --push build's pushes come after the gate too.
 	_, got = result(t, npmRepo(".", lines(
 		"build:",
 		"  script:",
@@ -429,7 +413,6 @@ func TestScriptPushBuild(t *testing.T) {
 		"    - docker push b:1",
 	))
 
-	// Tags setup cannot read fail the job instead of dropping the push.
 	p, got = result(t, npmRepo(".", lines(
 		"build:",
 		"  script:",
@@ -440,7 +423,6 @@ func TestScriptPushBuild(t *testing.T) {
 	}
 }
 
-// Test 8: items are rendered with yamledit.Scalar and read back as the intended commands.
 func TestScriptQuoting(t *testing.T) {
 	files := npmRepo(".", lines(
 		"build:",
@@ -469,8 +451,6 @@ func TestScriptQuoting(t *testing.T) {
 	}
 }
 
-// A trailing comment on a split item stays on its first part; P1 splits before an unrecognized
-// deploy too.
 func TestScriptSplitKeepsComment(t *testing.T) {
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -489,7 +469,6 @@ func TestScriptSplitKeepsComment(t *testing.T) {
 	))
 }
 
-// The Rust rewrite and its install item, before the first build that needs it.
 func TestScriptRust(t *testing.T) {
 	files := map[string]string{
 		"Cargo.toml":  "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -516,7 +495,6 @@ func TestScriptRust(t *testing.T) {
 		"    - gh release upload v1 target/release/demo",
 	))
 
-	// An install already in an earlier item is not added again.
 	files[file] = lines(
 		"build:",
 		"  script:",
@@ -529,8 +507,6 @@ func TestScriptRust(t *testing.T) {
 	}
 }
 
-// A push before the first build: the gate goes before the build, and the push is reported.
-// A job without builds gets the gate before its first item.
 func TestScriptBeforeGates(t *testing.T) {
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -563,8 +539,6 @@ func TestScriptBeforeGates(t *testing.T) {
 	))
 }
 
-// An existing scan is re-rendered with the current image variables; arguments setup does not
-// manage are kept, and an install is added when none runs before it.
 func TestScriptExistingGateUpdated(t *testing.T) {
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -583,8 +557,6 @@ func TestScriptExistingGateUpdated(t *testing.T) {
 	))
 }
 
-// Each job is edited completely or not at all: a job whose second build cannot be followed
-// keeps its first build's tag too, while another job is still edited.
 func TestScriptJobAtomicity(t *testing.T) {
 	ci := lines(
 		"a:",
@@ -627,7 +599,6 @@ func TestScriptJobAtomicity(t *testing.T) {
 	}
 }
 
-// Items that are aliases, or that define anchors, are not changed in place.
 func TestScriptAliasItem(t *testing.T) {
 	ci := lines(
 		"x:",
@@ -657,8 +628,6 @@ func TestScriptSnippet(t *testing.T) {
 	}
 }
 
-// A railpack build gets setup's docker tag right after it: as an item of its own when the build
-// ends its item, joined with && inside a combined line.
 func TestScriptRailpack(t *testing.T) {
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
@@ -689,8 +658,6 @@ func TestScriptRailpack(t *testing.T) {
 	))
 }
 
-// A build in a called file: the gate follows the calling command, the Makefile is rewritten by
-// the core, and the install item goes before the call.
 func TestScriptViaBuild(t *testing.T) {
 	files := map[string]string{
 		"Cargo.toml":  "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
@@ -719,7 +686,6 @@ func TestScriptViaBuild(t *testing.T) {
 	}
 }
 
-// Two projects built in one job get a gate each; the second reuses the first one's install.
 func TestScriptTwoProjects(t *testing.T) {
 	files := map[string]string{
 		"apps/a/package.json": `{"name":"a"}`, "apps/a/package-lock.json": "{}", "apps/a/Dockerfile": "FROM node:22\n",
@@ -761,8 +727,6 @@ func TestScriptRollbackOnInvalidResult(t *testing.T) {
 	}
 }
 
-// The gate shares the job's shell: after a set +e that nothing turns back on, a failing scan
-// would not stop the job, so the job is left unchanged.
 func TestScriptErrexitOff(t *testing.T) {
 	for name, items := range map[string][]string{
 		"set +e":      {"    - set +e", "    - docker build -t web:1 .", "    - docker push web:1"},
@@ -780,7 +744,6 @@ func TestScriptErrexitOff(t *testing.T) {
 		})
 	}
 
-	// Turned back on before the gate, or only after it: the job is edited.
 	for _, items := range [][]string{
 		{"    - set +e", "    - npm test || true", "    - set -e", "    - docker build -t web:1 ."},
 		{"    - docker build -t web:1 .", "    - set +e", "    - echo after"},
@@ -793,8 +756,6 @@ func TestScriptErrexitOff(t *testing.T) {
 	}
 }
 
-// Builds that ask for attestations are refused where setup would load them (Batch 4 review
-// decision): --push builds converted to --load, and buildx builds that get --load.
 func TestScriptAttestationsRefused(t *testing.T) {
 	for _, build := range []string{
 		"docker buildx build --push --attest type=sbom -t a:1 .",
@@ -820,9 +781,6 @@ func TestScriptAttestationsRefused(t *testing.T) {
 	}
 }
 
-// An existing scan counts only when its failure stops the job: top level, not negated, not in
-// the background or a pipeline, joined only by ;, a newline or nothing (Batch 5 review). Any
-// other one fails the job, which is left unchanged.
 func TestScriptExistingGateMustStopTheJob(t *testing.T) {
 	const scan = `"$HOME/.local/bin/shearbolt" scan --ci`
 	for name, item := range map[string]string{
@@ -851,7 +809,6 @@ func TestScriptExistingGateMustStopTheJob(t *testing.T) {
 		})
 	}
 
-	// Joined by ; or a newline it is a gate, and is brought up to date.
 	_, got := result(t, npmRepo(".", lines(
 		"build:",
 		"  script:",
@@ -867,8 +824,6 @@ func TestScriptExistingGateMustStopTheJob(t *testing.T) {
 	}
 }
 
-// An existing scan with a config of the user's is never re-pointed: the job fails and the note
-// names that config (Batch 5 review).
 func TestScriptExistingCustomConfig(t *testing.T) {
 	files := npmRepo(".", lines(
 		"build:",
@@ -905,8 +860,7 @@ func TestScriptExistingCustomConfig(t *testing.T) {
 	}
 }
 
-// Mutant reproductions from the Batch 5 review: each guard below, when removed, lets a push run
-// before its gate or breaks the job.
+// Each guard below, when removed, lets a push run before its gate or breaks the job.
 func TestScriptReviewMutants(t *testing.T) {
 	refused := func(t *testing.T, files map[string]string, reason string) {
 		t.Helper()
@@ -966,8 +920,8 @@ func TestScriptReviewMutants(t *testing.T) {
 	})
 }
 
-// docker push --all-tags would push the local scan tag too, which must never be pushed (R5):
-// a gated job with one for a scanned repository, or for a repository setup cannot read, fails.
+// docker push --all-tags would push the local scan tag too, which must never be pushed: a gated
+// job with one for a scanned repository, or for a repository setup cannot read, fails.
 func TestScriptAllTagsPushRefused(t *testing.T) {
 	for _, push := range []string{
 		"docker push --all-tags reg.example.com/x",
@@ -984,7 +938,6 @@ func TestScriptAllTagsPushRefused(t *testing.T) {
 			t.Errorf("%s: ci.yml:\n%s\nnotes %v", push, got, noteCodes(p))
 		}
 	}
-	// Another literal repository is fine.
 	_, got := result(t, npmRepo(".", lines("build:", "  script:",
 		"    - docker build -t reg.example.com/x:$CI_COMMIT_SHA .",
 		"    - docker push --all-tags reg.example.com/other",
@@ -994,7 +947,6 @@ func TestScriptAllTagsPushRefused(t *testing.T) {
 	}
 }
 
-// Guards the Batch 5 review found untested.
 func TestScriptMoreGuards(t *testing.T) {
 	refused := func(t *testing.T, files map[string]string, version, reason string) *plan.Plan {
 		t.Helper()
@@ -1025,7 +977,6 @@ func TestScriptMoreGuards(t *testing.T) {
 		refused(t, npmRepo(".", lines("build:", "  script:",
 			"    - docker build -t x:1 .", "    - "+install, "    - '"+scan+" > scan.log --ci'", "    - docker push x:1",
 		)), "1.2.3", "redirection")
-		// A redirection at the end is kept.
 		_, got := result(t, npmRepo(".", lines("build:", "  script:",
 			"    - docker build -t x:1 .", "    - "+install, "    - '"+scan+" --ci > scan.log'", "    - docker push x:1",
 		)), "1.2.3")
@@ -1071,9 +1022,7 @@ func TestScriptMoreGuards(t *testing.T) {
 	})
 }
 
-// Batch 5 re-review: guards whose mutants survived.
 func TestScriptReReviewMutants(t *testing.T) {
-	// A custom config named by the clone directory is still the user's.
 	t.Run("clone-dir custom config", func(t *testing.T) {
 		p, got := result(t, npmRepo(".", lines("build:", "  script:",
 			"    - docker build -t x:1 .",
@@ -1085,7 +1034,6 @@ func TestScriptReReviewMutants(t *testing.T) {
 			t.Errorf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
 		}
 	})
-	// An item that is only an sh holds no install: it is kept, and the gate gets its install.
 	t.Run("an sh alone is no install", func(t *testing.T) {
 		_, got := result(t, npmRepo(".", lines("build:", "  script:",
 			"    - docker build -t x:1 .",
@@ -1099,7 +1047,6 @@ func TestScriptReReviewMutants(t *testing.T) {
 	})
 }
 
-// grabbing is listCI, recording the classifier setup passes to Jobs.
 type grabbing struct {
 	listCI
 	classify *plan.Classifier
@@ -1110,8 +1057,6 @@ func (g grabbing) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifi
 	return g.listCI.Jobs(r, f, src, classify)
 }
 
-// classifier returns the core's classifier for a repository with files, and the scripts of its
-// ci.yml.
 func classifier(t *testing.T, files map[string]string) (plan.Classifier, []*scriptci.Script) {
 	t.Helper()
 	var classify plan.Classifier
@@ -1126,8 +1071,6 @@ func classifier(t *testing.T, files map[string]string) (plan.Classifier, []*scri
 	return classify, scripts(d)
 }
 
-// P6: Step.Stops lists the commands of an item that can stop the job's shell early, and
-// Script.Stops reports them with their lines, a sourced file setup cannot follow included.
 func TestScriptStops(t *testing.T) {
 	classify, ss := classifier(t, map[string]string{
 		"Dockerfile": "FROM alpine\n",
@@ -1168,7 +1111,6 @@ func TestScriptStops(t *testing.T) {
 		t.Errorf("Stops = %+v, want %+v", got, wantStops)
 	}
 
-	// Every stop the core reports has a name, whatever form it takes.
 	classify, ss = classifier(t, map[string]string{
 		"ci/skip.sh": "exit 0\n",
 		file: lines(
@@ -1195,13 +1137,10 @@ func TestScriptStops(t *testing.T) {
 	}
 }
 
-// stopMessage is the start of the reason an early stop before the gate fails a job (P12).
 func stopMessage(cmd string, line int, what string) string {
 	return fmt.Sprintf("the job can stop before the shearbolt gate (%s at line %d), which would skip its check of %s while later jobs still run; move the early stop into the job's rules or condition, or add the gate by hand where it runs on every path", cmd, line, what)
 }
 
-// stopRefused checks that setup leaves ci.yml unchanged and fails its job with UNSUPPORTED_EDIT
-// on the early stop's line: the stop's name and line, what the gate would not check, the snippet.
 func stopRefused(t *testing.T, files map[string]string, cmd string, line int, what string) {
 	t.Helper()
 	p, got := result(t, files, "1.2.3")
@@ -1215,17 +1154,15 @@ func stopRefused(t *testing.T, files map[string]string, cmd string, line int, wh
 	}
 }
 
-// P12 (design §3.5): the gate runs in the job's shell, so an early stop before it ends the job's
-// script successfully, skips the gate, and later jobs still run. A job whose gate checks
-// anything other than images built after the stop is left unchanged with UNSUPPORTED_EDIT.
+// The gate runs in the job's shell, so an early stop before it ends the job's script
+// successfully, skips the gate, and later jobs still run. A job whose gate checks anything other
+// than images built after the stop is left unchanged with UNSUPPORTED_EDIT.
 func TestScriptEarlyStop(t *testing.T) {
 	npm := func(items ...string) map[string]string {
 		return npmRepo(".", lines(append([]string{"build:", "  script:"}, items...)...))
 	}
-	// ES-5: an exit before an npm build; the gate would check the source.
 	stopRefused(t, npm(`    - if [ -z "$CHANGED" ]; then exit 0; fi`, "    - npm ci", "    - npm run build", "    - ./deploy.sh"), "exit", 3, "source")
 
-	// A sourced file that exits, and one setup cannot follow.
 	files := npm("    - . ./ci/skip.sh", "    - npm ci", "    - npm run build", "    - ./deploy.sh")
 	files["ci/skip.sh"] = "if [ -z \"$CHANGED\" ]; then exit 0; fi\n"
 	stopRefused(t, files, "source", 3, "source")
@@ -1292,10 +1229,6 @@ func TestScriptEarlyStop(t *testing.T) {
 	}
 }
 
-// P12 on re-runs and in the rarer shapes: a gate already in the job (here one added by hand)
-// after an early stop fails the job too, as does a second project's gate after a stop between
-// the two; when the config cannot be read, the message names every target; a stop the plan places
-// outside its item fails the job.
 func TestScriptEarlyStopMore(t *testing.T) {
 	npm := func(items ...string) map[string]string {
 		return npmRepo(".", lines(append([]string{"build:", "  script:"}, items...)...))
@@ -1335,7 +1268,6 @@ func TestScriptEarlyStopMore(t *testing.T) {
 	}
 }
 
-// badStops is listCI with a stop index past the end of each job's first item.
 type badStops struct{ listCI }
 
 func (b badStops) Jobs(r plan.Repo, f string, src []byte, classify plan.Classifier) ([]plan.Job, []plan.Note, error) {

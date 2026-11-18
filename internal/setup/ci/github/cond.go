@@ -14,8 +14,7 @@ import (
 // statusCheck matches the status functions that make a condition run after a failed step.
 var statusCheck = regexp.MustCompile(`(?i)\b(always|failure|cancelled)\s*\(\s*\)`)
 
-// safeIf returns an if: condition that cannot run after a failed gate: a condition with
-// always(), failure(), cancelled() or !cancelled() becomes ${{ success() && (<condition>) }}.
+// safeIf returns an if: condition that cannot run after a failed gate.
 func safeIf(cond string) (string, error) {
 	if !needsWrap(cond) {
 		return cond, nil
@@ -26,7 +25,6 @@ func safeIf(cond string) (string, error) {
 	return "${{ success() && (" + bareExpr(cond) + ") }}", nil
 }
 
-// wholeExpr reports whether t is one ${{ ... }} expression and nothing else.
 func wholeExpr(t string) bool {
 	return strings.HasPrefix(t, "${{") && strings.HasSuffix(t, "}}") && strings.Count(t, "${{") == 1 && strings.Count(t, "}}") == 1
 }
@@ -46,7 +44,6 @@ func needsWrap(cond string) bool {
 	return !balanced(strings.TrimSuffix(inner, ")"))
 }
 
-// bareExpr returns a condition without its ${{ }} wrapper.
 func bareExpr(cond string) string {
 	t := strings.TrimSpace(cond)
 	if wholeExpr(t) {
@@ -55,8 +52,6 @@ func bareExpr(cond string) string {
 	return t
 }
 
-// balanced reports whether s's parentheses (outside '...' strings) never close more than they
-// opened and all close.
 func balanced(s string) bool {
 	depth, quoted := 0, false
 	for _, c := range s {
@@ -75,18 +70,11 @@ func balanced(s string) bool {
 	return depth == 0 && !quoted
 }
 
-// The marker (design §3.2, §3.4): a split step that can stop before its build sets the output
-// shearbolt-reached right after the build, and what runs after the gate checks it. These helpers
-// write and read setup's forms of that check.
-
-// markerExpr is the condition that step id got past its build: its marker output is set.
 func markerExpr(id string) string {
 	return "steps." + id + ".outputs." + shelledit.ReachedOutput + " != ''"
 }
 
-// withMarker adds step id's marker to condition cond: (<cond>) && <marker>, with cond's ${{ }}
-// wrapper removed, or the marker alone when cond is empty. The parentheses keep an a || b
-// condition from swallowing the marker.
+// The parentheses keep an a || b condition from swallowing the marker.
 func withMarker(cond, id string) string {
 	if b := bareExpr(cond); b != "" {
 		return "(" + b + ") && " + markerExpr(id)
@@ -94,12 +82,9 @@ func withMarker(cond, id string) string {
 	return markerExpr(id)
 }
 
-// continuedIf returns the if: of the continued step of split step id when that step can stop
-// early: success() && (<copied>) && <marker>, with copied (the step's own if:) unwrapped, or the
-// marker alone when there is no copied condition. The leading success() keeps a status function
-// in copied from running the step after a failed gate. Left wrapped, (${{ … }}) would be a
-// non-empty string, which is always true; for the same reason a condition that mixes ${{ }}
-// with other text cannot be combined.
+// The leading success() keeps a status function in copied from running the step after a failed
+// gate. Left wrapped, (${{ … }}) would be a non-empty string, which is always true; for the same
+// reason a condition that mixes ${{ }} with other text cannot be combined.
 func continuedIf(copied, id string) (string, error) {
 	b := bareExpr(copied)
 	if b == "" {
@@ -114,8 +99,7 @@ func continuedIf(copied, id string) (string, error) {
 // stripAnyMarker removes a marker term in setup's form, whatever its step id: (<X>) && <marker>
 // becomes X, and a condition that is exactly <marker> becomes "". A ${{ }} wrapper is dropped,
 // which means the same. The marker is matched with any run of whitespace where setup writes a
-// space; X keeps its text. id is the removed term's step id. ok is false, and cond comes back
-// unchanged, when cond holds no such term.
+// space; X keeps its text.
 func stripAnyMarker(cond string) (stripped, id string, ok bool) {
 	b := bareExpr(cond)
 	if m := markerAlone.FindStringSubmatch(normCond(b)); m != nil {
@@ -142,9 +126,8 @@ var markerAfter = regexp.MustCompile(`\)\s+&&\s+steps\.([A-Za-z_][A-Za-z0-9_-]*)
 // markerGuarded reports whether condition cond is one of setup's two forms that run a step only
 // when split step id got past its build: exactly <marker>, or success() && (<X>) && <marker>
 // where X's parentheses are balanced, as needsWrap requires, so that success() && (a) || (b) &&
-// <marker> does not count. The text is compared without its ${{ }} wrapper and with each run of
-// whitespace collapsed to one space. ${{ }} anywhere inside makes the condition a string, which
-// is always true, so it does not count either.
+// <marker> does not count. ${{ }} anywhere inside makes the condition a string, which is always
+// true, so it does not count either.
 func markerGuarded(cond string) (id string, ok bool) {
 	n := normCond(cond)
 	if strings.Contains(n, "${{") {
@@ -168,12 +151,10 @@ func markerGuarded(cond string) (id string, ok bool) {
 // with the marker it would be a template string, which is always true.
 func templated(cond string) bool { return strings.Contains(bareExpr(cond), "${{") }
 
-// normCond returns cond without its ${{ }} wrapper and with each run of whitespace as one space.
 func normCond(cond string) string {
 	return strings.Join(strings.Fields(bareExpr(cond)), " ")
 }
 
-// Why a gate keeps running on early stops (EARLY_STOP's running form, design §3.3).
 const (
 	reasonAllTargets = "it checks every target in shearbolt.yaml"
 	reasonOtherSteps = "it also follows builds in other steps"
@@ -183,13 +164,12 @@ const (
 	reasonRunStep    = "setup does not add an if: to a gate in a run step"
 )
 
-// gateMaySkip reports whether gate g may be skipped when split step s stopped before its build
-// (design §3.3), and why not when it may not: (1) g scans only its own images, all built in
-// step s, and (2) no step after s pushes or deploys unless its if: is one of setup's marker forms
-// for s. On a first run the steps setup inserts after s (the gate, its continued and push steps)
-// are not among the job's steps yet, so the later steps are the original ones; on a re-run the
-// continued step is one of them and passes (2) by its if:. A reason about targets names those
-// other than the images and files step s builds.
+// gateMaySkip reports whether gate g may be skipped when split step s stopped before its build,
+// and why not when it may not: (1) g scans only its own images, all built in step s, and (2) no
+// step after s pushes or deploys unless its if: is one of setup's marker forms for s. On a first
+// run the steps setup inserts after s (the gate, its continued and push steps) are not among the
+// job's steps yet, so the later steps are the original ones; on a re-run the continued step is
+// one of them and passes (2) by its if:.
 func (e *jobEditor) gateMaySkip(g plan.Gate, s int) (bool, string) {
 	if !g.OnlyOwnImages || slices.ContainsFunc(g.Builds, func(b plan.Build) bool { return b.Pos.Step != s }) {
 		if g.Scans == nil {
@@ -244,8 +224,6 @@ func (e *jobEditor) pushes(s int) bool {
 	})
 }
 
-// wrapPushIfs rewrites the if: of existing push steps after a gate whose condition would run
-// them after a failed gate (always(), failure(), cancelled(), !cancelled()).
 func (e *jobEditor) wrapPushIfs() error {
 	done := map[int]bool{}
 	for _, g := range e.gates {

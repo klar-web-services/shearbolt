@@ -1,4 +1,3 @@
-// Package model defines Shearbolt's normalized results. Run is serialized as run.json.
 package model
 
 import (
@@ -7,7 +6,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/config"
 )
 
-// Action is the policy decision for one finding.
 type Action string
 
 const (
@@ -16,14 +14,12 @@ const (
 	Excepted Action = "excepted"
 )
 
-// Decision explains why a finding blocks, warns or is excepted.
 type Decision struct {
 	Action    Action   `json:"action"`
 	Reasons   []string `json:"reasons"`
 	Exception string   `json:"exception,omitempty"`
 }
 
-// CVSS is one upstream CVSS rating, kept as reported.
 type CVSS struct {
 	Source    string  `json:"source,omitempty"`
 	Version   string  `json:"version"`
@@ -31,12 +27,11 @@ type CVSS struct {
 	BaseScore float64 `json:"baseScore"`
 }
 
-// Finding is one vulnerability on one package instance in one target.
 type Finding struct {
 	ID             string   `json:"id"`
 	Aliases        []string `json:"aliases"`
 	Target         string   `json:"target"`
-	Image          string   `json:"image,omitempty"` // the image reference, for compose findings
+	Image          string   `json:"image,omitempty"`
 	Package        string   `json:"package"`
 	Version        string   `json:"version"`
 	Type           string   `json:"type"`
@@ -53,7 +48,6 @@ type Finding struct {
 	Decision       Decision `json:"decision"`
 }
 
-// Identity records what exactly was scanned.
 type Identity struct {
 	SHA256         string   `json:"sha256,omitempty"`
 	ImageID        string   `json:"imageId,omitempty"`
@@ -61,7 +55,6 @@ type Identity struct {
 	RepoDigests    []string `json:"repoDigests,omitempty"`
 }
 
-// ImageResult is one pulled image of a compose target.
 type ImageResult struct {
 	Ref      string   `json:"ref"`
 	Platform string   `json:"platform,omitempty"`
@@ -74,29 +67,25 @@ type ImageResult struct {
 	Raw      []string `json:"raw,omitempty"`
 }
 
-// TargetResult is the outcome for one configured target.
 type TargetResult struct {
-	Name     string   `json:"name"`
-	Kind     string   `json:"kind"` // image | source | dir | file | compose
-	Ref      string   `json:"ref"`
-	Exclude  []string `json:"exclude,omitempty"`
-	Status   string   `json:"status"` // scanned | skipped | error
-	Note     string   `json:"note,omitempty"`
-	Identity Identity `json:"identity"`
-	Packages int      `json:"packages"`
-	Raw      []string `json:"raw,omitempty"`
-	// Images are the pulled images of a compose target.
-	Images []ImageResult `json:"images,omitempty"`
+	Name     string        `json:"name"`
+	Kind     string        `json:"kind"` // image | source | dir | file | compose
+	Ref      string        `json:"ref"`
+	Exclude  []string      `json:"exclude,omitempty"`
+	Status   string        `json:"status"` // scanned | skipped | error
+	Note     string        `json:"note,omitempty"`
+	Identity Identity      `json:"identity"`
+	Packages int           `json:"packages"`
+	Raw      []string      `json:"raw,omitempty"`
+	Images   []ImageResult `json:"images,omitempty"`
 }
 
-// Database describes the Grype vulnerability database a run used.
 type Database struct {
 	Built         time.Time `json:"built"`
 	SchemaVersion string    `json:"schemaVersion"`
 	Source        string    `json:"source"`
 }
 
-// ExceptionStatus reports whether a configured exception was applied, unused or expired.
 type ExceptionStatus struct {
 	ID      string `json:"id"`
 	Package string `json:"package"`
@@ -105,14 +94,12 @@ type ExceptionStatus struct {
 	Status  string `json:"status"` // applied | unused | expired
 }
 
-// Diagnostic is a structured warning or error.
 type Diagnostic struct {
 	Code    string `json:"code"`
 	Target  string `json:"target,omitempty"`
 	Message string `json:"message"`
 }
 
-// Run is the complete result of one scan (run.json).
 type Run struct {
 	SchemaVersion string            `json:"schemaVersion"`
 	RunID         string            `json:"runId"`
@@ -132,6 +119,5 @@ type Run struct {
 	Errors        []Diagnostic      `json:"errors"`
 	Verdict       string            `json:"verdict"` // pass | block | error
 	ExitCode      int               `json:"exitCode"`
-	// EvidenceDir is where this run's evidence was written. Not serialized.
-	EvidenceDir string `json:"-"`
+	EvidenceDir   string            `json:"-"`
 }

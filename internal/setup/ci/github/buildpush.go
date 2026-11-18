@@ -14,20 +14,11 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// This file handles docker/build-push-action (R2, R5, Task 12): it is recognized as an image
-// build, and a gated one is converted: push becomes false with load: true, the local scan tag is
-// added to tags, and its push moves to a step after the gate that pushes the original tags.
-
 const buildPushAction = "docker/build-push-action"
 
 // metaTags matches a tags input that is exactly a metadata-action step's tags output.
 var metaTags = regexp.MustCompile(`^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.tags\s*\}\}$`)
 
-// buildPushBuild recognizes a build-push-action step (R2): with.context (default "."), file,
-// tags (split on commas and newlines), push (true or an expression pushes), load, platforms
-// and outputs. An output that only exports files makes it a BuildOther gate location. Tags that
-// are exactly ${{ steps.<id>.outputs.tags }} of a docker/metadata-action step are Computed, with
-// that step's first images entry as ComputedRepo.
 func buildPushBuild(d *yamledit.Doc, st *step, steps []*step) plan.Build {
 	with := d.Get(st.m, "with")
 	get := func(k string) (string, bool) {
@@ -96,15 +87,12 @@ func buildPushBuild(d *yamledit.Doc, st *step, steps []*step) plan.Build {
 	return plan.Build{Kind: plan.BuildImage, Dir: dir, Image: img}
 }
 
-// pushInput reports whether a push input pushes: true in any case, or an expression. Only a
-// false value turns it off; anything else counts as a push.
+// Only a false value turns it off; anything else counts as a push.
 func pushInput(v string) bool {
 	v = strings.TrimSpace(v)
 	return v != "" && !strings.EqualFold(v, "false")
 }
 
-// actionPath returns an action input path as a repo-relative path, or "" for an expression, a
-// variable, a URL or a path outside the repository.
 func actionPath(v string) string {
 	v = strings.TrimSpace(v)
 	if strings.Contains(v, "://") || strings.HasPrefix(v, "git@") {
@@ -113,8 +101,6 @@ func actionPath(v string) string {
 	return workDir(v)
 }
 
-// splitList splits an action list input on newlines and, when commas is set, on commas, and
-// drops empty entries.
 func splitList(v string, commas bool) []string {
 	if commas {
 		v = strings.ReplaceAll(v, ",", "\n")
@@ -139,9 +125,7 @@ func firstImage(images string) string {
 	return ""
 }
 
-// outputKind classifies an outputs entry like buildx -o (R2): "push" (type=registry, or
-// type=image with push=true), "load" (type=docker into the daemon) or "export". An entry that
-// cannot be read, such as one with an expression, counts as a push.
+// An entry that cannot be read, such as one with an expression, counts as a push.
 func outputKind(v string) string {
 	if strings.ContainsAny(v, "$`") {
 		return "push"
@@ -173,9 +157,6 @@ func outputKind(v string) string {
 	return "push"
 }
 
-// actionEdits converts gated build-push-action build b (Task 12): load: true, and for a push,
-// push: false plus a push step after the gate; the scan tag goes into tags. An already
-// converted step (push false, load true, a :shearbolt- tag) is left as it is.
 func (e *jobEditor) actionEdits(sp *stepPlan, g plan.Gate, b plan.Build) error {
 	st := sp.st
 	img := b.Image
@@ -266,9 +247,6 @@ func actionHasScanTag(img *plan.Image) bool {
 	return false
 }
 
-// addActionTag adds tag to the tags input (R5): a new line in a block, ",<tag>" on a one-line
-// literal list, and a two-line block for a one-line expression such as
-// ${{ steps.meta.outputs.tags }}.
 func (e *jobEditor) addActionTag(with *yaml.Node, tag string) error {
 	tn := e.d.Get(with, "tags")
 	if tn == nil {
@@ -294,9 +272,6 @@ func (e *jobEditor) addActionTag(with *yaml.Node, tag string) error {
 	return e.d.ReplaceScript(tn, nv)
 }
 
-// pushStepLines renders the step that pushes a converted build's original tags after the gate:
-// its if: is the push expression, the build step's if:, or both joined with &&, made safe from
-// running after a failed gate; TAGS holds the original tags value.
 func (e *jobEditor) pushStepLines(st *step, with *yaml.Node) ([]string, error) {
 	if !e.j.runPosix {
 		return nil, failAt(st.line, "run steps in this job do not use bash or sh, so setup cannot add the step that pushes the image after the gate")
@@ -386,9 +361,6 @@ func (e *jobEditor) actionAttestations(st *step, with *yaml.Node) error {
 	return nil
 }
 
-// pushBuildRefusals fails a run-step --push build that asks for attestations (--sbom,
-// --provenance, --attest, in either flag form, unless set to false), or whose digest output a
-// later step reads.
 func (e *jobEditor) pushBuildRefusals(st *step, args []shell.Word, line int) error {
 	if err := shelledit.AttestationFlags(args, line); err != nil {
 		return err

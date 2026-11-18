@@ -1,10 +1,4 @@
 name: test-db
-# Builds the vulnerability-database snapshot that Shearbolt's own tests scan with (plan 3, D3) and
-# stores it on the test-db pre-release. Manual only; see "Refreshing the snapshot" in
-# testdata/README.md:
-#
-#   gh workflow run test-db.yml --ref main [-f date=YY-MM-DD]
-#
 # The database holds only the github, nvd, kev and epss providers. That is everything npm and Rust
 # matching needs, and all four allow redistribution with attribution (testdata/db-snapshot-NOTICE.txt).
 # Do not add providers without checking their licenses: some (wolfi, chainguard) forbid sharing
@@ -31,7 +25,7 @@ env:
   # grype-db 0.54.7 is built against Grype 0.121.2, the version pinned in internal/grype/pins.go.
   # Move both together: a newer grype-db may write a schema the pinned Grype cannot read.
   GRYPE_DB_VERSION: 0.54.7
-  GRYPE_DB_SHA256: eab1d002b4b5fdd3f7527b976e41815f0fc6b91ef4b70595ed878a3354e57462 # grype-db_0.54.7_linux_amd64.tar.gz
+  GRYPE_DB_SHA256: eab1d002b4b5fdd3f7527b976e41815f0fc6b91ef4b70595ed878a3354e57462
   PROVIDERS: github nvd kev epss
 jobs:
   build:
@@ -148,7 +142,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: write # upload to the test-db release
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       ASSET: ${{ needs.build.outputs.asset }}

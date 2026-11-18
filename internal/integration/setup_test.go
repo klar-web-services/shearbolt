@@ -14,12 +14,7 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Plan 2 Task 19: the shearbolt.yaml that `shearbolt setup` generates scans with the real Grype,
-// on the pinned snapshot. Setup writes no policy, so each test appends the snapshot policy.
-
-// setupFixture copies testdata/setup/<name>/before into a temp dir, changes into it, runs
-// `shearbolt setup --yes` and appends the snapshot policy to the generated shearbolt.yaml. The
-// scans run in local mode, so a missing artifact is skipped.
+// The scans run in local mode, so a missing artifact is skipped.
 func setupFixture(t *testing.T, name string) string {
 	t.Helper()
 	t.Setenv("CI", "")
@@ -58,7 +53,6 @@ func setupFixture(t *testing.T, name string) string {
 	return dir
 }
 
-// copyFile copies a file to dst with the given mode, creating dst's folder.
 func copyFile(src, dst string, mode fs.FileMode) error {
 	b, err := os.ReadFile(src)
 	if err != nil {
@@ -73,7 +67,6 @@ func copyFile(src, dst string, mode fs.FileMode) error {
 	return os.Chmod(dst, mode) // WriteFile's mode is subject to the umask
 }
 
-// setupScan scans the generated shearbolt.yaml in the working directory on the snapshot.
 func setupScan(t *testing.T) (int, model.Run) {
 	t.Helper()
 	archive := useSnapshotEnv(t)
@@ -82,10 +75,8 @@ func setupScan(t *testing.T) (int, model.Run) {
 	return code, r
 }
 
-// The Next.js config scans the real lockfile (next 15.0.0). The image storefront:local is neither
-// in the local Docker nor pullable, so its target is skipped. On the 2026-11-09 snapshot the
-// verdict is block: next 15.0.0, postcss 8.4.31 and sharp 0.33.5 have fixed advisories, among
-// them GHSA-f82v-jwr5-mffw (CVE-2025-29927, the middleware bypass; EPSS 99.2%).
+// The image storefront:local is neither in the local Docker nor pullable, so its target is
+// skipped.
 func TestSetupNextJSConfigScans(t *testing.T) {
 	setupFixture(t, "nextjs-build-push")
 	code, r := setupScan(t)
@@ -105,8 +96,6 @@ func TestSetupNextJSConfigScans(t *testing.T) {
 	}
 }
 
-// The Rust config scans the built binary; with a binary that is not auditable,
-// lockfileFallback hands its crates to the source target.
 func TestSetupRustConfigScans(t *testing.T) {
 	dir := setupFixture(t, "rust-make")
 	binary := filepath.Join(dir, "target", "release", "demo")

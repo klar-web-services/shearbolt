@@ -15,14 +15,14 @@ import (
 )
 
 // fakeCI is a plan.CI whose files hold one job per line, "<job>: <shell script>" (";" separates
-// commands as in shell). Edit records what it was given, and fails the jobs in fail.
+// commands as in shell).
 type fakeCI struct {
 	files     []string
 	jobNotes  []plan.Note
 	jobsErr   error
-	noJobs    bool // Jobs returns no jobs (every job unsupported)
+	noJobs    bool
 	fail      []string
-	editErr   error // Edit fails for the whole file
+	editErr   error
 	editNotes []plan.Note
 	gates     []plan.Gate
 	preps     map[string][]plan.Prep
@@ -58,7 +58,6 @@ func (f *fakeCI) Jobs(r plan.Repo, file string, src []byte, classify plan.Classi
 	return jobs, f.jobNotes, nil
 }
 
-// scriptJob is a job with one run step holding script, classified like a CI plugin does.
 func scriptJob(file, key string, line int, classify plan.Classifier, script string) plan.Job {
 	j := plan.Job{ID: file + "#" + key, Label: path.Base(file) + ": " + key}
 	st := plan.Step{Dir: "."}
@@ -118,8 +117,7 @@ func (f *fakeCI) Snippet(r plan.Repo, file string, g plan.Gate) string {
 	return "SNIPPET(" + file + "," + g.Project.Dir + ")"
 }
 
-// writeTree creates files (path -> content) under a new temp dir and returns it. A path ending
-// in "*" is made executable (the "*" is dropped).
+// A path ending in "*" is made executable (the "*" is dropped).
 func writeTree(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -342,7 +340,6 @@ func TestSetupComplete(t *testing.T) {
 	}
 }
 
-// rustMakeTree is a Rust project whose CI runs `make release` in each of the given jobs.
 func rustMakeTree(jobs ...string) map[string]string {
 	ci := ""
 	for _, j := range jobs {
@@ -365,7 +362,6 @@ func TestSetupPrepsAndViaInserts(t *testing.T) {
 	if p.Error != nil {
 		t.Fatal(p.Error)
 	}
-	// Preps go to the CI per job, with the build's position, independent of gates.
 	for _, job := range []string{"linux", "macos", "script"} {
 		ps := ci.preps[fakeCIFile+"#"+job]
 		if len(ps) != 1 || ps[0].Install == nil || ps[0].Install.Marker != "cargo-auditable" || ps[0].Pos.Job != fakeCIFile+"#"+job {
@@ -428,7 +424,6 @@ func TestSetupWriteRefusesChangedFiles(t *testing.T) {
 		t.Errorf(".gitignore = %q", got)
 	}
 
-	// A file created after the plan blocks its create, too.
 	p = computeWith(t, root, &fakeCI{files: []string{fakeCIFile}}, nil)
 	if err := os.WriteFile(filepath.Join(root, "shearbolt.yaml"), []byte("version: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -464,7 +459,6 @@ func TestSetupWrite(t *testing.T) {
 			t.Errorf("temp file left behind: %s", e.Name())
 		}
 	}
-	// A plan with an error writes nothing.
 	if err := Write(root, &plan.Plan{Error: &plan.Note{Code: "NO_CI"}}); err == nil {
 		t.Error("Write accepted a plan with an error")
 	}
@@ -512,8 +506,6 @@ func mapsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// Write refuses a change whose directory resolves outside the repository through a symlink, and
-// writes nothing at all.
 func TestSetupWriteRefusesSymlinkedDirectory(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
@@ -550,7 +542,6 @@ func TestSetupDedupeNotes(t *testing.T) {
 	}
 }
 
-// The same note about a build in a called file, reached by two jobs, appears once in the plan.
 func TestSetupDedupesNotesThroughCompute(t *testing.T) {
 	files := rustMakeTree("linux", "macos")
 	files["Makefile"] = "release:\n\tcargo build --release --target $(TRIPLE)\n"
@@ -563,8 +554,6 @@ func TestSetupDedupesNotesThroughCompute(t *testing.T) {
 	}
 }
 
-// A CI file that cannot be edited at all gets UNSUPPORTED_EDIT with the snippet of each of its
-// gates (Batch 5 review).
 func TestSetupFileEditFailureCarriesSnippet(t *testing.T) {
 	root := writeTree(t, npmTree(nil))
 	p := computeWith(t, root, &fakeCI{files: []string{fakeCIFile}, editErr: errors.New("boom")}, nil)
@@ -577,7 +566,6 @@ func TestSetupFileEditFailureCarriesSnippet(t *testing.T) {
 	}
 }
 
-// A compose target the user removed is not added back: the plan has no changes and says so.
 func TestSetupRemovedComposeTargetStaysRemoved(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"docker-compose.yml": composeImage,
@@ -621,7 +609,6 @@ func TestSetupRemovedComposeTargetStaysRemoved(t *testing.T) {
 	}
 }
 
-// A compose target the user added for a file setup did not plan stays, and the gates scan it.
 func TestSetupHandAddedComposeTarget(t *testing.T) {
 	cfg := "version: 1\ntargets:\n  - name: docker-compose\n    compose: docker-compose.yml\n  - name: stack\n    compose: stack.yml\n"
 	root := writeTree(t, map[string]string{
@@ -652,8 +639,6 @@ func TestSetupHandAddedComposeTarget(t *testing.T) {
 // tests pin its text.
 const wantNoProject = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
-// edgeWorkflow is a GitHub workflow whose job builds an image from the root Dockerfile and
-// pushes it.
 const edgeWorkflow = `on: push
 jobs:
   deploy:
@@ -664,21 +649,16 @@ jobs:
       - run: docker push ghcr.io/acme/edge:latest
 `
 
-// computeRepo runs Compute, with the registered plugins, on a new repository holding files.
 func computeRepo(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	t.Helper()
 	root := writeTree(t, files)
 	return Compute(Options{Root: root, Yes: true, Version: "1.2.3"}), root
 }
 
-// rootProject is the root project setup creates for a repository at root.
 func rootProject(root string, compose ...string) plan.Project {
 	return plan.Project{Ecosystem: plan.EcosystemDocker, Dir: ".", Name: filepath.Base(root), Lockfiles: []string{}, Compose: compose}
 }
 
-// A repository with only a Dockerfile that CI builds and pushes gets the root project, which
-// owns the build: a complete plan whose shearbolt.yaml has one image target, and a gate after
-// the build and before the push.
 func TestComputeRootProjectFromImageBuild(t *testing.T) {
 	base := writeTree(t, map[string]string{"edge/Dockerfile": "FROM nginx:1.27\n", "edge/.github/workflows/ci.yml": edgeWorkflow})
 	root := filepath.Join(base, "edge")
@@ -712,17 +692,13 @@ func TestComputeRootProjectFromImageBuild(t *testing.T) {
 	}
 }
 
-// wantNoGateable is NO_PROJECT's message when CI builds images that give the root project
-// nothing to scan.
 const wantNoGateable = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
 
-// IP-3: when the root project's image builds leave it no planned target and it has no compose
-// file, setup stops with NO_PROJECT, followed by those builds' notes.
 func TestComputeNoGateableImage(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		files map[string]string
-		notes string // the note lines after the message
+		notes string
 	}{
 		{"multi-platform", map[string]string{fakeCIFile: "deploy: docker buildx build --platform linux/amd64,linux/arm64 --push -t ghcr.io/acme/edge:1 .\n"},
 			fakeCIFile + ":1: this image build targets more than one platform, so it cannot be loaded into the local Docker daemon and scanned before it is pushed; no gate is placed for it in this job"},
@@ -752,9 +728,7 @@ func TestComputeNoGateableImage(t *testing.T) {
 	}
 }
 
-// The errors of a repository without an npm, Rust or compose project, in the order of §2.2.
 func TestComputeNoProjectErrors(t *testing.T) {
-	// No image build in CI: NO_PROJECT.
 	p, _ := computeRepo(t, map[string]string{
 		"Dockerfile": "FROM nginx:1.27\n",
 		".github/workflows/ci.yml": `on: push
@@ -783,7 +757,6 @@ jobs:
 	}
 }
 
-// An npm project owns the image builds: there is no root project.
 func TestComputeImageBuildWithNpmProject(t *testing.T) {
 	p, _ := computeRepo(t, map[string]string{
 		"web/package.json":         `{"name":"web"}`,
@@ -799,8 +772,6 @@ func TestComputeImageBuildWithNpmProject(t *testing.T) {
 	}
 }
 
-// A compose-only repository that builds an image keeps its one root project with its compose
-// files.
 func TestComputeImageBuildWithCompose(t *testing.T) {
 	p, root := computeRepo(t, map[string]string{
 		"compose.yml":              composeImage,
@@ -815,8 +786,6 @@ func TestComputeImageBuildWithCompose(t *testing.T) {
 	}
 }
 
-// attachImageBuilds adds the root project only for non-RewriteOnly image builds when no project
-// is npm or Rust, and keeps an existing root project as it is.
 func TestAttachImageBuilds(t *testing.T) {
 	job := func(builds ...plan.Build) []plan.Job {
 		return []plan.Job{{ID: "ci.yml#a"}, {ID: "ci.yml#b", Steps: []plan.Step{{}, {Builds: builds}}}}
@@ -854,8 +823,6 @@ func TestAttachImageBuilds(t *testing.T) {
 	}
 }
 
-// NO_DEPLOY_SEEN also for image targets: CI that builds an image and never pushes it usually
-// means a platform builds and deploys from source, so a failed check cannot stop it.
 func TestComputeNoDeploySeenImage(t *testing.T) {
 	ci := &fakeCI{files: []string{fakeCIFile}}
 	const build = "build: docker build -t ghcr.io/acme/edge:latest .\n"
@@ -879,7 +846,6 @@ func TestComputeNoDeploySeenImage(t *testing.T) {
 	}
 }
 
-// removeTarget deletes the target named name, two lines, from the shearbolt.yaml at root.
 func removeTarget(t *testing.T, root, name string) {
 	t.Helper()
 	file := filepath.Join(root, "shearbolt.yaml")
@@ -937,10 +903,9 @@ func TestComputeRootGateCountsKeptComposeTargets(t *testing.T) {
 	}
 }
 
-// The reviewer's probe with the GitHub plugin: after setup is applied and the compose target
-// removed, job b holds setup's gate, which names the removed target. Setup leaves that gate alone
-// instead of stripping its targets (which would scan a's image), and the note asks for its
-// removal.
+// After setup is applied and the compose target removed, job b holds setup's gate, which names
+// the removed target. Setup leaves that gate alone instead of stripping its targets (which would
+// scan a's image), and the note asks for its removal.
 func TestComputeRootGateStaleAfterComposeTargetRemoved(t *testing.T) {
 	const workflow = `on: push
 jobs:
@@ -983,7 +948,7 @@ jobs:
 }
 
 // Without a gateable image, a root project whose compose target was removed has nothing to scan:
-// NO_PROJECT (§2.2, error 3), although setup still finds the compose file.
+// NO_PROJECT, although setup still finds the compose file.
 func TestComputeNoGateableImageComposeTargetRemoved(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Dockerfile":       "FROM nginx:1.27\n",
@@ -997,8 +962,6 @@ func TestComputeNoGateableImageComposeTargetRemoved(t *testing.T) {
 	}
 }
 
-// NO_PROJECT carries the notes that explain it. Message 2 lists the CI plugins' notes after the
-// find notes, one per line as <file>:<line>: <message>, or <file>: <message> without a line.
 func TestComputeNoProjectCarriesCINotes(t *testing.T) {
 	root := writeTree(t, map[string]string{"Dockerfile": "FROM nginx:1.27\n", fakeCIFile: "test: make test\n"})
 	ci := &fakeCI{files: []string{fakeCIFile}, jobNotes: []plan.Note{
@@ -1024,8 +987,6 @@ func TestComputeNoProjectCarriesCINotes(t *testing.T) {
 	}
 }
 
-// Message 3 carries the find notes and the CI plugins' notes, after the notes of the builds that
-// cannot be gated.
 func TestComputeNoGateableImageCarriesNotes(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"Dockerfile":       "FROM nginx:1.27\n",

@@ -1,10 +1,5 @@
 //go:build unix
 
-// Package scanlock makes scans that share one Shearbolt cache run one after another.
-//
-// A scan installs Grype, imports or updates the vulnerability database and scans with it, all in
-// the cache. Two concurrent scans could otherwise replace each other's database mid-scan, or tie
-// one archive's import marker to another archive's database.
 package scanlock
 
 import (
@@ -16,13 +11,10 @@ import (
 	"syscall"
 )
 
-// File is the lock file inside the cache.
 const File = "shearbolt.lock"
 
-// Acquire takes an exclusive advisory lock (flock) on <dir>/shearbolt.lock, creating the folder
-// and the file as needed. When another process holds the lock, Acquire writes one line to
-// waiting and blocks until it is free. The returned function releases the lock; the kernel also
-// releases it when the process exits, so a crashed scan never leaves the cache locked.
+// The kernel also releases the lock when the process exits, so a crashed scan never leaves the
+// cache locked.
 func Acquire(dir string, waiting io.Writer) (func(), error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create the cache %s: %w", dir, err)

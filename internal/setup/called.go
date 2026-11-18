@@ -13,17 +13,11 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// This file follows CI commands into the repository files they run (R2 "Called files"):
-// Makefiles (make, gmake, $(MAKE)), justfiles (just) and shell scripts (a relative path with a
-// slash, x.sh, bash|sh|zsh x, source x, . x). A command that is recognizably such a call but
-// cannot be followed counts as a push, so the gate goes before it and checks the source.
-
-// maxCallDepth is how deep calls are followed: the CI command's file is depth 1.
+// The CI command's file is depth 1.
 const maxCallDepth = 3
 
-// call is one command that runs an in-repo file.
 type call struct {
-	kind  string   // "make", "just" or "script"
+	kind  string
 	file  string   // repo-relative
 	dir   string   // where the file's commands run
 	goals []string // make targets, or just recipes and their arguments; nil = the default
@@ -35,12 +29,9 @@ func (t *call) key() string {
 }
 
 // callOf returns the file call cmd makes. isCall also reports a recognizable call that cannot be
-// resolved (t == nil): an unknown directory, a variable or outside path, a missing file,
-// Makefile or justfile. Callers count such a call as a push. Not calls: programs installed
-// outside the repository (absolute, home or tool-home paths without .sh), programs the job
-// built (a missing path under target, node_modules, dist, build or out), scripts read from stdin
-// or given inline (-c), and sourced files outside the repository (~/.cargo/env,
-// "$NVM_DIR/nvm.sh").
+// resolved (t == nil). Callers count such a call as a push. Not calls: programs installed
+// outside the repository (absolute, home or tool-home paths without .sh) and programs the job
+// built.
 func callOf(c *classifier, cmd shell.Command, ctx plan.Context) (t *call, isCall bool) {
 	args := cmd.ArgWords()
 	if len(args) == 0 {
@@ -74,12 +65,8 @@ func callOf(c *classifier, cmd shell.Command, ctx plan.Context) (t *call, isCall
 	return nil, false
 }
 
-// toolHomes are variables that name directories outside the repository where tools and their
-// environment scripts live.
 var toolHomes = []string{"HOME", "NVM_DIR", "CARGO_HOME", "VIRTUAL_ENV", "CONDA_PREFIX"}
 
-// outsideRepo reports a path that names something outside the repository: absolute, ~, or
-// below a tool home such as $HOME or "${CARGO_HOME}".
 func outsideRepo(p string) bool {
 	if path.IsAbs(p) || strings.HasPrefix(p, "~") {
 		return true
@@ -94,12 +81,8 @@ func outsideRepo(p string) bool {
 	return false
 }
 
-// outputDirs are the directories builds write to. A missing program there was built by the job.
 var outputDirs = []string{"target", "node_modules", "dist", "build", "out"}
 
-// builtProgram reports a program the job built and then runs (./target/release/demo --version,
-// ./node_modules/.bin/x): a path that does not exist in the repository with an output directory
-// among its components. Files committed in such a directory are followed as usual.
 func builtProgram(r plan.Repo, prog, resolved string, ok bool) bool {
 	if ok && r.Exists(resolved) {
 		return false
@@ -116,8 +99,7 @@ func builtProgram(r plan.Repo, prog, resolved string, ok bool) bool {
 
 // callPath resolves the path of a called file or directory: relative to dir; relative to the
 // script's own directory self for $(dirname "$0")/x; or relative to the repository root after a
-// clone-directory variable ($GITHUB_WORKSPACE/x). It fails for anything that is not a certain
-// path inside the repository.
+// clone-directory variable ($GITHUB_WORKSPACE/x).
 func callPath(dir, self, p string) (string, bool) {
 	if d, ok := shell.ScriptDir(p, self); ok {
 		return d, true
@@ -273,9 +255,7 @@ func justCall(c *classifier, args []shell.Word, dir, self string) (*call, bool) 
 	return t, true
 }
 
-// shellCall resolves `bash|sh|zsh [options] x` (source is false) or `source x` / `. x`. A shell
-// with -c (an inline script, see inlineScript), -s or no script reads no file and is not a call;
-// neither is a sourced file outside the repository, such as ~/.cargo/env.
+// A shell with -c (an inline script), -s or no script reads no file and is not a call.
 func shellCall(args []shell.Word, dir, self string, source bool) (*call, bool) {
 	i := 0
 	for !source && i < len(args) {
@@ -317,7 +297,6 @@ func shellCall(args []shell.Word, dir, self string, source bool) (*call, bool) {
 	return &call{kind: "script", file: f, dir: dir}, true
 }
 
-// runMode is how follow treats a recipe.
 type runMode int
 
 const (
@@ -326,14 +305,8 @@ const (
 	maybeReached                // a Make rule whose target is a variable that does not resolve, or a prerequisite of one (literal or resolved): its pushes and unfollowable calls count, its builds stay RewriteOnly
 )
 
-// follow classifies the commands of the file t runs. Only reachable recipes (the invoked targets
-// and, transitively, their prerequisites, or the default goal) produce gateable builds and
-// pushes; ecosystem builds in other recipes come back RewriteOnly, with no notes. A Make rule
-// whose target is a variable that does not resolve may run under any name: its pushes count,
-// but its builds stay RewriteOnly, and the same holds for the rules of its literal or resolved
-// prerequisites. Builds get Via set to the file they are in, and their notes are
-// located there. The caller's depth is added to every command, so builds behind a conditional
-// call count as conditional.
+// The caller's depth is added to every command, so builds behind a conditional call count as
+// conditional.
 //
 // What cannot be followed counts as a push: the depth limit, a file that cannot be read or is
 // not a shell script (binary, or a #! naming another interpreter), a named goal or recipe
@@ -432,10 +405,6 @@ func (c *classifier) follow(t *call, caller shell.Command, ctx plan.Context, lev
 	return builds, push
 }
 
-// nested classifies a reachable command of the file at depth level (or of an inline script):
-// a pushing image build counts as a push (other image builds in called files are not
-// recognized), an ecosystem build gets Via = file and its notes located there, a file call is
-// followed one level deeper, and a push, or an inline script that pushes, is a push.
 func (c *classifier) nested(cmd shell.Command, ctx plan.Context, file string, level int, stack []string, vars map[string]string) ([]plan.Build, bool) {
 	args := cmd.ArgWords()
 	if ib := imageBuild(cmd, args, ctx, vars); ib != nil {
@@ -459,7 +428,6 @@ func (c *classifier) nested(cmd shell.Command, ctx plan.Context, file string, le
 	return nil, isPush(args, vars) || c.inlinePush(cmd, args, level, stack, vars)
 }
 
-// shift moves a command parsed from a slice of a file to the file's offsets.
 func shift(c shell.Command, by int) shell.Command {
 	c.Start += by
 	c.End += by
@@ -477,8 +445,6 @@ func shift(c shell.Command, by int) shell.Command {
 	return c
 }
 
-// shellScript reports whether text is a shell script: a #! line naming a shell, or no #! line
-// at all when one is not required.
 func shellScript(text string, required bool) bool {
 	first, _, _ := strings.Cut(text, "\n")
 	first = strings.TrimSpace(strings.TrimPrefix(first, "\xef\xbb\xbf"))

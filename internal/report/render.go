@@ -8,7 +8,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Headline is the one-line verdict shown first in every report.
 func Headline(r *model.Run) string {
 	blocked, _, warned := Split(r.Findings)
 	switch r.Verdict {
@@ -28,7 +27,6 @@ func Headline(r *model.Run) string {
 	}
 }
 
-// Split groups findings by decision.
 func Split(findings []model.Finding) (blocked, excepted, warned []model.Finding) {
 	for _, f := range findings {
 		switch f.Decision.Action {
@@ -43,7 +41,6 @@ func Split(findings []model.Finding) (blocked, excepted, warned []model.Finding)
 	return blocked, excepted, warned
 }
 
-// Markdown renders summary.md (also used for the GitHub job summary).
 func Markdown(r *model.Run) string {
 	blocked, excepted, warned := Split(r.Findings)
 	var b strings.Builder
@@ -122,7 +119,6 @@ func Markdown(r *model.Run) string {
 	return b.String()
 }
 
-// Text renders a run for a terminal. Colors are used only when color is true.
 func Text(r *model.Run, color bool) string {
 	paint := func(code, s string) string {
 		if !color {
@@ -190,7 +186,6 @@ func Text(r *model.Run, color bool) string {
 	return b.String()
 }
 
-// Where names the target and the first location of a finding.
 func Where(f model.Finding) string {
 	name := f.Target
 	if f.Image != "" {
@@ -265,8 +260,6 @@ func clean(s string) string {
 
 var mdEscaper = strings.NewReplacer(`\`, `\\`, "|", `\|`, "*", `\*`, "_", `\_`, "`", "\\`", "[", `\[`, "]", `\]`, "<", "&lt;", ">", "&gt;")
 
-// md escapes untrusted text for Markdown tables and lists.
 func md(s string) string { return mdEscaper.Replace(clean(s)) }
 
-// code makes text safe inside an inline code span.
 func code(s string) string { return strings.ReplaceAll(clean(s), "`", "'") }

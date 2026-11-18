@@ -307,7 +307,6 @@ func TestArgvAndPrefix(t *testing.T) {
 	}
 }
 
-// Wrappers that run the next word as the program are skipped like sudo and env.
 func TestArgvSkipsCommandWrappers(t *testing.T) {
 	for script, want := range map[string][]string{
 		"time cargo build --release":                        {"cargo", "build", "--release"},
@@ -377,8 +376,7 @@ func TestOperators(t *testing.T) {
 	}
 }
 
-// OpBefore is the operator of the command finished before it. Keywords and an opening { or ( are
-// not commands; the closing } and ) are.
+// Keywords and an opening { or ( are not commands; the closing } and ) are.
 func TestOpBefore(t *testing.T) {
 	cmds := parseOK(t, "a || b && c\nif d || { e; }; then f; fi\ng || (h)", State{Dir: "."})
 	var got []string
@@ -514,8 +512,6 @@ func TestHeredocInsideCommandSubstitution(t *testing.T) {
 	}
 }
 
-// A construct the lexer cannot close must not hide the rest of the script, and everything from
-// it on is unsafe to edit (Depth+1).
 func TestUnterminatedConstructsLeaveTheRestVisibleAndUnsafe(t *testing.T) {
 	for _, open := range []string{"echo $(date", "echo 'a", "echo \"a", "echo `a", "echo ${{ a", "echo ${a", "echo \"$(a\"", "x=(a", "diff <(a"} {
 		script := "docker build -t x .\n" + open + "\ndocker push x"
@@ -575,8 +571,6 @@ func TestExpressionLiteralWithClosingBraces(t *testing.T) {
 	}
 }
 
-// A script's own directory, $(dirname "$0") or $(dirname "${BASH_SOURCE[0]}"), resolves against
-// State.Self.
 func TestScriptDirectory(t *testing.T) {
 	for v, want := range map[string]string{
 		`$(dirname "$0")`: "scripts/ci", `$(dirname "$0")/..`: "scripts", `$(dirname $0)/lib.sh`: "scripts/ci/lib.sh",

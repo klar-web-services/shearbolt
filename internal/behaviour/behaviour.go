@@ -1,8 +1,3 @@
-// Package behaviour runs black-box release checks against a built shearbolt binary (spec section 14).
-//
-// The release workflow runs these cases against the candidate binary on the pinned database
-// snapshot (candidate_test.go, build tag behaviour). The cases are written so that a binary with
-// a constant answer cannot pass them (behaviour_test.go).
 package behaviour
 
 import (
@@ -21,21 +16,19 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Case is one invocation of `<binary> scan --ci --json --config <cfg> --output-dir <dir>` and its expected outcome.
 type Case struct {
 	Name     string
-	Config   string                                    // shearbolt.yaml; "FIXTURES" is replaced by Env.Fixtures
-	WantExit int                                       // the expected process exit code
+	Config   string // shearbolt.yaml; "FIXTURES" is replaced by Env.Fixtures
+	WantExit int
 	Check    func(run *model.Run, stderr string) error // run is nil when stdout is not run.json
 }
 
-// Env says which binary to check and where its inputs and outputs live.
 type Env struct {
-	Binary    string // the shearbolt binary under test
-	DBArchive string // the pinned Grype database archive (SHEARBOLT_DB_ARCHIVE)
-	CacheDir  string // the Shearbolt cache (SHEARBOLT_CACHE_DIR); each scan imports the archive here
-	Fixtures  string // testdata/projects
-	WorkDir   string // a folder for configs and evidence
+	Binary    string
+	DBArchive string
+	CacheDir  string
+	Fixtures  string
+	WorkDir   string
 }
 
 const (
@@ -54,7 +47,6 @@ func kevException(expires string) string {
 	return "exceptions:\n  - id: " + kevID + "\n    package: jquery@3.4.1\n    reason: behaviour test of exception expiry\n    approvedBy: release workflow\n    expires: " + expires + "\n"
 }
 
-// Cases returns the release cases; today dates the in-date exception.
 func Cases(today time.Time) []Case {
 	return []Case{
 		{Name: "vulnerable", Config: config("npm-vulnerable", snapshotPolicy, ""), WantExit: 1, Check: func(run *model.Run, _ string) error {
@@ -147,7 +139,6 @@ func isRun(run *model.Run, verdict string) error {
 	return nil
 }
 
-// action is the decision for the finding with the given ID, or "" if there is none.
 func action(run *model.Run, id string) model.Action {
 	for _, f := range run.Findings {
 		if f.ID == id {
@@ -157,8 +148,6 @@ func action(run *model.Run, id string) model.Action {
 	return ""
 }
 
-// Run executes one case and returns nil when the binary behaved as expected. The child environment is
-// the parent's minus GITHUB_STEP_SUMMARY, plus CI=true, SHEARBOLT_DB_ARCHIVE and SHEARBOLT_CACHE_DIR.
 func Run(ctx context.Context, env Env, c Case) error {
 	if strings.ContainsAny(env.Fixtures, "\"\\\n") {
 		return fmt.Errorf("%s: the fixtures path %q cannot be written into a config", c.Name, env.Fixtures)
@@ -217,7 +206,6 @@ func childEnv(env Env) []string {
 	return append(out, "CI=true", "SHEARBOLT_DB_ARCHIVE="+env.DBArchive, "SHEARBOLT_CACHE_DIR="+env.CacheDir)
 }
 
-// tail formats the end of stderr for an error message.
 func tail(stderr string) string {
 	if stderr = strings.TrimSpace(stderr); stderr == "" {
 		return ""

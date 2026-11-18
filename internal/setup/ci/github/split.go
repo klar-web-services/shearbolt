@@ -14,9 +14,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// decideSplit splits the step after its last gated build when another command follows it in the
-// gate's step (P1), or when one of its gated builds uses --push. A step that cannot be split
-// fails the job (R4 rule 5 (a)-(d)).
 func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	if len(sp.builds) == 0 || sp.st.run == nil {
 		return nil
@@ -24,8 +21,6 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	g := e.gates[sp.gate]
 	st := sp.st
 	last := sp.builds[len(sp.builds)-1].Pos.Command
-	// P1, for each gate that follows a build in this step: a command after its build that is not
-	// another gated build of the step needs a split.
 	gated := map[int]bool{}
 	for _, b := range sp.builds {
 		gated[b.Pos.Command] = true
@@ -64,8 +59,8 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	sp.split, sp.state, sp.dropped, sp.shellEdits, sp.last = true, state, dropped, true, last
 	sp.cut, sp.rest = shelledit.SplitPoints(st.script, cmd)
 	// A stop before the split point ends part 1 successfully, and the remainder would run
-	// although the script never got there (design §3.2): part 1 then ends with setup's marker
-	// line, which the remainder checks through the step's id.
+	// although the script never got there: part 1 then ends with setup's marker line, which the
+	// remainder checks through the step's id.
 	sp.marker = slices.ContainsFunc(e.pj.Steps[sp.s].Stops, func(k int) bool {
 		return k >= 0 && k < len(st.cmds) && st.cmds[k].End <= sp.cut
 	})
@@ -75,13 +70,11 @@ func (e *jobEditor) decideSplit(sp *stepPlan) error {
 	return nil
 }
 
-// carried are the commands whose state the remainder re-creates by running them again.
 var carried = []string{"cd", "export", "unset", "set", "shopt", "umask", "ulimit", "declare", "typeset", "readonly"}
 
-// uncarried change shell state in ways a new step cannot re-create safely (R4 rule 5 (d)).
+// uncarried change shell state in ways a new step cannot re-create safely.
 var uncarried = []string{"source", ".", "pushd", "popd", "alias", "unalias", "eval", "trap", "read", "mapfile", "readarray", "local", "hash", "enable"}
 
-// Why carriedState cannot re-create a command's state; %s is the command.
 const (
 	condMsg   = "%s changes the shell state inside a conditional or loop, which a split step cannot re-create"
 	underMsg  = "%s runs only under a condition or in a pipeline, so a split step cannot re-create its state"
@@ -90,28 +83,20 @@ const (
 )
 
 // droppedAssign is an assignment before the split point that the split step cannot re-create
-// and leaves out (design §4). renderStep fails the split with reason when the continued step
-// may read one of its names (assignRead), so only shell-local names, like live, are ever left
-// out: a name with no lowercase letter, a proxy variable, or a name that an env: or a
-// $GITHUB_ENV write may set, may be an inherited variable.
+// and leaves out. renderStep fails the split with reason when the continued step may read one
+// of its names (assignRead), so only shell-local names are ever left out.
 type droppedAssign struct {
 	names  []string
 	line   int
-	text   string // the command, as messages show it
-	reason string // one of condMsg, underMsg and substMsg
-	cmd    int    // the command's index in the step
+	text   string
+	reason string
+	cmd    int
 }
 
-// carriedState returns the commands up to the split point (cmds, the last gated build included)
-// that set shell state, to be copied in front of the remainder: cd, set, export and bare
-// assignments without command substitution, and the like. Anything that cannot be carried, or a
-// state change inside a conditional or loop, fails the split, except a command made up only of
-// assignments that is not in a pipeline or in the background: it is returned in dropped, and
-// fails the split only when the continued step may read one of its names (renderStep,
-// assignRead), which includes every name that may be inherited from the environment. A command
-// that may assign a variable inside an expansion, in arithmetic or through a builtin
-// (hiddenAssign) fails the split unless it is carried: the split step would not re-create its
-// assignment, while a carried command re-runs and re-creates it.
+// carriedState returns the commands up to the split point that set shell state, to be copied in
+// front of the remainder. A command that may assign a variable inside an expansion, in
+// arithmetic or through a builtin (hiddenAssign) fails the split unless it is carried: the split
+// step would not re-create its assignment, while a carried command re-runs and re-creates it.
 func carriedState(script string, cmds []shell.Command, st *step) (state []string, dropped []droppedAssign, err error) {
 	masked := maskWords(script, st.cmds)
 	for i, c := range cmds {
@@ -182,14 +167,11 @@ var (
 )
 
 // hiddenAssign reports whether command i of cmds may assign a variable other than through its
-// leading NAME=… words (design §4): a ${NAME=…} or ${NAME:=…} expansion; arithmetic ($((…)),
-// $[…], ((…)), and offsets in ${…}) with ++, -- or an assignment operator; a subscript in ${…} or
-// of an assigned array element with ++, -- or =; or let, getopts, printf -v or wait -p. masked
-// is the script with maskWords applied, since a command substitution runs in a subshell. The
-// check is textual. It finds openers in the text from the end of the previous command, so it
-// also sees the (( of an arithmetic command or a C-style for, which are not words, and reads
-// each construct to its close in the script, past the || or && that ends the command. A false
-// match only fails the split.
+// leading NAME=… words. masked is the script with maskWords applied, since a command
+// substitution runs in a subshell. The check is textual. It finds openers in the text from the
+// end of the previous command, so it also sees the (( of an arithmetic command or a C-style for,
+// which are not words, and reads each construct to its close in the script, past the || or &&
+// that ends the command. A false match only fails the split.
 func hiddenAssign(masked string, cmds []shell.Command, i int) bool {
 	c := cmds[i]
 	if argv := builtinArgv(c); len(argv) > 0 {
@@ -247,10 +229,9 @@ func hiddenAssign(masked string, cmds []shell.Command, i int) bool {
 	return false
 }
 
-// maskWords returns script with maskSubst applied to each word and redirection target of cmds,
-// its commands, on its own, and every offset kept. Text between words is never blanked, so text
-// that maskSubst reads wrongly (an apostrophe in a heredoc body or in a comment inside $(…), or a
-// lone backtick in a quoted heredoc body) cannot blank code past the word that holds it.
+// Text between words is never blanked, so text that maskSubst reads wrongly (an apostrophe in a
+// heredoc body or in a comment inside $(…), or a lone backtick in a quoted heredoc body) cannot
+// blank code past the word that holds it.
 func maskWords(script string, cmds []shell.Command) string {
 	b := []byte(script)
 	for _, c := range cmds {
@@ -269,8 +250,7 @@ func maskWords(script string, cmds []shell.Command) string {
 
 // maskSubst returns s with the contents of its command substitutions, $(…) and `…`, blanked out
 // and every offset kept: they run in a subshell, so an assignment inside them cannot reach the
-// step. $((…)) is arithmetic and stays, a substitution nested in it is blanked, and a
-// substitution that never closes stays. Single-quoted text and comments are skipped.
+// step.
 func maskSubst(script string) string {
 	b := []byte(script)
 	blank := func(from, to int) {
@@ -314,8 +294,6 @@ func maskSubst(script string) string {
 	return string(b)
 }
 
-// substLen returns the length of the command substitution body s starts with, its closing )
-// included, or -1 when it never closes. Quotes, escapes and nested substitutions are skipped.
 func substLen(s string) int {
 	depth := 0
 	for j := 0; j < len(s); j++ {
@@ -352,8 +330,6 @@ func substLen(s string) int {
 	return -1
 }
 
-// dquoteEnd returns the index of the " that ends the double-quoted text s starts inside of, or
-// -1 when it never ends. Escapes and substitutions are skipped.
 func dquoteEnd(s string) int {
 	for j := 0; j < len(s); j++ {
 		switch s[j] {
@@ -380,8 +356,6 @@ func dquoteEnd(s string) int {
 	return -1
 }
 
-// tickEnd returns the index of the unescaped backtick that ends the backtick substitution s
-// starts inside of, or -1 when it never ends.
 func tickEnd(s string) int {
 	for j := 0; j < len(s); j++ {
 		switch s[j] {
@@ -394,8 +368,6 @@ func tickEnd(s string) int {
 	return -1
 }
 
-// closing returns s up to the close that ends the construct s starts inside of (nested
-// open/close pairs skipped), or all of s when it never closes.
 func closing(s string, open, close byte) string {
 	depth := 0
 	for j := 0; j < len(s); j++ {
@@ -412,8 +384,6 @@ func closing(s string, open, close byte) string {
 	return s
 }
 
-// arithAssign reports whether arithmetic text s may assign: ++, --, or an = that is not part of
-// ==, !=, <= or >= (so =, +=, -=, *=, /=, %=, <<=, >>=, &=, ^= and |=).
 func arithAssign(s string) bool {
 	if strings.Contains(s, "++") || strings.Contains(s, "--") {
 		return true
@@ -423,7 +393,7 @@ func arithAssign(s string) bool {
 			continue
 		}
 		if i+1 < len(s) && s[i+1] == '=' {
-			i++ // ==
+			i++
 			continue
 		}
 		if i > 0 {
@@ -444,27 +414,22 @@ func arithAssign(s string) bool {
 // proxyVars are lowercase variables that tools read from the environment.
 var proxyVars = []string{"http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy"}
 
-// continued is what a split step's continued step runs and inherits, for assignRead.
 type continued struct {
-	text      string          // its script
+	text      string
 	cmds      []shell.Command // its commands, with those inside substitutions (commandsIn)
 	step      []shell.Command // the split step's own commands
-	inherited []string        // names it may inherit: env: keys and $GITHUB_ENV writes (inheritedNames)
-	anyName   bool            // setup cannot read an env: or a $GITHUB_ENV write: any name may be inherited
+	inherited []string
+	anyName   bool
 }
 
 // assignRead reports whether a split step's continued step ct may read one of names, which an
-// assignment that the split step leaves out sets (design §4). A name counts as read when it may
-// be an inherited environment variable, which every child process reads without naming it: one
-// of ct.inherited (env: keys of the workflow, the job, its container and the step, and names
-// written to $GITHUB_ENV by earlier steps), any name when setup cannot read one of those or the
-// step's shell runs with allexport, a proxy variable, or a name with no lowercase letter, since
-// the runner, the shell (PATH, IFS) or $GITHUB_ENV can set such a name and setup cannot tell. It also counts as read when it
-// is a whole word anywhere in ct.text, which covers arithmetic, [[ -v ]] and comments; and every
-// name does when the continued step uses indirect or prefix expansion, or runs eval, source, .,
-// a nameref or a command that prints variables (also inside a substitution), when the step
-// exports the name or makes it readonly, or when allexport is set by one of before, the commands
-// ahead of the assignment. A false match only fails the split.
+// assignment that the split step leaves out sets. A name counts as read when it may be an
+// inherited environment variable, which every child process reads without naming it: one of
+// ct.inherited, any name when setup cannot read one of those or the step's shell runs with
+// allexport, a proxy variable, or a name with no lowercase letter, since the runner, the shell
+// (PATH, IFS) or $GITHUB_ENV can set such a name and setup cannot tell. It also counts as read
+// when it is a whole word anywhere in ct.text, which covers arithmetic, [[ -v ]] and comments. A
+// false match only fails the split.
 func assignRead(names []string, ct *continued, before []shell.Command) bool {
 	for _, n := range names {
 		if ct.anyName || slices.Contains(ct.inherited, n) || slices.Contains(proxyVars, n) || !strings.ContainsFunc(n, unicode.IsLower) {
@@ -484,10 +449,9 @@ func assignRead(names []string, ct *continued, before []shell.Command) bool {
 }
 
 // inheritedNames returns the names a split step's continued step may inherit from its
-// environment, besides those assignRead assumes anyway: the env: keys of the workflow, the job,
-// its container and the step, and the names written to $GITHUB_ENV by the job's earlier steps
-// (renderStep refuses a split whose part 1 writes to it). all is true when setup cannot read one
-// of them, or when the step's shell runs with allexport, which exports every assignment.
+// environment: the env: keys of the workflow, the job, its container and the step, and the
+// names written to $GITHUB_ENV by the job's earlier steps (renderStep refuses a split whose
+// part 1 writes to it).
 func (e *jobEditor) inheritedNames(sp *stepPlan) (names []string, all bool) {
 	if sp.st.shellSet && shellAllexport(sp.st.shell) {
 		return nil, true
@@ -523,16 +487,12 @@ func (e *jobEditor) inheritedNames(sp *stepPlan) (names []string, all bool) {
 	return names, false
 }
 
-// shellAllexport reports a shell: setting that runs the shell with allexport (an option cluster
-// with a, or -o allexport), which exports every assignment.
 func shellAllexport(sh string) bool {
 	return slices.ContainsFunc(strings.Fields(sh), func(f string) bool {
 		return f == "allexport" || len(f) > 1 && f[0] == '-' && f[1] != '-' && strings.Contains(f, "a")
 	})
 }
 
-// envNames returns the keys of mapping m's env:, and false when setup cannot read them: the env:
-// is an alias, an expression or anything else but a plain mapping, or uses a merge key.
 func envNames(m *yaml.Node) ([]string, bool) {
 	n := rawValue(m, "env")
 	if n == nil || n.Kind == yaml.ScalarNode && n.Tag == "!!null" {
@@ -556,9 +516,8 @@ func envNames(m *yaml.Node) ([]string, bool) {
 // lines up to DELIMITER.
 var envLine = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)(?:=|<<(.*))`)
 
-// envWrites returns the names that cmds, commands of script, write to $GITHUB_ENV: the literal
-// NAME= lines that echo, printf or cat with a heredoc append to it. all is true when a command
-// that mentions $GITHUB_ENV writes anything else, or in a way setup cannot read.
+// all is true when a command that mentions $GITHUB_ENV writes anything else, or in a way setup
+// cannot read.
 func envWrites(script string, cmds []shell.Command) (names []string, all bool) {
 	for _, c := range cmds {
 		mentions := slices.ContainsFunc(c.Words, func(w shell.Word) bool { return strings.Contains(w.Raw, "GITHUB_ENV") })
@@ -624,8 +583,6 @@ func envWrites(script string, cmds []shell.Command) (names []string, all bool) {
 	return names, false
 }
 
-// heredocBody returns the body of heredoc r in script: the lines after the one that holds r, up
-// to its delimiter line (tabs stripped for <<-) or the end of script.
 func heredocBody(script string, r shell.Redir) string {
 	nl := strings.IndexByte(script[r.Start:], '\n')
 	if nl < 0 {
@@ -686,7 +643,6 @@ func commandsIn(text string) []shell.Command {
 	return out
 }
 
-// builtinArgv is a command's Argv without a leading builtin.
 func builtinArgv(c shell.Command) []string {
 	argv := c.Argv()
 	if len(argv) > 0 && argv[0] == "builtin" {
@@ -695,8 +651,6 @@ func builtinArgv(c shell.Command) []string {
 	return argv
 }
 
-// options splits args into the letters of their leading options (-x or +x clusters, up to --)
-// and the arguments after them.
 func options(args []string) (letters string, rest []string) {
 	for i, a := range args {
 		if a == "--" {
@@ -737,8 +691,6 @@ func readsAny(c shell.Command) bool {
 	return false
 }
 
-// exportsName reports a command that exports one of names or makes it readonly: export,
-// readonly, or declare, typeset or local with -x or -r.
 func exportsName(c shell.Command, names []string) bool {
 	argv := builtinArgv(c)
 	if len(argv) == 0 {
@@ -757,7 +709,6 @@ func exportsName(c shell.Command, names []string) bool {
 	return slices.ContainsFunc(args, func(a string) bool { return slices.Contains(names, varName(a)) })
 }
 
-// varName returns NAME for an argument written NAME, NAME=…, NAME+=… or NAME[i]…, else "".
 func varName(a string) string {
 	i := 0
 	for i < len(a) && (a[i] == '_' || a[i] >= 'a' && a[i] <= 'z' || a[i] >= 'A' && a[i] <= 'Z' || i > 0 && a[i] >= '0' && a[i] <= '9') {
@@ -769,8 +720,6 @@ func varName(a string) string {
 	return ""
 }
 
-// allexport reports set -a, set -o allexport or shopt -o allexport, after which every
-// assignment exports its name.
 func allexport(c shell.Command) bool {
 	argv := builtinArgv(c)
 	if len(argv) == 0 {
@@ -787,7 +736,6 @@ func allexport(c shell.Command) bool {
 	return false
 }
 
-// isFunction reports a function definition: `name () ...` or `function name ...`.
 func isFunction(c shell.Command) bool {
 	if len(c.Words) == 0 {
 		return false
@@ -798,10 +746,6 @@ func isFunction(c shell.Command) bool {
 	return strings.HasSuffix(c.Words[0].Raw, "()") || len(c.Words) > 1 && strings.HasPrefix(c.Words[1].Raw, "()")
 }
 
-// remainderLines renders the new step that holds a split step's remainder: its name, the copied
-// if (made safe), env, shell, working-directory, continue-on-error and timeout-minutes, and run.
-// When the step can stop early, its if: also checks setup's marker (continuedIf), and it gets
-// one, right after its name, even when the step had none.
 func (e *jobEditor) remainderLines(sp *stepPlan) ([]string, error) {
 	st := sp.st
 	name := "Continue after shearbolt"
@@ -848,7 +792,6 @@ func (e *jobEditor) remainderLines(sp *stepPlan) ([]string, error) {
 	return append(out, run[1:]...), nil
 }
 
-// entryLines returns key's entry of mapping m as written, relative to m's key column.
 func (e *jobEditor) entryLines(m *yaml.Node, key string) ([]string, error) {
 	i := slices.Index(keys(m), key)
 	k, v := m.Content[2*i], m.Content[2*i+1]

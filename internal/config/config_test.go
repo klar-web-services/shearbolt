@@ -266,7 +266,6 @@ targets:
 	}
 }
 
-// imageConfig is a config with one image target named web whose image field is value.
 func imageConfig(t *testing.T, value string) string {
 	t.Helper()
 	return write(t, "version: 1\nproject: p\ntargets:\n  - name: web\n    image: "+value+"\n")
@@ -288,7 +287,6 @@ func TestLoadAcceptsImageReferences(t *testing.T) {
 			t.Errorf("%s: %v", ref, err)
 		}
 	}
-	// Expansion results: the default, and a value from the environment.
 	vars := map[string]string{"SHEARBOLT_IMAGE": "ghcr.io/acme/web:shearbolt-0123abc", "TAG": "1.2.3"}
 	for _, value := range []string{
 		"${SHEARBOLT_IMAGE:-web:local}",
@@ -307,7 +305,6 @@ func TestLoadAcceptsImageReferences(t *testing.T) {
 	}
 }
 
-// unsafeImageRefs could inject a command or an option when an image reference reaches a shell.
 var unsafeImageRefs = []string{
 	"app; rm -rf /", "app:1&&id", "app|tee", "app&", "$(id)", "app:`id`", "app'x", `app"x`,
 	`app\x`, "app<x", "app>x", "app(x)", "app{x}", "app*", "app?", "app!", "app#x", "app~x",
@@ -317,7 +314,6 @@ var unsafeImageRefs = []string{
 
 func TestLoadRejectsUnsafeImageReferences(t *testing.T) {
 	for _, ref := range unsafeImageRefs {
-		// Written literally (as a YAML double-quoted string) and arriving through a variable.
 		literal := imageConfig(t, strconv.Quote(ref))
 		expanded := imageConfig(t, "${IMG}")
 		for _, c := range []struct {
@@ -365,7 +361,6 @@ func TestUnexpandableImageGivesOneProblem(t *testing.T) {
 	}
 }
 
-// YAML errors say what is wrong where, in the user's terms, and where to look (spec section 7).
 func TestLoadExplainsYAMLErrors(t *testing.T) {
 	for name, tc := range map[string]struct{ content, want string }{
 		"unknown field":          {"version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\npolicy:\n  maxDatabaseAgeHours: 48\ncolour: red\n", `line 8: unknown field "colour" (check its spelling and indentation)`},
@@ -406,7 +401,6 @@ func TestLoadExplainsYAMLErrors(t *testing.T) {
 	}
 }
 
-// Several type errors are all listed, one per line.
 func TestLoadListsEveryYAMLError(t *testing.T) {
 	path := write(t, "version: 1\npolicy:\n  blockKnownExploited: maybe\n  blockEpssAtLeast: lots\n")
 	_, err := Load(path, env(nil), now)
@@ -415,7 +409,6 @@ func TestLoadListsEveryYAMLError(t *testing.T) {
 	}
 }
 
-// Validation problems name the file and point to the docs, like YAML errors.
 func TestLoadValidationProblemsNameTheFile(t *testing.T) {
 	path := write(t, "version: 2\nproject: p\n")
 	_, err := Load(path, env(nil), now)
@@ -428,7 +421,6 @@ func TestLoadValidationProblemsNameTheFile(t *testing.T) {
 	}
 }
 
-// yaml.v3 alone would truncate 1.5 to 1 and accept it.
 func TestLoadRejectsANonIntegerVersion(t *testing.T) {
 	for _, v := range []string{"1.5", "0.9", "1.0", "'1'", "one", "[1]"} {
 		t.Run(v, func(t *testing.T) {
@@ -445,8 +437,6 @@ func TestLoadRejectsANonIntegerVersion(t *testing.T) {
 	}
 }
 
-// yaml.v3 alone would truncate maxDatabaseAgeHours: 47.9 to 47 and accept it; both whole-number
-// policy fields reject a non-integer like version does, also through an alias.
 func TestLoadRejectsNonIntegerPolicyNumbers(t *testing.T) {
 	const head = "version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\npolicy:\n"
 	for field, values := range map[string][]string{
@@ -467,7 +457,6 @@ func TestLoadRejectsNonIntegerPolicyNumbers(t *testing.T) {
 	if _, err := Load(path, env(nil), now); err == nil || !strings.Contains(err.Error(), `line 7: expected a whole number, found ".inf"`) || strings.Count(err.Error(), "line 7") != 1 {
 		t.Errorf(".inf: err = %v", err)
 	}
-	// Reported with the other problems of the file, in one pass.
 	path = write(t, "version: 1.5\nproject: p\ntargets:\n  - name: repo\n    source: .\npolicy:\n  maxExceptionDays: 30.5\n")
 	if _, err := Load(path, env(nil), now); err == nil || !strings.Contains(err.Error(), "version must be a whole number") || !strings.Contains(err.Error(), "policy.maxExceptionDays must be a whole number") {
 		t.Errorf("err = %v", err)

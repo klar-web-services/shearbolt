@@ -1,4 +1,4 @@
-# Gate for Shearbolt's own release candidates (spec section 14), run by the previous release.
+# Gate for Shearbolt's own release candidates, run by the previous release.
 # Written by hand: setup reports NO_PROJECT on a Go repository. internal/config/releasegate_test.go
 # keeps it loadable. CANDIDATE_DIR holds <triple>/shearbolt for each build; unset, it is a config
 # error (exit 2), so the gate fails closed. Paths are relative to this file.

@@ -131,8 +131,6 @@ func TestBitbucketFiles(t *testing.T) {
 	}
 }
 
-// Every step under default, branches, tags, pull-requests and custom is a job, inside parallel
-// (a list or steps:) and stage steps too. Labels are the step name and its path.
 func TestBitbucketJobs(t *testing.T) {
 	js, ns := jobs(t, lines(
 		"pipelines:",
@@ -200,7 +198,6 @@ func TestBitbucketJobs(t *testing.T) {
 	}
 }
 
-// A step defined once with an anchor and used in two pipelines is one job, edited at the anchor.
 func TestBitbucketAnchoredStepEditedOnce(t *testing.T) {
 	src := lines(
 		"definitions:",
@@ -244,8 +241,6 @@ func TestBitbucketAnchoredStepEditedOnce(t *testing.T) {
 	))
 }
 
-// A parallel step is found and edited; an existing definitions.caches gets the entry appended,
-// and a step whose script is its first key gets caches before it.
 func TestBitbucketParallelAndExistingCaches(t *testing.T) {
 	_, got := result(t, npmRepo(lines(
 		"definitions:",
@@ -286,7 +281,6 @@ func TestBitbucketParallelAndExistingCaches(t *testing.T) {
 	))
 }
 
-// Without definitions, they are created before pipelines (and its head comment).
 func TestBitbucketCreatesDefinitions(t *testing.T) {
 	_, got := result(t, npmRepo(lines(
 		"image: node:22",
@@ -316,7 +310,6 @@ func TestBitbucketCreatesDefinitions(t *testing.T) {
 	))
 }
 
-// Steps with a merge key are not jobs; one note lists them all, with the snippet.
 func TestBitbucketMergeKeySteps(t *testing.T) {
 	src := lines(
 		"definitions:",
@@ -349,7 +342,6 @@ func TestBitbucketMergeKeySteps(t *testing.T) {
 		t.Errorf("notes %+v", ns)
 	}
 
-	// When every step uses a merge key, the config is still written but no gate is placed.
 	p, got := result(t, npmRepo(lines(
 		"definitions:",
 		"  steps:",
@@ -377,7 +369,6 @@ func TestBitbucketMergeKeySteps(t *testing.T) {
 	}
 }
 
-// A flow-style caches list keeps the script edit but drops the cache edit.
 func TestBitbucketFlowCaches(t *testing.T) {
 	p, got := result(t, npmRepo(lines(
 		"pipelines:",
@@ -402,7 +393,6 @@ func TestBitbucketFlowCaches(t *testing.T) {
 	}
 }
 
-// A push in after-script runs even when the gate fails; it is reported, not edited.
 func TestBitbucketAfterScriptPush(t *testing.T) {
 	p, got := result(t, npmRepo(lines(
 		"pipelines:",
@@ -436,8 +426,6 @@ func TestBitbucketSnippet(t *testing.T) {
 	}
 }
 
-// Batch 5 review, minor: a step on a Windows runner, or with an after-script setup cannot read,
-// is left out; an imported pipeline gets INCLUDE_NOT_READ.
 func TestBitbucketMoreSkips(t *testing.T) {
 	js, ns := jobs(t, lines(
 		"pipelines:",
@@ -482,8 +470,6 @@ func TestBitbucketMoreSkips(t *testing.T) {
 	}
 }
 
-// Bitbucket steps left out for their layout, and a --push build in after-script (Batch 5 review:
-// paths without a test).
 func TestBitbucketSkipPathsAndAfterScriptBuildPush(t *testing.T) {
 	_, ns := jobs(t, lines(
 		"definitions:",
@@ -524,7 +510,6 @@ func TestBitbucketSkipPathsAndAfterScriptBuildPush(t *testing.T) {
 	}
 }
 
-// runs-on labels are compared case-insensitively (Batch 5 re-review).
 func TestBitbucketWindowsRunnerAnyCase(t *testing.T) {
 	js, ns := jobs(t, lines(
 		"pipelines:",
@@ -539,9 +524,6 @@ func TestBitbucketWindowsRunnerAnyCase(t *testing.T) {
 	}
 }
 
-// The hand-edit snippets in per-file notes (UNSUPPORTED_EDIT, INCLUDE_NOT_READ) and
-// NO_GATE_PLACED pin the version like setup's own edits; a development build leaves them
-// unpinned and says so with UNPINNED_VERSION.
 func TestBitbucketSnippetsPinTheVersion(t *testing.T) {
 	const devInstall = "(curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | sh"
 	src := lines(
@@ -580,8 +562,8 @@ func TestBitbucketSnippetsPinTheVersion(t *testing.T) {
 	}
 }
 
-// P12 (design §3.5): an exit before the gate ends the step's script successfully and skips the
-// gate, while later steps still run; a step whose gate checks the source is left unchanged.
+// An exit before the gate ends the step's script successfully and skips the gate, while later
+// steps still run; a step whose gate checks the source is left unchanged.
 func TestBitbucketEarlyStop(t *testing.T) {
 	p, got := result(t, npmRepo(lines(
 		"pipelines:",

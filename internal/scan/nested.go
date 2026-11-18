@@ -75,7 +75,6 @@ func (s *state) mergeNested(ctx context.Context, i int, name, ref string, exclud
 	return true
 }
 
-// underFolder returns the exclude entries that lie under dir, relative to dir.
 func underFolder(exclude []string, dir string) []string {
 	var out []string
 	for _, e := range exclude {
@@ -86,8 +85,6 @@ func underFolder(exclude []string, dir string) []string {
 	return out
 }
 
-// replaceLockfile removes /dir/base from the root findings, adds the sub-scan's findings for
-// /base (relocated under /dir, or kept as is for dir "."), and merges duplicates.
 func replaceLockfile(root, sub []model.Finding, dir, base string) []model.Finding {
 	prefix := ""
 	if dir != "." {

@@ -13,8 +13,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// scanCompose scans every image a compose file pulls like an image target. The results nest
-// under the target as images; a problem with one image fails the target but not the others.
 func (s *state) scanCompose(ctx context.Context, i int, t config.Target) {
 	file, err := filepath.Rel(s.opts.Config.Dir, t.Compose)
 	if err != nil {
@@ -68,7 +66,6 @@ func (s *state) scanCompose(ctx context.Context, i int, t config.Target) {
 	}
 }
 
-// scanComposeImage scans image n (0-based) of target i and reports whether it was scanned.
 func (s *state) scanComposeImage(ctx context.Context, i, n int, name string, img compose.Image) bool {
 	res := &s.run.Targets[i].Images[n]
 	req := s.request(fmt.Sprintf("%s+%d", name, n+1))

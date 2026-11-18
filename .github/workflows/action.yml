@@ -61,7 +61,6 @@ jobs:
           working-directory: testdata/projects/npm-clean
           artifact-name: evidence-targets-repo
           targets: repo
-      # An unknown target is an error (exit 2), not a pass.
       - name: shearbolt with an unknown target
         id: unknown
         uses: ./
@@ -77,7 +76,6 @@ jobs:
         run: |
           test "$OUTCOME" = "failure"
           test "$CODE" = "2"
-  # An unknown SHEARBOLT_ACTION_MODE must stop the Action before any scan.
   bad-mode:
     runs-on: ubuntu-latest
     steps:

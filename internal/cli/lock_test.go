@@ -41,8 +41,8 @@ exit 0
 `
 
 const (
-	builtX = "2026-01-01T00:00:00Z" // the database in archive X
-	builtY = "2026-06-01T00:00:00Z" // the database in archive Y
+	builtX = "2026-01-01T00:00:00Z"
+	builtY = "2026-06-01T00:00:00Z"
 )
 
 type raceEnv struct {
@@ -72,7 +72,6 @@ func newRaceEnv(t *testing.T) raceEnv {
 	return e
 }
 
-// scan runs one archive scan on the shared cache and returns its run and stderr.
 func (e raceEnv) scan(t *testing.T, archive, sleep string) (model.Run, string) {
 	vars := map[string]string{"SHEARBOLT_CACHE_DIR": e.cache, "SHEARBOLT_DB_ARCHIVE": archive, "RACE_STATE": e.state, "RACE_SLEEP": sleep}
 	d := defaultDeps()
@@ -102,9 +101,9 @@ func built(r model.Run) string {
 	return r.Database.Built.UTC().Format(time.RFC3339)
 }
 
-// Two scans with different archives on one cache run one after the other. Without the lock,
-// the second import lands while the first scan checks its database, so archive X's marker is
-// tied to archive Y's database, and a later scan with X skips the import and scans with Y's data.
+// Without the lock, the second import lands while the first scan checks its database, so archive
+// X's marker is tied to archive Y's database, and a later scan with X skips the import and scans
+// with Y's data.
 func TestScansOnOneCacheRunOneAfterTheOther(t *testing.T) {
 	e := newRaceEnv(t)
 	type result struct {
@@ -152,7 +151,6 @@ func TestSequentialScansDoNotWait(t *testing.T) {
 	}
 }
 
-// A scan whose cache is locked elsewhere says so and waits.
 func TestScanWaitsForALockedCache(t *testing.T) {
 	e := newRaceEnv(t)
 	release, err := scanlock.Acquire(e.cache, io.Discard)
@@ -167,7 +165,6 @@ func TestScanWaitsForALockedCache(t *testing.T) {
 	}
 }
 
-// The lock file stays in the cache; it never lands in the evidence folder.
 func TestLockFileStaysInTheCache(t *testing.T) {
 	e := newRaceEnv(t)
 	out := evidence(t)
@@ -187,7 +184,6 @@ func TestLockFileStaysInTheCache(t *testing.T) {
 	})
 }
 
-// An output folder that is, contains or sits inside the cache is refused before anything runs.
 func TestOutputDirMustNotOverlapTheCache(t *testing.T) {
 	e := newRaceEnv(t)
 	for name, out := range map[string]string{

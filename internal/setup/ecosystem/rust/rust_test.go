@@ -26,7 +26,6 @@ func write(t *testing.T, root string, files map[string]string) {
 	}
 }
 
-// demo copies testdata/rust/demo into a temp dir.
 func demo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -43,7 +42,6 @@ func demo(t *testing.T) string {
 	return root
 }
 
-// virtualWorkspace is a virtual workspace root with members crates/*.
 func virtualWorkspace(t *testing.T, extra map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -151,8 +149,6 @@ func TestFindNoCargoLock(t *testing.T) {
 	}
 }
 
-// recognize parses script from dir, and recognizes its first command that mentions build (or
-// its last command).
 func recognize(t *testing.T, root, script, dir string, env ...string) *plan.Build {
 	t.Helper()
 	cmds, _ := shell.Parse(script, shell.State{Dir: dir})
@@ -402,7 +398,6 @@ func TestPrepare(t *testing.T) {
 		t.Fatalf("notes = %+v", notes)
 	}
 
-	// npm builds of a Rust project are left alone.
 	cmds, _ := shell.Parse("npm run build", shell.State{Dir: "."})
 	if prep, notes := (Plugin{}).Prepare(r, plan.Project{Dir: "."}, plan.Build{Kind: plan.BuildOther, Dir: ".", Cmd: cmds[0]}); !reflect.DeepEqual(prep, plan.Prep{}) || notes != nil {
 		t.Fatalf("npm build: %+v, %+v", prep, notes)

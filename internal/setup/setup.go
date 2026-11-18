@@ -1,10 +1,3 @@
-// Package setup implements `shearbolt setup`: it finds the npm and Rust projects, the Docker
-// images CI builds and the Docker Compose files in a repository, and edits its CI so a Shearbolt
-// gate runs after each build and before any push or deploy.
-//
-// Compute is a pure function of the repository and the answers: it returns a plan.Plan with the
-// questions, every file change (full content plus diff) and notes, and writes nothing. Write
-// applies a plan. Every mode of the command shares this one code path.
 package setup
 
 import (
@@ -32,51 +25,37 @@ import (
 // ecosystems are the project kinds setup supports, in recognition order.
 var ecosystems = []plan.Ecosystem{npm.Plugin{}, rust.Plugin{}}
 
-// cis are the CI systems setup edits.
 var cis = []plan.CI{github.Plugin{}, bitbucket.Plugin{}, gitlab.Plugin{}}
 
-// Options are the inputs of Compute.
 type Options struct {
-	Root    string            // the repository root (the working directory)
-	Answers map[string]string // --answer values by question ID
-	Yes     bool              // accept the defaults of unanswered questions (the plan is then complete)
-	Version string            // shearbolt's version, for install pins; "dev" leaves them out
+	Root    string
+	Answers map[string]string
+	Yes     bool   // accept the defaults of unanswered questions (the plan is then complete)
+	Version string // shearbolt's version, for install pins; "dev" leaves them out
 }
 
-// noCIMessage is NO_CI's message (R9).
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
 
-// noProjectMessage is NO_PROJECT's message when setup finds nothing to protect. The find notes
-// and the CI plugins' notes follow it (noteLine).
 const noProjectMessage = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
-// noGateableMessage is NO_PROJECT's message when CI builds images but the root project, the only
-// project, has no target to scan after placement. The notes of those builds follow it, then the
-// find notes and the CI plugins' notes.
 const noGateableMessage = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
 
-// noGateableCodes are the notes of image builds that the gate does not scan, which follow
-// noGateableMessage.
 var noGateableCodes = []string{"MULTI_PLATFORM", "PUSH_IN_BUILD", "BUILD_AFTER_PUSH", "BUILD_AFTER_GATE"}
 
-// noDeploySeenMessage is NO_DEPLOY_SEEN's message, for a project with compose or image targets
-// when no CI job setup read pushes or deploys.
 const noDeploySeenMessage = "Setup saw no push or deploy step in the CI jobs it could read. If a platform deploys this project on its own (for example on every push), a failed shearbolt check does not stop it: require the check before merging to the deployed branch, or trigger the deploy from CI after the gate."
 
 // alreadyExcluded are the directories the scan itself never descends into, so a source target
-// does not need to exclude them (R1).
+// does not need to exclude them.
 var alreadyExcluded = []string{"node_modules", ".git", "target", ".shearbolt"}
 
-// Compute plans setup for the repository at o.Root with the registered plugins. It never writes:
-// errors go into Plan.Error, and changes are computed with the given answers and the defaults
-// of the other questions.
+// Compute never writes: errors go into Plan.Error, and changes are computed with the given answers
+// and the defaults of the other questions.
 func Compute(o Options) *plan.Plan { return compute(o, ecosystems, cis) }
 
 // ComputeWith is Compute with the given CI plugins in place of the registered ones, so tests of
 // the parts CI plugins share can run them end to end.
 func ComputeWith(o Options, cis ...plan.CI) *plan.Plan { return compute(o, ecosystems, cis) }
 
-// ciSource is one CI file with its plugin, content and jobs.
 type ciSource struct {
 	ci   plan.CI
 	path string
@@ -96,16 +75,14 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 	r := plan.Repo{Root: root}
 
-	// 1. Projects (R1) and their source excludes.
 	projects, findNotes, err := findProjects(r, ecos)
 	if err != nil {
 		return fail("READ", err.Error(), "")
 	}
 
-	// 2. CI files and their jobs.
 	classify := newClassifier(r, ecos)
 	var files []*ciSource
-	var ciNotes []plan.Note // the CI plugins' notes
+	var ciNotes []plan.Note
 	var parseErr *plan.Note
 	for _, ci := range cis {
 		for _, f := range ci.Files(r) {
@@ -141,7 +118,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	projects = attachImageBuilds(projects, jobs, root)
 	p.Projects = projects
 
-	// 3. Errors. With nothing to protect, a CI file that was not read might hold an image build.
+	// With nothing to protect, a CI file that was not read might hold an image build.
 	if len(projects) == 0 {
 		if parseErr != nil {
 			p.Error = parseErr
@@ -165,7 +142,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 	notes := append(slices.Clone(findNotes), ciNotes...)
 
-	// 4. Questions (R3).
 	m := newGateModel(projects, jobs, paths)
 	m.compose = keptCompose(r, projects)
 	p.Questions = m.questions()
@@ -173,14 +149,12 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		p.Questions[i].Answer = o.Answers[p.Questions[i].ID]
 	}
 
-	// 5. Answers: the given ones, defaults for the rest.
 	values, missing, err := plan.Resolve(p.Questions, o.Answers, o.Yes)
 	if err != nil {
 		return fail("BAD_ANSWER", err.Error(), "")
 	}
 	p.Complete = len(missing) == 0
 
-	// 6. Placement (R3, R4).
 	byPath := map[string]*ciSource{}
 	for _, f := range files {
 		byPath[f.path] = f
@@ -188,7 +162,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	snippet := func(file string, g plan.Gate) string { return byPath[file].ci.Snippet(r, file, g) }
 	pl := m.place(values, o.Version, snippet)
 	// A root project that owns the image builds needs a target it will scan: without a compose
-	// target its config keeps, a gated image (§2.2, error 3).
+	// target its config keeps, a gated image.
 	if pp := pl.projects["."]; m.rootOwns && pp != nil && !m.hasCompose(pp.project) &&
 		!slices.ContainsFunc(pp.targets, func(t config.Target) bool { return t.Kind() == "image" }) {
 		msg := noGateableMessage
@@ -215,7 +189,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 	}
 
-	// 7-9. Planned targets, configs, then each gate's targets and image variables (R4 rule 8, R5).
 	// A project whose config has a compose or image target gets NO_DEPLOY_SEEN when no job
 	// pushes or deploys: CI that builds an image and never pushes it usually means a platform
 	// builds and deploys from source on its own, and a failed check does not stop it.
@@ -257,8 +230,8 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 	}
 
-	// 10. Prepare every build attributed to a selected project. The CI-file parts of a
-	// non-RewriteOnly build's Prep go to its CI plugin, per job; Via-file inserts are the core's.
+	// The CI-file parts of a non-RewriteOnly build's Prep go to its CI plugin, per job; Via-file
+	// inserts are the core's.
 	preps := map[string][]plan.Prep{}
 	var via []viaInsert
 	for _, proj := range selected {
@@ -290,7 +263,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 	}
 
-	// 11. CI edits, called-file inserts and ignore files.
 	failed := map[string]bool{}
 	for _, f := range files {
 		var fg []plan.Gate
@@ -340,7 +312,6 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	}
 	changes = append(changes, ignoreChanges(r, selected, gated)...)
 
-	// 12. Diffs, bases and modes.
 	slices.SortStableFunc(changes, func(a, b plan.FileChange) int { return strings.Compare(a.Path, b.Path) })
 	for i := range changes {
 		c := &changes[i]
@@ -366,8 +337,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 
 // pinSnippets re-renders the snippets in a CI file's Jobs notes, which plugins render for
 // plan.Gate{} because Jobs gets no version, for a gate that carries version, so their install
-// lines are pinned like setup's own edits. When a development build leaves such a snippet
-// unpinned, the file gets UNPINNED_VERSION.
+// lines are pinned like setup's own edits.
 func pinSnippets(r plan.Repo, ci plan.CI, file, version string, notes []plan.Note) []plan.Note {
 	bare := ci.Snippet(r, file, plan.Gate{})
 	versioned := ci.Snippet(r, file, plan.Gate{Version: version})
@@ -392,8 +362,6 @@ func unpinnedSnippet(r plan.Repo, ci plan.CI, file, version string) bool {
 	return ci.Snippet(r, file, plan.Gate{Version: version}) == bare && ci.Snippet(r, file, plan.Gate{Version: "1.0.0"}) != bare
 }
 
-// noteLine is note n as one line of an error message: <file>:<line>: <message>, or
-// <file>: <message> without a line, or the message alone without a file.
 func noteLine(n plan.Note) string {
 	switch {
 	case n.File != "" && n.Line > 0:
@@ -404,8 +372,6 @@ func noteLine(n plan.Note) string {
 	return n.Message
 }
 
-// dedupeNotes drops exact repeats, such as the same note about a build in a called file that
-// two jobs run.
 func dedupeNotes(notes []plan.Note) []plan.Note {
 	seen := map[plan.Note]bool{}
 	var out []plan.Note
@@ -418,9 +384,8 @@ func dedupeNotes(notes []plan.Note) []plan.Note {
 	return out
 }
 
-// findProjects runs the ecosystems (R1), sorts their projects by directory and sets each
-// project's source excludes. When two ecosystems find a project in the same directory, the first
-// one's is kept: they would share one shearbolt.yaml.
+// When two ecosystems find a project in the same directory, the first one's is kept: they would
+// share one shearbolt.yaml.
 func findProjects(r plan.Repo, ecos []plan.Ecosystem) ([]plan.Project, []plan.Note, error) {
 	var projects []plan.Project
 	var notes []plan.Note
@@ -485,7 +450,6 @@ func findProjects(r plan.Repo, ecos []plan.Ecosystem) ([]plan.Project, []plan.No
 	return projects, notes, nil
 }
 
-// insideDir returns dir relative to base, when dir is strictly inside base.
 func insideDir(base, dir string) (string, bool) {
 	if base == "." {
 		return dir, dir != "."
@@ -494,8 +458,6 @@ func insideDir(base, dir string) (string, bool) {
 	return rel, ok && rel != ""
 }
 
-// topmost returns the directories that are not inside another one of them, sorted, each with a
-// trailing "/".
 func topmost(dirs []string) []string {
 	slices.Sort(dirs)
 	var out []string
@@ -516,17 +478,15 @@ func ecosystemOf(ecos []plan.Ecosystem, name string) plan.Ecosystem {
 	return nil
 }
 
-// viaInsert is an Insert into a called file, with the job of the build that needs it. reached
-// is false for a RewriteOnly build (not run by that job).
+// reached is false for a RewriteOnly build (not run by that job).
 type viaInsert struct {
 	plan.Insert
 	job     string
 	reached bool
 }
 
-// viaChanges applies the called-file inserts, once per file and offset. An insert that a
-// non-RewriteOnly build of a failed job reaches is dropped: that job got no install, so the
-// rewritten command would fail there.
+// An insert that a non-RewriteOnly build of a failed job reaches is dropped: that job got no
+// install, so the rewritten command would fail there.
 func viaChanges(r plan.Repo, ins []viaInsert, failed map[string]bool) ([]plan.FileChange, []plan.Note) {
 	type key struct {
 		file   string
@@ -576,11 +536,8 @@ func viaChanges(r plan.Repo, ins []viaInsert, failed map[string]bool) ([]plan.Fi
 	return out, notes
 }
 
-// Write applies plan p to the repository at root. It first checks every file: a file to modify
-// must still equal the content the plan was computed from, and a file to create must still be
-// missing; otherwise it writes nothing. Each file is written to a temporary file in its own
-// directory and renamed into place, keeping its mode (new files get 0644); missing parent
-// directories are created.
+// Write first checks every file: a file to modify must still equal the content the plan was
+// computed from, and a file to create must still be missing; otherwise it writes nothing.
 func Write(root string, p *plan.Plan) error {
 	if p == nil || p.Error != nil {
 		return errors.New("setup: the plan has an error, so nothing is written")

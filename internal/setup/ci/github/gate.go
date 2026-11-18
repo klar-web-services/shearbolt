@@ -13,8 +13,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
 )
 
-// gateEnv returns the image variables gate g passes: a run-step build's output, or the scan tag
-// itself for an action build.
 func (e *jobEditor) gateEnv(g plan.Gate) ([][2]string, error) {
 	var env [][2]string
 	for _, iv := range g.Images {
@@ -33,8 +31,6 @@ func (e *jobEditor) gateEnv(g plan.Gate) ([][2]string, error) {
 	return env, nil
 }
 
-// placeGate inserts gate g, or updates the existing gate it names (R8), and puts the remainders
-// of its split steps after it.
 func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 	env, err := e.gateEnv(g)
 	if err != nil {
@@ -80,8 +76,8 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 		if sp.gate != gi {
 			continue
 		}
-		// Every new split with the marker gets EARLY_STOP (P9). A split the gate does not
-		// directly follow cannot carry the gate's term, and neither can a gate in a run step.
+		// Every new split with the marker gets EARLY_STOP. A split the gate does not directly
+		// follow cannot carry the gate's term, and neither can a gate in a run step.
 		if sp.split && sp.marker && sp.s != decided {
 			reason := reasonNotNext
 			if g.Existing != nil && g.Existing.Pos.Command >= 0 {
@@ -111,10 +107,8 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 	return nil
 }
 
-// gateIf returns the if: a new gate copies: the condition shared by every step that holds one of
-// its builds (--push steps included), "" when they have none. Builds under different conditions
-// fail the job: a gate that follows one of them would be skipped while another build is pushed
-// unscanned, or run where an image was never built.
+// Builds under different conditions fail the job: a gate that follows one of them would be
+// skipped while another build is pushed unscanned, or run where an image was never built.
 func (e *jobEditor) gateIf(g plan.Gate) (string, error) {
 	cond, first := "", true
 	for _, b := range g.Builds {
@@ -136,7 +130,6 @@ func (e *jobEditor) gateIf(g plan.Gate) (string, error) {
 	return cond, nil
 }
 
-// markerSplit returns the plan of step s when this run splits it with the marker for gate gi.
 func (e *jobEditor) markerSplit(gi, s int) *stepPlan {
 	if sp := e.steps[s]; sp != nil && sp.gate == gi && sp.split && sp.marker {
 		return sp
@@ -144,10 +137,8 @@ func (e *jobEditor) markerSplit(gi, s int) *stepPlan {
 	return nil
 }
 
-// earlyStopNote is EARLY_STOP for gate g and split step s (design §3.3), on the line of its first
-// command that can stop early: the gate is skipped on early stops, or it keeps running for
-// reason. A running gate fails on early stops only when it scans an image or a file built in
-// step s; otherwise it passes, and the note says what it checks, without advice.
+// A running gate fails on early stops only when it scans an image or a file built in step s;
+// otherwise it passes, and the note says what it checks, without advice.
 func (e *jobEditor) earlyStopNote(g plan.Gate, s int, skip bool, reason string) plan.Note {
 	st := e.j.steps[s]
 	where, line := "", st.line
@@ -179,9 +170,6 @@ func (e *jobEditor) earlyStopNote(g plan.Gate, s int, skip bool, reason string) 
 	return plan.Note{Code: "EARLY_STOP", Message: msg, File: e.wf.file, Line: line}
 }
 
-// builtIn names what gate g scans that split step s builds, which is missing when the step stops
-// early: "the image" for an image target whose image the step builds, "its artifact" for a file
-// target whose file it builds, "" when the gate scans neither.
 func builtIn(g plan.Gate, s int) string {
 	if slices.ContainsFunc(g.Images, func(iv plan.ImageVar) bool { return iv.Build.Pos.Step == s }) {
 		return "the image"
@@ -192,10 +180,6 @@ func builtIn(g plan.Gate, s int) string {
 	return ""
 }
 
-// advice is what the running form of EARLY_STOP asks the user to do about reason: fix the gate
-// for the reasons that are about the gate itself, move the early stop out of the step when no
-// target can be dropped to let the gate skip (a later push, builds in other steps), otherwise
-// drop targets that do not ship or move the early stop.
 func advice(reason string) string {
 	switch reason {
 	case reasonLaterPush, reasonOtherSteps:
@@ -210,8 +194,6 @@ func advice(reason string) string {
 	return "Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:."
 }
 
-// updateExisting brings an existing gate up to date (R8): its image variables (set, added, or
-// removed when no longer needed), its targets input, and the marker term of its if: (gateTerm).
 // A shearbolt scan command in a run step gets the variables in its step's env; its arguments
 // and its if: are the user's.
 func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
@@ -220,7 +202,6 @@ func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	if st.m == nil {
 		return failAt(ex.Pos.Line, "the existing gate step is not a mapping")
 	}
-	// A gate step that continues on error cannot stop the job (Batch 5 re-review).
 	if v := e.d.Get(st.m, "continue-on-error"); v != nil && (v.Kind != yaml.ScalarNode || !strings.EqualFold(strings.TrimSpace(v.Value), "false")) {
 		return failAt(ex.Pos.Line, "the existing gate step has continue-on-error: %s, so a failing scan would not stop the job; remove it, or remove the gate and run setup again", value(v))
 	}
@@ -253,16 +234,14 @@ func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	return e.gateTerm(gi, g, st)
 }
 
-// gateTerm keeps the marker term in the if: of existing action gate g right (design §3.4). Any
-// term in setup's form is stripped first, whatever its step id, and the decision is made on the
-// rest of the condition:
+// gateTerm keeps the marker term in the if: of existing action gate g right. Any term in
+// setup's form is stripped first, whatever its step id, and the decision is made on the rest of
+// the condition:
 //   - When the step directly before the gate is a split step with the marker (markerBefore), the
 //     term is that step's, and it is there exactly when the gate may be skipped (gateMaySkip) and
-//     its own condition can be combined with it. A changed if:, or a split that is new, gets
-//     EARLY_STOP.
+//     its own condition can be combined with it.
 //   - Otherwise a term the gate had is removed, since nothing justifies it any more: kept, a stale
-//     one would skip the gate while a push runs, or never let it run. EARLY_STOP says so on the
-//     gate's line. A gate without a term is left alone (R8).
+//     one would skip the gate while a push runs, or never let it run.
 //
 // Conditions are compared normalized, so a term the user reformatted stays as written, and an
 // unchanged re-run says nothing.
@@ -331,9 +310,8 @@ func (e *jobEditor) gateTerm(gi int, g plan.Gate, st *step) error {
 }
 
 // markerBefore returns the id of step s when it is a split step with the marker, "" when it is
-// not: a step this run splits with the marker for gate gi (split is then true), or a run step
-// that holds setup's marker line. Its id is the one renderStep gave it, which a step whose id
-// the user deleted gets back in the same run, or else its own.
+// not. Its id is the one renderStep gave it, which a step whose id the user deleted gets back in
+// the same run, or else its own.
 func (e *jobEditor) markerBefore(gi, s int) (id string, split bool) {
 	if s < 0 {
 		return "", false
@@ -351,9 +329,8 @@ func (e *jobEditor) markerBefore(gi, s int) (id string, split bool) {
 	return prev.id, false
 }
 
-// setIf sets an existing gate's if: to cond, after its name when it has none. An empty cond
-// removes it, or, when it shares its line with the item's dash and cannot be deleted, makes it
-// success(), which means the same as no if: and which later runs leave alone.
+// An empty cond removes the if:, or, when it shares its line with the item's dash and cannot be
+// deleted, makes it success(), which means the same as no if: and which later runs leave alone.
 func (e *jobEditor) setIf(st *step, cond string) error {
 	fail := func(err error) error {
 		return failAt(st.line, "the existing gate's if: cannot be updated (%v)", err)
@@ -494,7 +471,7 @@ func (e *jobEditor) setTargets(st *step, targets []string) error {
 }
 
 // errexitShell reports whether a shell: setting stops at a failing command: GitHub's bash and sh
-// (which it runs with -e), or a custom shell with -e (alone or in a group such as -eo) or -o errexit.
+// (which it runs with -e), or a custom shell with -e or -o errexit.
 func errexitShell(name string) bool {
 	f := strings.Fields(name)
 	if len(f) == 1 && (f[0] == "bash" || f[0] == "sh") {

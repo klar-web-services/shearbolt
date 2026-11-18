@@ -1,4 +1,3 @@
-// Package cli implements the shearbolt command line.
 package cli
 
 import (
@@ -24,18 +23,17 @@ Usage:
 Run "shearbolt setup -h", "shearbolt scan -h" or "shearbolt skill install -h" for their flags.
 `
 
-// deps holds everything the commands take from the outside world, so tests can replace it.
 type deps struct {
 	getenv      func(string) string
 	lookupEnv   func(string) (string, bool)
 	environ     func() []string
 	now         func() time.Time
 	ensureGrype func(ctx context.Context, cacheDir string) (string, error)
-	buildImage  func(ctx context.Context, ref, dir string, out io.Writer) error // scan --build
+	buildImage  func(ctx context.Context, ref, dir string, out io.Writer) error
 	color       func(io.Writer) bool
-	stdin       io.Reader   // setup's answers
-	stdinTTY    func() bool // whether stdin is a terminal (setup's interactive mode)
-	version     string      // shearbolt's version, for setup's install pins
+	stdin       io.Reader
+	stdinTTY    func() bool
+	version     string
 }
 
 func defaultDeps() deps {
@@ -57,7 +55,6 @@ func defaultDeps() deps {
 	}
 }
 
-// Run executes the command line and returns the process exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	return run(args, stdout, stderr, defaultDeps())
 }
@@ -90,8 +87,7 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 	}
 }
 
-// isTerminal reports whether v is an *os.File connected to a terminal (stdout for colors, stdin
-// for setup's questions). It checks for a character device other than the null device, which is
+// It checks for a character device other than the null device, which is
 // one too (CI runners often give stdin </dev/null).
 func isTerminal(v any) bool {
 	f, ok := v.(*os.File)

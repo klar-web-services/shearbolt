@@ -1,4 +1,3 @@
-// Package config loads and validates shearbolt.yaml.
 package config
 
 import (
@@ -17,18 +16,15 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Config is a validated shearbolt.yaml. Target paths are absolute after loading.
 type Config struct {
 	Version    WholeNumber `yaml:"version"`
 	Project    string      `yaml:"project"`
 	Targets    []Target    `yaml:"targets"`
 	Policy     Policy      `yaml:"policy"`
 	Exceptions []Exception `yaml:"exceptions"`
-	// Dir is the directory relative paths were resolved against.
-	Dir string `yaml:"-"`
+	Dir        string      `yaml:"-"`
 }
 
-// Target is one thing to scan. Exactly one of Image, Dir, File, Source or Compose is set.
 type Target struct {
 	Name             string   `yaml:"name" json:"name"`
 	Image            string   `yaml:"image,omitempty" json:"image,omitempty"`
@@ -40,7 +36,6 @@ type Target struct {
 	LockfileFallback string   `yaml:"lockfileFallback,omitempty" json:"lockfileFallback,omitempty"`
 }
 
-// Policy decides which findings block (spec section 6).
 type Policy struct {
 	BlockKnownExploited bool    `yaml:"blockKnownExploited" json:"blockKnownExploited"`
 	BlockEpssAtLeast    float64 `yaml:"blockEpssAtLeast" json:"blockEpssAtLeast"`
@@ -49,7 +44,6 @@ type Policy struct {
 	MaxExceptionDays    int     `yaml:"maxExceptionDays" json:"maxExceptionDays"`
 }
 
-// Exception accepts one vulnerability on one exact package version until a date.
 type Exception struct {
 	ID         string `yaml:"id" json:"id"`
 	Package    string `yaml:"package" json:"package"`
@@ -59,20 +53,14 @@ type Exception struct {
 	Expires    string `yaml:"expires" json:"expires"`
 }
 
-// FixableLevels are the accepted values of policy.blockFixable.
 var FixableLevels = []string{"any", "low", "medium", "high", "critical", "never"}
 
-// DefaultPolicy returns the built-in policy.
 func DefaultPolicy() Policy {
 	return Policy{BlockKnownExploited: true, BlockEpssAtLeast: 0.10, BlockFixable: "any", MaxDatabaseAgeHours: 48, MaxExceptionDays: 90}
 }
 
-// docsURL is where users learn the shearbolt.yaml format.
 const docsURL = "https://github.com/klar-web-services/shearbolt#readme"
 
-// FileError is a config file that is not valid YAML, does not fit the shearbolt.yaml format, or
-// fails validation. Problems say what is wrong in the user's terms (with the line where YAML
-// reports one), never in Go types.
 type FileError struct {
 	Path     string
 	Problems []string
@@ -92,7 +80,6 @@ var (
 	yamlGoType       = regexp.MustCompile(` (?:into|in type) \S+`)
 )
 
-// yamlProblems translates a YAML decoding error into FileError problems.
 func yamlProblems(err error) []string {
 	var te *yaml.TypeError
 	if errors.As(err, &te) {
@@ -116,10 +103,9 @@ func yamlProblem(e string) string {
 	if m := yamlWrongType.FindStringSubmatch(e); m != nil {
 		return fmt.Sprintf("line %s: expected %s, found %s", m[1], expectedKind(m[4]), foundKind(m[2], m[3]))
 	}
-	return yamlGoType.ReplaceAllString(e, "") // other messages, such as duplicate keys, without Go types
+	return yamlGoType.ReplaceAllString(e, "")
 }
 
-// expectedKind names what a Go type accepts in YAML terms.
 func expectedKind(goType string) string {
 	switch {
 	case strings.HasPrefix(goType, "[]"):
@@ -138,7 +124,6 @@ func expectedKind(goType string) string {
 	return "a different kind of value"
 }
 
-// foundKind names what the YAML held.
 func foundKind(tag, value string) string {
 	switch {
 	case tag == "seq":
@@ -155,7 +140,6 @@ func foundKind(tag, value string) string {
 // version: 1.5 to 1 and accept it.
 type WholeNumber int
 
-// UnmarshalYAML accepts only YAML integers.
 func (n *WholeNumber) UnmarshalYAML(node *yaml.Node) error {
 	var i int
 	if node.Kind == yaml.ScalarNode && node.ShortTag() == "!!int" && node.Decode(&i) == nil {
@@ -232,10 +216,8 @@ func mergeProblems(main, whole []string) []string {
 	return out
 }
 
-// Env looks up an environment variable, like os.LookupEnv.
 type Env func(string) (string, bool)
 
-// Problems lists every validation problem so users can fix them in one pass.
 type Problems []string
 
 func (p Problems) Error() string {
@@ -245,14 +227,12 @@ func (p Problems) Error() string {
 var (
 	namePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 	varPattern  = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}`)
-	// imagePattern is the character set of an image reference (registry host and port,
-	// repository path, tag, digest). It leaves out whitespace, control characters and shell
-	// metacharacters, so a reference copied into a command line cannot add a command, and the
-	// first character cannot start an option.
+	// imagePattern leaves out whitespace, control characters and shell metacharacters, so a
+	// reference copied into a command line cannot add a command, and the first character cannot
+	// start an option.
 	imagePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/:@-]*$`)
 )
 
-// Kind returns "image", "dir", "file", "source" or "compose" (empty if none is set).
 func (t Target) Kind() string {
 	switch {
 	case t.Image != "":
@@ -269,7 +249,6 @@ func (t Target) Kind() string {
 	return ""
 }
 
-// Ref returns the image reference or path the target scans.
 func (t Target) Ref() string { return t.Image + t.Dir + t.File + t.Source + t.Compose }
 
 // PackageName returns the part of Package before its last '@' (scoped npm names keep their leading '@').
@@ -281,7 +260,6 @@ func (e Exception) PackageName() string {
 	return e.Package[:i]
 }
 
-// PackageVersion returns the part of Package after its last '@'.
 func (e Exception) PackageVersion() string {
 	i := strings.LastIndex(e.Package, "@")
 	if i <= 0 {
@@ -299,7 +277,6 @@ func (e Exception) ExpiresAt() (time.Time, error) {
 	return day.Add(24 * time.Hour), nil
 }
 
-// Load reads, validates and resolves a config file.
 func Load(path string, env Env, now time.Time) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -336,7 +313,6 @@ func Load(path string, env Env, now time.Time) (*Config, error) {
 	return cfg, nil
 }
 
-// AdHoc builds a config for targets given on the command line, using the default policy.
 func AdHoc(project, dir string, images, dirs, files, sources []string, env Env, now time.Time) (*Config, error) {
 	if project == "" || project == "/" || project == "." {
 		project = "adhoc"
@@ -372,8 +348,6 @@ func AdHoc(project, dir string, images, dirs, files, sources []string, env Env, 
 	return cfg, nil
 }
 
-// Expand replaces ${VAR} and ${VAR:-default} with environment values.
-// An unset or empty ${VAR} without a default is an error.
 func Expand(s string, env Env) (string, error) {
 	var missing []string
 	out := varPattern.ReplaceAllStringFunc(s, func(m string) string {

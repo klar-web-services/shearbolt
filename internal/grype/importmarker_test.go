@@ -17,8 +17,6 @@ import (
 
 const goodStatus = `{"schemaVersion":"v6.1.10","from":"manual import","built":"2026-11-08T06:19:57Z","path":"/c/grype-db/6/vulnerability.db","valid":true}`
 
-// markerRunner is a Runner on the fake Grype whose "db status" reports goodStatus. Every
-// invocation is appended to the returned calls file.
 func markerRunner(t *testing.T) (*Runner, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -31,7 +29,6 @@ func markerRunner(t *testing.T) (*Runner, string) {
 	}, calls
 }
 
-// with returns a copy of r whose fake Grype sees the extra variables (later values win).
 func with(r *Runner, vars ...string) *Runner {
 	c := *r
 	c.Environ = append(append([]string{}, r.Environ...), vars...)
@@ -47,7 +44,6 @@ func archiveWith(t *testing.T, content string) string {
 	return path
 }
 
-// imports counts the "db import" invocations so far.
 func imports(t *testing.T, calls string) int {
 	t.Helper()
 	data, err := os.ReadFile(calls)
@@ -82,7 +78,6 @@ func wantNoMarker(t *testing.T, r *Runner) {
 	}
 }
 
-// importOnce calls ImportDBIfNeeded and checks whether it imported.
 func importOnce(t *testing.T, r *Runner, archive string, wantImported bool) {
 	t.Helper()
 	imported, err := r.ImportDBIfNeeded(context.Background(), archive)
@@ -157,7 +152,6 @@ func TestImportMarkerDifferentGrypeVersionImports(t *testing.T) {
 	}
 }
 
-// Any doubt about the cached database means importing again.
 func TestImportMarkerDoubtfulDatabaseImports(t *testing.T) {
 	for name, vars := range map[string][]string{
 		"status fails":          {"FAKE_GRYPE_STATUS_EXIT=1"},
@@ -209,8 +203,6 @@ func TestImportMarkerMissingOrCorruptImports(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
-// The marker is written only after a successful import, and an import attempt removes the old
-// one first, so a failed import never leaves a marker behind.
 func TestImportMarkerFailedImportLeavesNoMarker(t *testing.T) {
 	t.Run("fresh cache", func(t *testing.T) {
 		r, _ := markerRunner(t)
@@ -234,8 +226,6 @@ func TestImportMarkerFailedImportLeavesNoMarker(t *testing.T) {
 	})
 }
 
-// After an import, the marker records what the database reports; if the status check fails
-// then, there is no marker and the next scan imports again.
 func TestImportMarkerNeedsAGoodStatusAfterImport(t *testing.T) {
 	r, calls := markerRunner(t)
 	archive := archiveWith(t, "snapshot A")
@@ -272,7 +262,6 @@ func TestDBStatus(t *testing.T) {
 	}
 }
 
-// An archive that changes while it is imported is not recorded: the cache may hold either version.
 func TestImportMarkerNotWrittenWhenTheArchiveChanged(t *testing.T) {
 	r, calls := markerRunner(t)
 	archive := archiveWith(t, "snapshot A")

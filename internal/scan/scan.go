@@ -1,4 +1,3 @@
-// Package scan runs Grype over a config's targets and turns the results into a decision.
 package scan
 
 import (
@@ -23,21 +22,19 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/report"
 )
 
-// Scanner runs one Grype invocation. *grype.Runner implements it.
 type Scanner interface {
 	Scan(ctx context.Context, req grype.Request) error
 }
 
-// Options configures one scan.
 type Options struct {
 	Config     *config.Config
-	BaseDir    string // the default evidence folder is BaseDir/.shearbolt/runs/<run-id>
-	OutputDir  string // explicit evidence folder; must be new or empty
+	BaseDir    string
+	OutputDir  string
 	CIMode     bool
 	Scanner    Scanner
-	SetupError error // Grype could not be prepared; recorded, nothing is scanned
+	SetupError error
 	HasImage   DockerInspector
-	Env        config.Env // compose variables; nil means os.LookupEnv
+	Env        config.Env
 	DBArchive  string
 	Now        func() time.Time
 }
@@ -57,8 +54,6 @@ type state struct {
 	staleReported bool
 }
 
-// Run scans every target and always returns a result, even when scanning failed.
-// The evidence folder is written before Run returns.
 func Run(ctx context.Context, o Options) *model.Run {
 	if o.Now == nil {
 		o.Now = time.Now
@@ -231,7 +226,6 @@ func (s *state) scanTarget(ctx context.Context, t config.Target) {
 	}
 }
 
-// resolveFallbacks covers non-auditable Rust binaries with their lockfile (spec section 8).
 func (s *state) resolveFallbacks(ctx context.Context) {
 	const advice = "binary is not auditable; rebuild with cargo-auditable"
 	for _, t := range s.opts.Config.Targets {
@@ -282,7 +276,6 @@ func (s *state) coveringSource(lock string) string {
 	return ""
 }
 
-// imageSource is the local daemon's copy of an image when it has one, else the registry's.
 func (s *state) imageSource(ctx context.Context, ref string) string {
 	if s.opts.HasImage(ctx, ref) {
 		return "docker:" + ref
@@ -290,13 +283,10 @@ func (s *state) imageSource(ctx context.Context, ref string) string {
 	return "registry:" + ref
 }
 
-// maySkipImage reports whether a failed image scan is a skip: only an image that is not in the
-// local daemon and cannot be pulled, outside CI mode and while the run is not cancelled.
 func (s *state) maySkipImage(ctx context.Context, req grype.Request) bool {
 	return strings.HasPrefix(req.Source, "registry:") && !s.opts.CIMode && ctx.Err() == nil
 }
 
-// raw lists a request's output files as recorded in run.json.
 func (s *state) raw(req grype.Request) []string {
 	return []string{s.rel(req.RawJSON), s.rel(req.SBOM)}
 }
@@ -344,7 +334,6 @@ func (s *state) add(target string, list []model.Finding) {
 	}
 }
 
-// missing handles an artifact (file/dir) that does not exist: skipped locally, an error in CI.
 func (s *state) missing(i int, what string) {
 	if s.opts.CIMode {
 		s.targetError(i, "MISSING_TARGET", what)

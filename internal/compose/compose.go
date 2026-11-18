@@ -1,5 +1,3 @@
-// Package compose reads the images a Docker Compose file pulls, for compose targets and setup
-// (design: docs/shearbolt/specs/2026-11-09-compose-targets.md, section 3). It never runs Docker.
 package compose
 
 import (
@@ -17,31 +15,28 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-// Image is one pulled image and the services that run it.
 type Image struct {
-	Ref      string   // after variable expansion
-	Platform string   // after variable expansion; "" when the services set none
-	Services []string // in file order
+	Ref      string
+	Platform string
+	Services []string
 	// Line is the first service's image: line, or the service's own line when the image comes
 	// through an alias or merge key.
 	Line int
 }
 
-// Problem stops a file, or one of its services, from being scanned. Its Message names no file
-// or line; callers prefix "<file>:<line>: " (P5).
+// Message names no file or line; callers prefix "<file>:<line>: ".
 type Problem struct {
-	Code    string // COMPOSE_INVALID, COMPOSE_UNSUPPORTED or COMPOSE_VARIABLE
-	Service string // the service a COMPOSE_VARIABLE problem fails
-	Line    int    // 0 when unknown
+	Code    string
+	Service string
+	Line    int
 	Message string
 }
 
-// File is what one compose file pulls.
 type File struct {
 	Images  []Image
-	Builds  []string  // services that build their image (not scanned)
-	NoImage []string  // services that set neither image nor build
-	Missing []Problem // COMPOSE_VARIABLE, one per service whose image or platform lacks a variable
+	Builds  []string
+	NoImage []string
+	Missing []Problem
 	// Fatal is a COMPOSE_INVALID or COMPOSE_UNSUPPORTED problem: the file cannot be gated and
 	// every other field is empty.
 	Fatal *Problem
@@ -65,7 +60,6 @@ var (
 // and compose-dev.yaml.
 func FileName(name string) bool { return fileName.MatchString(name) }
 
-// Read reads the compose file at path. The error is set only when the file cannot be read.
 func Read(path string, env Env, exclude []string) (*File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -74,8 +68,6 @@ func Read(path string, env Env, exclude []string) (*File, error) {
 	return Parse(data, env, exclude), nil
 }
 
-// Parse reads a compose file's content. Services named in exclude are dropped before anything
-// else is checked; a name the file does not define is COMPOSE_INVALID.
 func Parse(data []byte, env Env, exclude []string) *File {
 	fatal := func(code string, line int, format string, a ...any) *File {
 		return &File{Fatal: &Problem{Code: code, Line: line, Message: fmt.Sprintf(format, a...)}}
@@ -198,8 +190,6 @@ func Parse(data []byte, env Env, exclude []string) *File {
 	return f
 }
 
-// variableProblem is the COMPOSE_VARIABLE problem of a service whose image or platform needs
-// variables that are not set.
 func variableProblem(service string, line int, missing []missingVar) Problem {
 	var names, said []string
 	for _, m := range missing {
@@ -222,7 +212,6 @@ func variableProblem(service string, line int, missing []missingVar) Problem {
 	return Problem{Code: "COMPOSE_VARIABLE", Service: service, Line: line, Message: msg}
 }
 
-// lineError is a problem with the line it was found on; its text carries no line (P5).
 type lineError struct {
 	line int
 	msg  string
@@ -230,7 +219,6 @@ type lineError struct {
 
 func (e *lineError) Error() string { return e.msg }
 
-// errLine is the line a pairs error was found on, or 0.
 func errLine(err error) int {
 	var le *lineError
 	if errors.As(err, &le) {
@@ -296,7 +284,6 @@ func get(ps []pair, key string) (pair, bool) {
 	return pair{}, false
 }
 
-// resolve follows aliases to the node they name.
 func resolve(n *yaml.Node) *yaml.Node {
 	for i := 0; n.Kind == yaml.AliasNode && n.Alias != nil && i < 32; i++ {
 		n = n.Alias
@@ -304,7 +291,6 @@ func resolve(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// str returns n's value when it is a string scalar.
 func str(n *yaml.Node) (string, bool) {
 	n = resolve(n)
 	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {

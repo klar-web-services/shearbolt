@@ -15,7 +15,7 @@ func TestInterpolate(t *testing.T) {
 		in      string
 		out     string
 		missing []missingVar
-		err     string // substring of the error; "" for none
+		err     string
 	}{
 		{in: "nginx:1.27", out: "nginx:1.27"},
 		{in: "app:$TAG", out: "app:1.2"},

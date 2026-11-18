@@ -10,18 +10,12 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-// This file writes R7: .shearbolt/ (the scan's work and cache directory) in the root .gitignore
-// and in the .dockerignore files of the directories Docker builds from.
-
 // ignoreLines are the entries that already ignore .shearbolt/ at every depth below the file's
 // directory. An anchored /.shearbolt covers only the top one, not nested projects' directories.
 var ignoreLines = []string{".shearbolt", ".shearbolt/"}
 
-// ignoreChanges returns the R7 changes, sorted by path: the root .gitignore, and the
-// .dockerignore of every selected project dir that holds a Dockerfile or Containerfile and of
-// the context dir of every gated docker, buildx or build-push-action build (railpack reads no
-// .dockerignore). A context that is unknown or not a directory in the repository is skipped, so
-// setup never creates directories.
+// railpack reads no .dockerignore. A context that is unknown or not a directory in the repository
+// is skipped, so setup never creates directories.
 func ignoreChanges(r plan.Repo, selected []plan.Project, gated []plan.Build) []plan.FileChange {
 	files := []string{".gitignore"}
 	for _, p := range selected {
@@ -47,10 +41,6 @@ func ignoreChanges(r plan.Repo, selected []plan.Project, gated []plan.Build) []p
 	return out
 }
 
-// ignoreChange appends .shearbolt/ to the ignore file at file unless an unanchored line already
-// ignores it, creating the file when it is missing. It adds a line break first when the file
-// does not end with one, and uses the file's line endings. A file that exists but cannot be read
-// is left alone (nil).
 func ignoreChange(r plan.Repo, file string) *plan.FileChange {
 	src, err := r.Read(file)
 	if errors.Is(err, fs.ErrNotExist) {

@@ -1,8 +1,3 @@
-// Package shelledit holds the CI-neutral pieces setup's CI plugins use to edit shell scripts:
-// where added lines may go and where a script can be split (R4 rules 5 and 6), the scan tag,
-// --load and --push edits of image builds (R2, R5), and the checks that keep those edits fail
-// closed. The GitHub plugin edits run steps with them, the script-list plugins (Bitbucket,
-// GitLab) script items.
 package shelledit
 
 import (
@@ -16,7 +11,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// Error is why a job cannot be edited, located at a file line (0 when unknown).
 type Error struct {
 	Line int
 	Msg  string
@@ -24,12 +18,10 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Msg }
 
-// Errorf returns an *Error at line.
 func Errorf(line int, format string, args ...any) error {
 	return &Error{Line: line, Msg: fmt.Sprintf(format, args...)}
 }
 
-// Edit replaces script[At:End] with Text (an insert when At == End).
 type Edit struct {
 	At, End int
 	Text    string
@@ -58,9 +50,6 @@ func Apply(s string, base int, edits []Edit) (string, error) {
 	return s, nil
 }
 
-// Insertable checks that lines can be added, or the step split, right after cmd (R4 rule 5
-// (b), (c)): at the top level, outside a heredoc, without a line continuation after it, and
-// ending in &&, ;, a newline or the end of the script.
 func Insertable(cmd shell.Command, line int, what string) error {
 	text := CommandText(cmd)
 	switch {
@@ -85,7 +74,6 @@ func Insertable(cmd shell.Command, line int, what string) error {
 	return Errorf(line, "%s ends in %q, so setup cannot %s", text, cmd.Op, what)
 }
 
-// CommandText is a short form of a command for messages.
 func CommandText(cmd shell.Command) string {
 	var words []string
 	for _, w := range cmd.Words {
@@ -98,9 +86,7 @@ func CommandText(cmd shell.Command) string {
 	return "`" + s + "`"
 }
 
-// InsertPoint returns where added lines go after cmd in script, and their text: joined with the
-// command's own && or ;, or on new lines after its logical line (with its indentation). Lines
-// added at the end of a script are terminated, so a one-line script becomes a block.
+// Lines added at the end of a script are terminated, so a one-line script becomes a block.
 func InsertPoint(script string, cmd shell.Command, added []string) (int, string) {
 	var b strings.Builder
 	switch cmd.Op {
@@ -141,11 +127,9 @@ func lineIndent(s string, at int) string {
 	return s[start:end]
 }
 
-// UsableScan checks that an existing scan, command c of cmds, stops the job when it fails: it
-// runs at the top level (not in a conditional, loop, group, subshell or after !), not in the
-// background or a pipeline, and is joined to the commands around it only by ;, a newline or
-// nothing. With || true, inside if, or as an element of an && list it would not: under set -e a
-// failing element of && other than the last does not exit (Batch 5 review).
+// UsableScan checks that an existing scan, command c of cmds, stops the job when it fails. With
+// || true, inside if, or as an element of an && list it would not: under set -e a failing element
+// of && other than the last does not exit.
 func UsableScan(cmds []shell.Command, c, line int) error {
 	cmd := cmds[c]
 	prev := ""
@@ -171,10 +155,9 @@ func UsableScan(cmds []shell.Command, c, line int) error {
 	return Errorf(line, "the existing scan %s %s, so a failing scan would not stop the job; make it a command of its own (joined only by ; or a newline), or remove it and run setup again", CommandText(cmd), why)
 }
 
-// AllTagsPushes fails when a command of cmds is `docker push -a|--all-tags <repo>` (also
-// `docker image push`) for a repository whose scan tag is in scanTags, or for one that may be:
-// it would push the local scan tag, which must never be pushed (R5, Batch 5 review). Only two
-// literal repositories that differ are told apart.
+// AllTagsPushes fails when a command of cmds is `docker push -a|--all-tags <repo>` for a
+// repository whose scan tag is in scanTags, or for one that may be: it would push the local scan
+// tag, which must never be pushed. Only two literal repositories that differ are told apart.
 func AllTagsPushes(cmds []shell.Command, scanTags []string, line func(shell.Command) int) error {
 	var repos []string
 	for _, t := range scanTags {
@@ -200,7 +183,6 @@ func AllTagsPushes(cmds []shell.Command, scanTags []string, line func(shell.Comm
 	return nil
 }
 
-// allTagsPush returns the repository of `docker [image] push -a|--all-tags <repo>`.
 func allTagsPush(cmd shell.Command) (string, bool) {
 	args := cmd.ArgWords()
 	if len(args) < 2 || path.Base(args[0].Value) != "docker" {
@@ -266,8 +248,7 @@ func ErrexitOff(cmds []shell.Command) *shell.Command {
 }
 
 // InstallShell returns the index of the sh (or bash) that the install command c of cmds pipes
-// into, such as `curl … | sh` or `(curl … || wget …) | SHEARBOLT_VERSION=1.2.3 sh`, or -1. That
-// sh is part of the install, not a command of its own.
+// into, or -1. That sh is part of the install, not a command of its own.
 func InstallShell(cmds []shell.Command, c int) int {
 	for k := c; k+1 < len(cmds); k++ {
 		switch cmds[k].Op {
@@ -287,8 +268,6 @@ func InstallShell(cmds []shell.Command, c int) int {
 // closers end a compound command; they are not commands that "follow" a build.
 var closers = []string{"fi", "done", "esac", "}", ")"}
 
-// Follows reports whether a command comes after command at (P1) that is not a closer, one of
-// setup's own lines, or one of the gated builds in skip.
 func Follows(cmds []shell.Command, at int, skip map[int]bool) bool {
 	for k := at + 1; k < len(cmds); k++ {
 		c := cmds[k]
@@ -300,7 +279,6 @@ func Follows(cmds []shell.Command, at int, skip map[int]bool) bool {
 	return false
 }
 
-// ReachedOutput is the GitHub step output setup's marker line sets (design §3.2).
 const ReachedOutput = "shearbolt-reached"
 
 // ReachedLine is setup's marker line: it follows the last gated build of a split step that can
@@ -308,9 +286,8 @@ const ReachedOutput = "shearbolt-reached"
 const ReachedLine = "echo " + ReachedOutput + `=true >> "$GITHUB_OUTPUT"`
 
 // StopName returns the name of the builtin by which cmd, a command the classifier reports as
-// stopping the shell early, stops it: its first word that is exit, exec, source or ".". Only
-// VAR=x assignments and wrappers such as command come before it. "." is named source, since a
-// message such as "(. at line 4)" reads badly. It is "" when there is no such word.
+// stopping the shell early, stops it. Only VAR=x assignments and wrappers such as command come
+// before it. "." is named source, since a message such as "(. at line 4)" reads badly.
 func StopName(cmd shell.Command) string {
 	for _, w := range cmd.Words {
 		switch w.Value {
@@ -330,7 +307,6 @@ func OwnLine(c shell.Command) bool {
 		len(a) == 4 && a[0] == "docker" && a[1] == "tag" && strings.Contains(a[3], ":shearbolt-")
 }
 
-// SplitPoints returns where part 1 ends and the remainder starts for a split after cmd.
 func SplitPoints(script string, cmd shell.Command) (cut, rest int) {
 	if cmd.Op == "&&" || cmd.Op == ";" {
 		i := cmd.End
@@ -349,10 +325,6 @@ func SplitPoints(script string, cmd shell.Command) (cut, rest int) {
 	return le, min(le+1, len(script))
 }
 
-// TagEdit returns the edit that adds scanTag to docker or buildx build img in a script of
-// scriptLen bytes (R5): ` -t <tag>` after the word holding the first tag's value, or after the
-// build subcommand when there is no tag. needed is false when a tag holding :shearbolt- is
-// already there.
 func TagEdit(img *plan.Image, scanTag string, scriptLen, line int) (ed Edit, needed bool, err error) {
 	if HasScanTag(img) {
 		return Edit{}, false, nil
@@ -368,7 +340,7 @@ func TagEdit(img *plan.Image, scanTag string, scriptLen, line int) (ed Edit, nee
 }
 
 // LoadEdit returns the edit that adds --load after the subcommand of a buildx build that neither
-// loads nor pushes (R2), so a docker-container builder leaves the image in the daemon.
+// loads nor pushes, so a docker-container builder leaves the image in the daemon.
 func LoadEdit(img *plan.Image) (Edit, bool) {
 	if img.Tool == "buildx" && !img.Load && !img.Push && img.SubEnd > 0 {
 		return Edit{At: img.SubEnd, End: img.SubEnd, Text: " --load"}, true
@@ -376,16 +348,12 @@ func LoadEdit(img *plan.Image) (Edit, bool) {
 	return Edit{}, false
 }
 
-// PushEdits converts gated --push build img, run by cmd (R2): every --push word becomes --load,
-// and pushes are the `docker push <tag>` lines that push its original tags after the gate (a tag
-// holding :shearbolt- is never pushed). A build without a -t tag, or with an argument that may
-// expand to several words, fails: converting it would drop the push silently.
+// A build without a -t tag, or with an argument that may expand to several words, fails:
+// converting it would drop the push silently.
 func PushEdits(cmd shell.Command, img *plan.Image, line int) (edits []Edit, pushes []string, err error) {
 	if len(img.PushArgs) == 0 {
 		return nil, nil, Errorf(line, "setup could not find the --push option of this build")
 	}
-	// The push moves to docker push lines for the tags as written; tags setup cannot read
-	// exactly would be pushed no more.
 	if len(img.Tags) == 0 {
 		return nil, nil, Errorf(line, "this --push build has no -t tag, so setup cannot push its image after the gate")
 	}
@@ -406,13 +374,11 @@ func PushEdits(cmd shell.Command, img *plan.Image, line int) (edits []Edit, push
 	return edits, pushes, nil
 }
 
-// attestFlags are the build options that ask BuildKit for attestations.
 var attestFlags = []string{"--sbom", "--provenance", "--attest"}
 
-// AttestationFlags fails a build that asks for attestations (--sbom, --provenance or --attest,
-// alone or as =value) where setup would load its image for the gate: attestations break with
-// --load on the classic image store, and dropping them silently would weaken the supply chain
-// (Batch 4 review decision). --sbom=false and --provenance=false are accepted.
+// AttestationFlags fails a build that asks for attestations where setup would load its image for
+// the gate: attestations break with --load on the classic image store, and dropping them silently
+// would weaken the supply chain. --sbom=false and --provenance=false are accepted.
 func AttestationFlags(args []shell.Word, line int) error {
 	for _, w := range args {
 		name, val, eq := strings.Cut(w.Value, "=")
@@ -472,8 +438,6 @@ func MayExpand(raw string) bool {
 var valueFlags = []string{"-t", "--tag", "-f", "--file", "--build-arg", "--platform", "--label", "--target",
 	"--cache-from", "--cache-to", "--secret", "--ssh", "--build-context"}
 
-// flagValue reports whether args[i] is the value of one of valueFlags: the word after the flag,
-// or the value part of --flag=value.
 func flagValue(args []shell.Word, i int) bool {
 	if i > 0 && args[i-1].Raw == args[i-1].Value && slices.Contains(valueFlags, args[i-1].Value) {
 		return true
@@ -489,13 +453,10 @@ var multiWord = regexp.MustCompile(`\$[@*]|\$\{[@*]|\$\{[A-Za-z_][A-Za-z0-9_]*\[
 // arrayAll matches the start of ${name[@]}, which expands to one word per element.
 var arrayAll = regexp.MustCompile(`^\{[A-Za-z_][A-Za-z0-9_]*\[@\]`)
 
-// HasScanTag reports whether a tag of shell build img holds :shearbolt-.
 func HasScanTag(img *plan.Image) bool {
 	return slices.ContainsFunc(img.Tags, func(t string) bool { return strings.Contains(ShellValue(t), ":shearbolt-") })
 }
 
-// RailpackTagged reports whether a `docker tag <name> ...:shearbolt-...` command follows the
-// railpack build at command c of cmds.
 func RailpackTagged(cmds []shell.Command, c int, img *plan.Image) bool {
 	name := ShellValue(img.Tags[0])
 	for _, cmd := range cmds[c+1:] {

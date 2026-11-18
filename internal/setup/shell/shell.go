@@ -1,7 +1,3 @@
-// Package shell splits shell text into commands, words and byte offsets. It is not a shell
-// interpreter: it only tells commands apart and tracks the little state setup needs, which is the
-// working directory, the variables set so far, and how deeply each command is nested.
-//
 // Compound commands are flattened. The words that open or continue one (if, then, elif, else,
 // while, until, do, {, (, !) are not commands themselves; they only raise Depth. The words that
 // close one (fi, done, esac, }, )) are one-word commands at the depth outside the construct. A
@@ -16,14 +12,12 @@ import (
 	"strings"
 )
 
-// Word is one shell word.
 type Word struct {
 	Raw   string // as written, quotes kept; always script[Start:Start+len(Raw)]
 	Value string // quotes and backslash escapes removed, variables and substitutions not expanded
-	Start int    // byte offset in the script
+	Start int
 }
 
-// State is the shell state that carries from one command to the next.
 type State struct {
 	Dir string   // effective directory, repo-relative ("" = unknown, for example after cd $X)
 	Env []string // names set by `export X=…` or a bare `X=…`, in order
@@ -35,11 +29,7 @@ type State struct {
 // scriptDir matches a leading $(dirname "$0") or $(dirname "${BASH_SOURCE[0]}"), quoted or not.
 var scriptDir = regexp.MustCompile(`^\$\(dirname\s+(?:--\s+)?"?(?:\$0|\$\{0\}|\$\{BASH_SOURCE(?:\[0\])?\}|\$BASH_SOURCE)"?\s*\)`)
 
-// ScriptDir resolves a path value that starts with the running script's directory
-// ($(dirname "$0") or $(dirname "${BASH_SOURCE[0]}")) against self, the script's repo-relative
-// directory. It reports false for any other value, when self is "", or when the rest holds a
-// substitution or a glob or leaves the repository. In a sourced file $0 names the caller; it is
-// taken as the sourced file here.
+// In a sourced file $0 names the caller; it is taken as the sourced file here.
 func ScriptDir(v, self string) (string, bool) {
 	m := scriptDir.FindStringIndex(v)
 	if self == "" || m == nil {
@@ -56,14 +46,13 @@ func ScriptDir(v, self string) (string, bool) {
 	return d, true
 }
 
-// Redir is one redirection. For a heredoc, Target is the delimiter word.
+// For a heredoc, Target is the delimiter word.
 type Redir struct {
 	Op     string // as written, with any file descriptor: ">", ">>", "2>&", "&>", "<<", "<<-"
-	Start  int    // byte offset of Op
-	Target Word   // zero when missing
+	Start  int
+	Target Word
 }
 
-// Command is one simple command.
 type Command struct {
 	Words      []Word // leading VAR=x assignments included; redirections are in Redirs
 	Redirs     []Redir
@@ -72,7 +61,7 @@ type Command struct {
 	// OpBefore is the Op of the command finished before it ("" for the first). Keywords such as
 	// then and do, and an opening { or (, are not commands: in `a || { b; }`, b's is "||".
 	OpBefore string
-	Before   State // directory and variables in effect before the command
+	Before   State
 	// Depth is the nesting in if/for/while/until/select/case, {}, (), a function body or a negated
 	// pipeline. Everything from a heredoc operator to the end of its body is one level deeper, and
 	// so is everything from a construct that never closes to the end of the script. 0 = top level.
@@ -81,9 +70,6 @@ type Command struct {
 	Script    int  // set by the caller: which script text of the step
 }
 
-// Parse splits script into commands. start is the state before the first command; the returned
-// state is the one after the last, so consecutive script items can be parsed in sequence.
-//
 // The directory follows a literal `cd`, `pushd` and `popd`. It becomes "" (unknown) after a `cd`
 // to a variable, `-`, an absolute path or a path outside the repository; after a `cd` that runs
 // only if the previous command failed (`||`); and after an if, loop, case or function body that
@@ -114,8 +100,7 @@ func parse(src string, start State, base int) ([]Command, State) {
 }
 
 // Argv returns the command's word values without leading VAR=x assignments and without the
-// wrappers that run the next word as the program, with their options: sudo, env, time, nohup,
-// nice, exec, command (except `command -v`/`-V`, a lookup) and timeout (and its duration).
+// wrappers that run the next word as the program, with their options.
 func (c Command) Argv() []string {
 	args := c.ArgWords()
 	if args == nil {
@@ -128,7 +113,6 @@ func (c Command) Argv() []string {
 	return out
 }
 
-// ArgWords is Argv as words, so callers can edit at their offsets.
 func (c Command) ArgWords() []Word {
 	_, args := c.split()
 	return args
@@ -238,7 +222,6 @@ func assignName(raw string) (string, bool) {
 	return "", false
 }
 
-// identifier returns the variable name in an export/declare argument (NAME, NAME=…, NAME[i]=…).
 func identifier(arg string) (string, bool) {
 	if n, ok := assignName(arg); ok {
 		return n, true
@@ -257,8 +240,6 @@ func identifier(arg string) (string, bool) {
 func isAlpha(c byte) bool { return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' }
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
-// ---- parser ----
-
 type frameKind int
 
 const (
@@ -271,9 +252,9 @@ const (
 
 type frame struct {
 	kind     frameKind
-	dir      string // directory when the construct opened
-	body     bool   // a function body: defined here, not run
-	patterns bool   // case: the next word starts a pattern
+	dir      string
+	body     bool // a function body: defined here, not run
+	patterns bool // case: the next word starts a pattern
 }
 
 type parser struct {
@@ -320,7 +301,6 @@ func (p *parser) run() {
 	}
 }
 
-// skipPattern skips a case pattern, `(a|b)` or `a|b)`, and returns the index of its `)`.
 func (p *parser) skipPattern(i int) int {
 	for ; i < len(p.toks); i++ {
 		if t := p.toks[i]; t.kind == tOp && t.op == ")" {
@@ -485,8 +465,8 @@ func (p *parser) push(k frameKind, body bool) {
 	p.funcHdr = false
 }
 
-// pop closes the innermost construct if it is of kind k. A stray closer changes nothing, so a
-// script the parser does not understand never looks less nested than it is.
+// A stray closer changes nothing, so a script the parser does not understand never looks less
+// nested than it is.
 func (p *parser) pop(k frameKind) {
 	if len(p.stack) == 0 || p.stack[len(p.stack)-1].kind != k {
 		return
@@ -504,8 +484,6 @@ func (p *parser) pop(k frameKind) {
 	}
 }
 
-// body parses a heredoc body one level deeper, starting from the current state, and discards
-// the state it ends with.
 func (p *parser) body(b [2]int) {
 	sub, _ := parse(p.src[b[0]:b[1]], p.state, p.base+len(p.stack)+1)
 	for _, c := range sub {
@@ -524,7 +502,6 @@ func (p *parser) body(b [2]int) {
 	}
 }
 
-// apply updates the state after c.
 func (p *parser) apply(c *Command) {
 	if c.Op == "|" || c.Op == "&" || p.prevOp == "|" {
 		return // a subshell
@@ -583,9 +560,8 @@ func (p *parser) chdir(dir string, conditional bool) {
 	p.state.Dir = dir
 }
 
-// chdir returns the directory after `cd args` from cur, or "" when it is not certain. A path that
-// starts with the script's own directory resolves against self (see ScriptDir), even when cur is
-// unknown.
+// A path that starts with the script's own directory resolves against self (see ScriptDir), even
+// when cur is unknown.
 func chdir(cur, self string, args []Word) string {
 	for len(args) > 0 && strings.HasPrefix(args[0].Value, "-") && args[0].Value != "-" {
 		v := args[0].Value
@@ -656,8 +632,6 @@ func (p *parser) contAfter(conts []int) {
 	}
 }
 
-// ---- lexer ----
-
 type tokKind int
 
 const (
@@ -690,9 +664,6 @@ type lexer struct {
 
 var redirOps = []string{"&>>", "&>", "<<<", "<<-", "<<", "<>", "<&", ">>", ">|", ">&", "<", ">"}
 
-// lex splits src into tokens. It also returns the offsets of the `\`-newlines between tokens and
-// the offset of the first quote, substitution or expression that never closes (-1 if none). Such
-// a construct is read as its opening characters only, so the rest of the script stays visible.
 func lex(src string) ([]token, []int, int) {
 	l := &lexer{src: src, unsafe: -1}
 	for l.i < len(src) {
@@ -830,8 +801,8 @@ func (l *lexer) addWord() {
 	l.toks = append(l.toks, token{kind: tWord, start: w.Start, end: w.Start + len(w.Raw), word: w})
 }
 
-// word lexes one word starting at l.i. `\`-newlines at the end of the word are not part of it;
-// they are recorded as continuations between tokens.
+// `\`-newlines at the end of the word are not part of it; they are recorded as continuations
+// between tokens.
 func (l *lexer) word() Word {
 	src := l.src
 	start, trail := l.i, -1
@@ -925,7 +896,6 @@ func (l *lexer) parenInWord(start int) bool {
 // The skip functions below return the offset after a construct and whether it closed. One that
 // does not close runs to the end of the script.
 
-// dquote returns the value of the double-quoted string at src[i] and the offset after it.
 func dquote(src string, i int) (string, int, bool) {
 	var v strings.Builder
 	j := i + 1
@@ -967,8 +937,6 @@ func dquote(src string, i int) (string, int, bool) {
 	return v.String(), len(src), false
 }
 
-// skipDollar skips the expansion that starts with the "$" at src[i]: ${{ … }}, $(…), $((…)),
-// ${…}, or just the "$".
 func skipDollar(src string, i int) (int, bool) {
 	switch {
 	case strings.HasPrefix(src[i:], "${{"):
@@ -1080,8 +1048,6 @@ func skipParens(src string, i int) (int, bool) {
 	return len(src), false
 }
 
-// readDelim reads a heredoc delimiter word at src[i] (after blanks) and returns it without
-// quotes or backslashes, and the offset after it.
 func readDelim(src string, i int) (string, int) {
 	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
 		i++
@@ -1109,7 +1075,6 @@ func readDelim(src string, i int) (string, int) {
 	return v.String(), min(i, len(src))
 }
 
-// skipBraces skips the ${…} body whose "{" is at src[i].
 func skipBraces(src string, i int) (int, bool) {
 	depth := 0
 	for j := i; j < len(src); {

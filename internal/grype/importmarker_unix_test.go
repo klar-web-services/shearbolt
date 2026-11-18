@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// A FIFO is refused at once instead of blocking the scan while it waits for a writer.
 func TestImportMarkerRefusesAFIFO(t *testing.T) {
 	r, calls := markerRunner(t)
 	fifo := filepath.Join(t.TempDir(), "db.tar.zst")

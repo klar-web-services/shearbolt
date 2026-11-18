@@ -8,14 +8,11 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// readsOf is what assignRead checks for continued text rem, a step script and inherited names.
 func readsOf(rem, script string, inherited ...string) *continued {
 	cmds, _ := shell.Parse(script, shell.State{})
 	return &continued{text: rem, cmds: commandsIn(rem), step: cmds, inherited: inherited}
 }
 
-// Each rule of assignRead on its own (design §4); the script and the commands before the
-// assignment default to ones that read nothing.
 func TestAssignRead(t *testing.T) {
 	const push = "docker push x\n"
 	for _, c := range []struct {
@@ -23,7 +20,6 @@ func TestAssignRead(t *testing.T) {
 		want                bool
 	}{
 		{rem: push},
-		// A whole-word use, wherever it is.
 		{rem: push + `echo "$live"`, want: true},
 		{rem: push + "(( live + 1 ))", want: true},
 		{rem: push + "[[ -v live ]]", want: true},
@@ -31,10 +27,8 @@ func TestAssignRead(t *testing.T) {
 		{rem: push + "# live", want: true},
 		{rem: "live=2\n" + push, want: true},
 		{rem: push + `echo "$lively $alive live_x"`},
-		// Indirect and prefix expansion.
 		{rem: push + `echo "${!live_@}"`, want: true},
 		{rem: push + `echo "${!ref}"`, want: true},
-		// eval, source and ., also inside a substitution, and as a command only.
 		{rem: push + `eval "$CMD"`, want: true},
 		{rem: push + "command eval x", want: true},
 		{rem: push + "builtin eval x", want: true},
@@ -45,14 +39,12 @@ func TestAssignRead(t *testing.T) {
 		{rem: push + "diff <(. ./env.sh) y", want: true},
 		{rem: push + "echo evaluate source"},
 		{rem: push + "docker build -t y ."},
-		// Namerefs.
 		{rem: push + `declare -n r="$TARGET"`, want: true},
 		{rem: push + `local -n r="$TARGET"`, want: true},
 		{rem: push + `typeset -n r="$TARGET"`, want: true},
 		{rem: push + `declare -gn r="$TARGET"`, want: true},
 		{rem: push + "declare -x FOO=1"},
 		{rem: push + "echo declare -n"},
-		// Commands that print variables.
 		{rem: push + "set", want: true},
 		{rem: push + "set -e"},
 		{rem: push + "declare -p", want: true},
@@ -62,7 +54,6 @@ func TestAssignRead(t *testing.T) {
 		{rem: push + "compgen -v", want: true},
 		{rem: push + "compgen -A variable", want: true},
 		{rem: push + "compgen -c"},
-		// The script exports or protects the name, anywhere.
 		{rem: push, script: "export live\n", want: true},
 		{rem: push, script: "export FOO live\n", want: true},
 		{rem: push, script: "export live=1\n", want: true},
@@ -73,7 +64,6 @@ func TestAssignRead(t *testing.T) {
 		{rem: push, script: "export lively alive\n"},
 		{rem: push, script: "declare -a live\n"},
 		{rem: push, script: "echo export live\n"},
-		// allexport before the assignment.
 		{rem: push, before: "set -a\n", want: true},
 		{rem: push, before: "set -eua\n", want: true},
 		{rem: push, before: "set -o allexport\n", want: true},
@@ -87,15 +77,12 @@ func TestAssignRead(t *testing.T) {
 	}
 }
 
-// Every name of a command that assigns several counts.
 func TestAssignReadNames(t *testing.T) {
 	if !assignRead([]string{"a", "b"}, readsOf("echo $b\n", ""), nil) {
 		t.Error("a read of the second name does not count")
 	}
 }
 
-// A name that may be inherited from the environment counts as read: one with no lowercase
-// letter, a proxy variable, one of the inherited names, or any name when setup cannot read them.
 func TestAssignReadInherited(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -138,34 +125,31 @@ var misparsed = []string{
 	"notes=$(cat <<EOF\nHere's the build\nEOF\n)\n: ${count:=1}\necho 'ok :)'",
 }
 
-// Each form of an assignment hidden in an expansion, in arithmetic or in a builtin, and the
-// forms that only read.
 func TestHiddenAssign(t *testing.T) {
 	for script, want := range map[string]bool{
-		"x=${y:=v}":               true,
-		"x=${y=v}":                true,
-		": ${n:=5}":               true,
-		`echo "${a[0]:=v}"`:       true,
-		`echo "${x:-${y:=v}}"`:    true,
-		"x=$(( y = 5 ))":          true,
-		"echo $((i++))":           true,
-		"echo $((--i))":           true,
-		"echo $(( n += 2 ))":      true,
-		"echo $(( n -= 2 ))":      true,
-		"echo $(( n *= 2 ))":      true,
-		"echo $(( n /= 2 ))":      true,
-		"echo $(( n %= 2 ))":      true,
-		"echo $(( n <<= 1 ))":     true,
-		"echo $(( n >>= 1 ))":     true,
-		"echo $(( n &= 1 ))":      true,
-		"echo $(( n ^= 1 ))":      true,
-		"echo $(( n |= 1 ))":      true,
-		"echo $(( (n = 1) + 2 ))": true,
-		"echo $[n=1]":             true,
-		"(( n = 5 ))":             true,
-		"(( n++ )) || true":       true,
-		"(( a > 0 || n++ ))":      true,
-		// A mis-parse inside one word must not hide code after it.
+		"x=${y:=v}":                             true,
+		"x=${y=v}":                              true,
+		": ${n:=5}":                             true,
+		`echo "${a[0]:=v}"`:                     true,
+		`echo "${x:-${y:=v}}"`:                  true,
+		"x=$(( y = 5 ))":                        true,
+		"echo $((i++))":                         true,
+		"echo $((--i))":                         true,
+		"echo $(( n += 2 ))":                    true,
+		"echo $(( n -= 2 ))":                    true,
+		"echo $(( n *= 2 ))":                    true,
+		"echo $(( n /= 2 ))":                    true,
+		"echo $(( n %= 2 ))":                    true,
+		"echo $(( n <<= 1 ))":                   true,
+		"echo $(( n >>= 1 ))":                   true,
+		"echo $(( n &= 1 ))":                    true,
+		"echo $(( n ^= 1 ))":                    true,
+		"echo $(( n |= 1 ))":                    true,
+		"echo $(( (n = 1) + 2 ))":               true,
+		"echo $[n=1]":                           true,
+		"(( n = 5 ))":                           true,
+		"(( n++ )) || true":                     true,
+		"(( a > 0 || n++ ))":                    true,
 		misparsed[0]:                            true,
 		misparsed[1]:                            true,
 		misparsed[2]:                            true,
@@ -224,7 +208,6 @@ func TestHiddenAssign(t *testing.T) {
 	}
 }
 
-// The names a step's commands write to $GITHUB_ENV, or all when one write cannot be read.
 func TestEnvWrites(t *testing.T) {
 	for _, c := range []struct {
 		script string
@@ -274,7 +257,6 @@ func TestCommandsInManyBackticks(t *testing.T) {
 	}
 }
 
-// A shell: or defaults.run.shell with -a or allexport exports every assignment.
 func TestShellAllexport(t *testing.T) {
 	for sh, want := range map[string]bool{
 		"bash -ae {0}":          true,

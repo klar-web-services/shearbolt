@@ -8,11 +8,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/shell"
 )
 
-// This file derives image names and tags (R5): the local scan tag setup adds to each gated
-// image build, its repository, and the variable and repository names of image targets.
-
-// envName turns a target name into the suffix of its image variable: upper case, with every
-// character outside [A-Z0-9] replaced by "_".
 func envName(s string) string {
 	var b strings.Builder
 	for _, c := range strings.ToUpper(s) {
@@ -28,9 +23,6 @@ func envName(s string) string {
 // dockerRepo is the form of a valid one-component Docker repository name.
 var dockerRepo = regexp.MustCompile(`^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$`)
 
-// dockerRepoName returns name as a valid Docker repository name for local tags: as it is when it
-// is one, otherwise lower-cased with every run of other characters replaced by "-"; "image" when
-// nothing is left.
 func dockerRepoName(name string) string {
 	if dockerRepo.MatchString(name) {
 		return name
@@ -52,12 +44,9 @@ func dockerRepoName(name string) string {
 	return "image"
 }
 
-// scanTag returns the local tag setup adds to an image build and the gate scans (R5):
-// <repository>:shearbolt-<commit>. For a shell command it is written like the build's first
-// tag: double quotes are copied, single quotes become double quotes when that keeps the
-// repository's meaning. For build-push-action it is a plain tags entry. A tag already
-// containing ":shearbolt-" is reused as written. slotRepo stands in for a repository that
-// cannot be derived (buildRepository).
+// scanTag returns the local tag setup adds to an image build and the gate scans. For a shell
+// command it is written like the build's first tag: double quotes are copied, single quotes
+// become double quotes when that keeps the repository's meaning.
 func scanTag(img plan.Image, commit, slotRepo string) string {
 	shellWords := img.Tool != "build-push-action"
 	for _, t := range img.Tags {
@@ -90,7 +79,6 @@ func scanTag(img plan.Image, commit, slotRepo string) string {
 	return tag
 }
 
-// tagValue returns a scan tag's value: unquoted for a shell build, as written for an action.
 func tagValue(img plan.Image, tag string) string {
 	if img.Tool == "build-push-action" {
 		return tag
@@ -98,13 +86,11 @@ func tagValue(img plan.Image, tag string) string {
 	return wordValue(tag)
 }
 
-// buildRepository derives the repository of an image build's scan tag (R5): the first tag
-// without its tag part, which starts at the last ":" after the last "/" outside ${...},
-// ${{ ... }} and $(...). A variable repository followed by a tag part is kept ($IMAGE:latest
-// gives $IMAGE). It fails (false) when there is no tag, when the first tag has no tag part and
-// is a single variable or expression ($TAG, ${{ steps.x.outputs.tag }}), since that may hold a
-// tag, and for metadata-action tags whose images entry is unknown or holds ${{, since that can
-// produce upper case. A literal images entry is lower-cased, as metadata-action does.
+// buildRepository derives the repository of an image build's scan tag: the first tag without its
+// tag part, which starts at the last ":" after the last "/" outside ${...}, ${{ ... }} and $(...).
+// It fails (false) when the first tag has no tag part and is a single variable or expression
+// ($TAG, ${{ steps.x.outputs.tag }}), since that may hold a tag, and for metadata-action tags
+// whose images entry is unknown or holds ${{, since that can produce upper case.
 func buildRepository(img plan.Image) (string, bool) {
 	if img.Computed != "" {
 		if img.ComputedRepo == "" || strings.Contains(img.ComputedRepo, "${{") {
@@ -145,7 +131,6 @@ func buildRepository(img plan.Image) (string, bool) {
 	return v, true
 }
 
-// wordValue returns a shell word's value: quotes and escapes removed, variables kept.
 func wordValue(raw string) string {
 	cmds, _ := shell.Parse(raw, shell.State{})
 	if len(cmds) == 1 && len(cmds[0].Words) == 1 {
@@ -154,9 +139,8 @@ func wordValue(raw string) string {
 	return raw
 }
 
-// expansionEnd returns the end of a shell or GitHub expansion that starts at v[i] ($NAME, $1,
-// ${...}, ${{ ... }}, $(...) or a backtick string), or i when none starts there; an expansion
-// that never closes runs to the end.
+// expansionEnd returns the end of a shell or GitHub expansion that starts at v[i], or i when none
+// starts there; an expansion that never closes runs to the end.
 func expansionEnd(v string, i int) int {
 	switch {
 	case strings.HasPrefix(v[i:], "${{"):

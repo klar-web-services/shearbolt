@@ -1,14 +1,6 @@
 #!/bin/sh
-# Pinned Grype vulnerability-database snapshot for Shearbolt's own tests (plan 3, D3).
-#
-#   scripts/db-snapshot.sh fetch DIR   download the pinned archive into DIR unless a verified copy
-#                                      is there, verify it, and print its absolute path
-#
-# The snapshot is built and stored by the test-db workflow (.github/workflows/test-db.yml); see
-# "Refreshing the snapshot" in testdata/README.md.
-#
 # The pin is testdata/db-snapshot.sha256, one line "<sha256>  <asset>", so sha256sum -c works.
-# Needs gh and sha256sum (or shasum). Only the path is printed on stdout; messages go to stderr.
+# Only the path is printed on stdout; messages go to stderr.
 set -eu
 unset CDPATH # an exported CDPATH makes cd print the directory and can redirect it
 
@@ -18,7 +10,6 @@ say() { printf '%s\n' "$*" >&2; }
 fail() { say "db-snapshot: $*"; exit 1; }
 usage() { say "usage: scripts/db-snapshot.sh fetch DIR"; exit 2; }
 
-# safe_name reports whether $1 is a valid asset name: [A-Za-z0-9._-], ending in .tar.zst.
 safe_name() {
 	case $1 in
 	'' | *[!A-Za-z0-9._-]*) return 1 ;;
@@ -27,7 +18,6 @@ safe_name() {
 	esac
 }
 
-# hex64 reports whether $1 is a lowercase SHA-256 hex digest.
 hex64() {
 	case $1 in *[!0-9a-f]* | '') return 1 ;; esac
 	[ "${#1}" -eq 64 ]

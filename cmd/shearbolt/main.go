@@ -1,4 +1,3 @@
-// Command shearbolt is a deployment gate for known vulnerabilities.
 package main
 
 import (

@@ -45,7 +45,6 @@ func TestInDateExceptionIsDatedFromToday(t *testing.T) {
 	}
 }
 
-// fake writes an executable shell script that ignores its arguments.
 func fake(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "shearbolt")
@@ -59,7 +58,6 @@ func fakeEnv(t *testing.T, binary string) Env {
 	return Env{Binary: binary, DBArchive: "/nonexistent/db.tar.zst", CacheDir: t.TempDir(), Fixtures: "/nonexistent/projects", WorkDir: t.TempDir()}
 }
 
-// failures runs every case against a binary and returns the names of the cases that failed.
 func failures(t *testing.T, binary string) []string {
 	t.Helper()
 	var failed []string
@@ -96,15 +94,12 @@ func TestAlwaysZeroFailsTheSecurityCases(t *testing.T) {
 	}
 }
 
-// A binary that cannot start is an error, not a pass.
 func TestMissingBinaryFails(t *testing.T) {
 	if failed := failures(t, filepath.Join(t.TempDir(), "missing")); len(failed) != len(Cases(time.Now())) {
 		t.Fatalf("only %v failed", failed)
 	}
 }
 
-// Run gives the binary the documented environment: CI=true, the snapshot and cache settings, and
-// no GITHUB_STEP_SUMMARY.
 func TestRunEnvironment(t *testing.T) {
 	t.Setenv("GITHUB_STEP_SUMMARY", "/should/not/leak")
 	t.Setenv("CI", "")
@@ -132,7 +127,6 @@ func TestRunEnvironment(t *testing.T) {
 	}
 }
 
-// canned writes a fake binary that prints stdout and stderr verbatim and exits with code.
 func canned(t *testing.T, stdout, stderr string, code int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -159,7 +153,6 @@ func finding(id, pkg, version string, action model.Action, reasons ...string) mo
 
 const otherJquery = "GHSA-gxr4-xjj5-5px2"
 
-// output is what a fake prints and how it exits.
 type output struct {
 	stdout, stderr string
 	code           int
@@ -234,8 +227,6 @@ func TestPerfectCannedOutputsPass(t *testing.T) {
 	})
 }
 
-// Each content check can fail: an output with the case's expected exit code that is wrong in
-// exactly one way fails its case.
 func TestCannedOutputsWrongInOneWayFail(t *testing.T) {
 	perfect := perfectOutputs(t)
 	type defect struct {

@@ -179,8 +179,6 @@ func TestSelectTargetsIgnoresDuplicates(t *testing.T) {
 	}
 }
 
-// With SHEARBOLT_DB_ARCHIVE, the first scan imports the archive and the next one, on the same
-// cache with the same archive, skips the import. run.json's database fields are the same either way.
 func TestScanImportsTheSameArchiveOnce(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "db.tar.zst")
 	if err := os.WriteFile(archive, []byte("snapshot"), 0o644); err != nil {

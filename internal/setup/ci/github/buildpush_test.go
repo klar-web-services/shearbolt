@@ -173,7 +173,6 @@ func TestBuildPushConditions(t *testing.T) {
 		}
 	}
 
-	// A literal push: true still follows the build step's own condition.
 	_, got = result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        if: github.ref == 'refs/heads/main'",
@@ -187,7 +186,6 @@ func TestBuildPushConditions(t *testing.T) {
 }
 
 func TestBuildPushTags(t *testing.T) {
-	// Tags that already hold a commit tag still get the shearbolt- tag, and it is the one scanned.
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        with:",
@@ -204,7 +202,6 @@ func TestBuildPushTags(t *testing.T) {
 		}
 	}
 
-	// A block list keeps its lines plus the new one; the push step gets the original lines.
 	_, got = result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        with:",
@@ -255,7 +252,6 @@ func TestBuildPushTags(t *testing.T) {
 	}
 }
 
-// Several converted builds in one job: every push step follows the gate, in order.
 func TestBuildPushSeveralSteps(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
@@ -305,7 +301,6 @@ func TestBuildPushUnsupportedAndOutputs(t *testing.T) {
 		"        with:",
 		"          push: true",
 	), nil), "push without tags", "no tags")
-	// Builds under different conditions cannot share one gate.
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - run: docker build -t web:1 .",
 		"      - uses: docker/build-push-action@v6",
@@ -316,7 +311,6 @@ func TestBuildPushUnsupportedAndOutputs(t *testing.T) {
 		"          tags: worker:1",
 	), nil), "different conditions", differentIfs)
 
-	// An export is not an image: the config gets no image target.
 	p, got := result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        with:",
@@ -331,10 +325,6 @@ func TestBuildPushUnsupportedAndOutputs(t *testing.T) {
 	}
 }
 
-// Batch 4 review fixes.
-
-// The push step cannot see the build step's own env, so a push, tags or if: that reads it would
-// be skipped or push nothing while CI stays green.
 func TestBuildPushStepEnvRefused(t *testing.T) {
 	for _, with := range [][]string{
 		{"          push: ${{ env.PUSH }}", "          tags: ghcr.io/acme/web:latest"},
@@ -357,7 +347,6 @@ func TestBuildPushStepEnvRefused(t *testing.T) {
 		"          push: true",
 		"          tags: web:1",
 	), nil), "step if", "env.")
-	// The job's env is visible to the push step too.
 	_, got := result(t, npmRepo("web", strings.Replace(head, "    steps:\n", "    env:\n      TAGS: ghcr.io/acme/web:latest\n    steps:\n", 1)+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        with:",
@@ -369,8 +358,6 @@ func TestBuildPushStepEnvRefused(t *testing.T) {
 	}
 }
 
-// After load: true or --load, a step's digest output is the local image's, so its consumers would
-// sign or attest the wrong digest.
 func TestBuildPushDigestConsumersRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - id: push",
@@ -395,7 +382,6 @@ func TestBuildPushDigestConsumersRefused(t *testing.T) {
 		"        run: docker buildx build --push -t web:1 .",
 		"      - run: cosign sign web@${{ steps.img.outputs.digest }}",
 	), nil), "run-step --push", "digest")
-	// Other outputs are fine.
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - id: push",
 		"        uses: docker/build-push-action@v6",
@@ -411,7 +397,6 @@ func TestBuildPushDigestConsumersRefused(t *testing.T) {
 
 const reconvert = "set push back to false, or remove setup's scan tag and Push image step, then run setup again"
 
-// A pushing step that already holds setup's scan tag would push it.
 func TestBuildPushReconversionRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
@@ -421,7 +406,6 @@ func TestBuildPushReconversionRefused(t *testing.T) {
 	), nil), "push with a scan tag", reconvert)
 }
 
-// Attestations a build asks for would break with load or be dropped by docker push.
 func TestBuildPushAttestationsRefused(t *testing.T) {
 	for _, input := range []string{"provenance: mode=max", "sbom: true", "attests: type=sbom"} {
 		wantUnsupported(t, npmRepo("web", head+lines(
@@ -437,7 +421,6 @@ func TestBuildPushAttestationsRefused(t *testing.T) {
 			"      - run: docker buildx build --push "+flag+" -t web:1 .",
 		), nil), flag, "attestation")
 	}
-	// Turned off explicitly, they are fine.
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
 		"        with:",
@@ -458,7 +441,6 @@ func TestBuildPushAttestationsRefused(t *testing.T) {
 	}
 }
 
-// outputs: type=docker already loads; adding load: true as well would make buildx refuse.
 func TestBuildPushOutputsDockerGetsNoLoad(t *testing.T) {
 	_, got := result(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
@@ -494,7 +476,6 @@ func TestBuildPushImageOutputPushes(t *testing.T) {
 	}
 }
 
-// An aliased step would change the anchored action it points at.
 func TestBuildPushAliasStepRefused(t *testing.T) {
 	src := lines(
 		"x-build: &build",
@@ -513,7 +494,6 @@ func TestBuildPushAliasStepRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", src, nil), "alias step", "anchors, aliases or flow style")
 }
 
-// The push step is a bash script; a job whose run steps default to another shell gets none.
 func TestBuildPushNeedsBash(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", strings.Replace(head, "    steps:\n", "    defaults:\n      run:\n        shell: pwsh\n    steps:\n", 1)+lines(
 		"      - uses: docker/build-push-action@v6",
@@ -547,8 +527,6 @@ func TestBakeActionPushes(t *testing.T) {
 	}
 }
 
-// Batch 4 follow-up: setup adds load next to explicit attestations in builds that do not push
-// as well, so those are refused the same way.
 func TestLoadWithAttestationsRefused(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - uses: docker/build-push-action@v6",
@@ -561,7 +539,6 @@ func TestLoadWithAttestationsRefused(t *testing.T) {
 	), nil), "buildx without --push", "attestation")
 }
 
-// Mutant killers for the Batch 4 review guards.
 func TestBuildPushGuardDetails(t *testing.T) {
 	// Env names are compared case-insensitively, as GitHub does.
 	wantUnsupported(t, npmRepo("web", head+lines(
@@ -585,7 +562,6 @@ func TestBuildPushGuardDetails(t *testing.T) {
 	wantUnsupported(t, npmRepo("web", head+lines(
 		"      - run: docker buildx build --push --attest=false -t web:1 .",
 	), nil), "--attest=false", "attestation")
-	// The bracket forms of a digest reference.
 	for _, ref := range []string{"steps.push.outputs['digest']", "steps['push'].outputs.digest"} {
 		wantUnsupported(t, npmRepo("web", head+lines(
 			"      - id: push",

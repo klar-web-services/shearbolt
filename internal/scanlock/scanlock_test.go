@@ -12,7 +12,6 @@ import (
 	"time"
 )
 
-// syncBuffer is a bytes.Buffer safe for one writer goroutine and a reader.
 type syncBuffer struct {
 	mu sync.Mutex
 	b  bytes.Buffer
@@ -41,7 +40,6 @@ func TestAcquireCreatesTheLockFile(t *testing.T) {
 	}
 }
 
-// A busy lock prints the waiting line once and blocks until the holder releases it.
 func TestAcquireWaitsForTheHolder(t *testing.T) {
 	dir := t.TempDir()
 	release, err := Acquire(dir, &bytes.Buffer{})

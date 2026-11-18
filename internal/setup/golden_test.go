@@ -21,13 +21,11 @@ var update = flag.Bool("update", false, "rewrite testdata/setup/*/after and expe
 
 const goldenDir = "../../testdata/setup"
 
-// expectation is a fixture's expect.json.
 type expectation struct {
 	Questions []string `json:"questions"`
 	Notes     []string `json:"notes"`
 }
 
-// treeFile is a file of a fixture tree: content and whether it is executable.
 type treeFile struct {
 	content string
 	exec    bool
@@ -35,8 +33,7 @@ type treeFile struct {
 
 // TestGolden runs setup on each testdata/setup/<fixture>/before and compares the result with
 // after/ (the files setup creates or modifies) and expect.json (question IDs in order, note codes
-// as a sorted set). It also checks that a second run changes nothing and that every
-// shearbolt.yaml loads with an empty environment. With -update it rewrites after/ and expect.json.
+// as a sorted set).
 func TestGolden(t *testing.T) {
 	dirs, err := filepath.Glob(filepath.Join(goldenDir, "*", "before"))
 	if err != nil || len(dirs) == 0 {
@@ -156,7 +153,6 @@ func noteDump(notes []plan.Note) string {
 	return b.String()
 }
 
-// readAnswers reads answers.txt: one id=value per line; blank lines and # comments are ignored.
 func readAnswers(t *testing.T, file string) map[string]string {
 	t.Helper()
 	b, err := os.ReadFile(file)
@@ -177,8 +173,6 @@ func readAnswers(t *testing.T, file string) map[string]string {
 	return answers
 }
 
-// readTree returns every regular file under dir by slash-separated relative path; a missing
-// dir is an empty tree.
 func readTree(t *testing.T, dir string) map[string]treeFile {
 	t.Helper()
 	out := map[string]treeFile{}
@@ -255,9 +249,6 @@ func writeAfter(t *testing.T, afterDir string, got, orig map[string]treeFile) {
 	}
 }
 
-// TestMonorepoAnswers is the monorepo with a second answer set (Task 13): deselecting apps/api
-// gives it no config and no gate, its gate-job question is still listed (with its project), and
-// an answer to it is ignored.
 func TestMonorepoAnswers(t *testing.T) {
 	root := t.TempDir()
 	copyTree(t, filepath.Join(goldenDir, "monorepo", "before"), root)
@@ -299,7 +290,7 @@ func TestMonorepoAnswers(t *testing.T) {
 }
 
 // A re-run with the defaults keeps an earlier build-project answer: the build's existing gate
-// says which project it was given to (Batch 4, skill review).
+// says which project it was given to.
 func TestRerunKeepsBuildProjectAnswer(t *testing.T) {
 	root := writeTree(t, map[string]string{
 		"apps/a/package.json": `{"name":"a"}`, "apps/a/package-lock.json": "{}",
@@ -350,7 +341,7 @@ func TestRerunKeepsBuildProjectAnswer(t *testing.T) {
 }
 
 // A re-run on the Bitbucket and GitLab goldens' results has nothing to say: setup's own install
-// item, trailing sh included, is part of the gate, so no COMMANDS_BEFORE_GATE (Batch 5 review).
+// item, trailing sh included, is part of the gate, so no COMMANDS_BEFORE_GATE.
 func TestRerunGivesNoNotes(t *testing.T) {
 	for _, fx := range []string{"bitbucket", "gitlab"} {
 		root := t.TempDir()

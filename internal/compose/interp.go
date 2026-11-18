@@ -6,7 +6,6 @@ import (
 	"strings"
 )
 
-// Env looks up an environment variable.
 type Env func(name string) (string, bool)
 
 // missingVar is a variable without a value: unset, or empty under a ":" form, with no default.
@@ -15,8 +14,8 @@ type missingVar struct {
 	message string // Compose's own ?message, if any
 }
 
-// interpolate applies Compose's variable syntax to s (design section 3). When missing is not
-// empty, out is not usable. A malformed or nested reference is an error.
+// interpolate applies Compose's variable syntax to s. When missing is not empty, out is not
+// usable.
 func interpolate(s string, env Env) (out string, missing []missingVar, err error) {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
@@ -63,7 +62,6 @@ func interpolate(s string, env Env) (out string, missing []missingVar, err error
 	return b.String(), missing, nil
 }
 
-// braced resolves the body of one ${...} reference.
 func braced(body string, env Env) (string, *missingVar, error) {
 	j := 0
 	for j < len(body) && isNameChar(body[j]) {

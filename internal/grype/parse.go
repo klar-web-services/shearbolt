@@ -12,7 +12,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Result is what Shearbolt takes from one Grype JSON report.
 type Result struct {
 	Findings []model.Finding
 	DBBuilt  time.Time
@@ -21,10 +20,9 @@ type Result struct {
 	Identity model.Identity
 }
 
-// Inventory counts the packages in a CycloneDX SBOM written by Grype.
 type Inventory struct {
-	Packages int // components that are neither files nor the operating system
-	Cargo    int // components with a pkg:cargo purl
+	Packages int
+	Cargo    int
 	// Locations counts packages per file they were read from (syft:location:<n>:path),
 	// as scan-root-relative paths with a leading slash, e.g. "/web/pnpm-lock.yaml".
 	Locations map[string]int
@@ -88,7 +86,6 @@ var locationProperty = regexp.MustCompile(`^syft:location:\d+:path$`)
 
 var knownSeverities = []string{"critical", "high", "medium", "low", "negligible"}
 
-// Parse converts a Grype JSON report into findings. Unknown or malformed output is an error.
 func Parse(data []byte) (*Result, error) {
 	var doc document
 	if err := json.Unmarshal(data, &doc); err != nil {
@@ -171,7 +168,6 @@ func Parse(data []byte) (*Result, error) {
 	return res, nil
 }
 
-// ParseSBOM counts packages in a CycloneDX SBOM. File and operating-system components are not packages.
 func ParseSBOM(data []byte) (Inventory, error) {
 	var doc struct {
 		BOMFormat  string `json:"bomFormat"`

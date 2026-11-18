@@ -15,8 +15,6 @@ import (
 
 const buildConfig = "version: 1\nproject: web\ntargets:\n  - name: web\n    image: ${SHEARBOLT_IMAGE:-web:local}\n  - name: source\n    source: .\n"
 
-// buildProject writes a project with the given shearbolt.yaml, a lockfile and, when dockerfile
-// is set, a Dockerfile. It returns the config's path.
 func buildProject(t *testing.T, yaml string, dockerfile bool) string {
 	t.Helper()
 	dir := projectDir(t)
@@ -34,8 +32,6 @@ func buildProject(t *testing.T, yaml string, dockerfile bool) string {
 
 type buildCall struct{ ref, dir string }
 
-// recordBuilds makes d's builds succeed and record their arguments, and fails the test when a
-// build starts after Grype has already run.
 func recordBuilds(t *testing.T, d *deps, grypeCalls string) *[]buildCall {
 	t.Helper()
 	var calls []buildCall
@@ -81,7 +77,6 @@ func TestScanWithoutBuildNeverBuilds(t *testing.T) {
 	}
 }
 
-// Every rule --build checks stops the run before anything is built or scanned.
 func TestScanBuildRefusals(t *testing.T) {
 	two := "version: 1\nproject: web\ntargets:\n  - name: web\n    image: web:local\n  - name: worker\n    image: worker:local\n"
 	none := "version: 1\nproject: web\ntargets:\n  - name: source\n    source: .\n"
@@ -143,8 +138,6 @@ func TestScanBuildFailureScansNothing(t *testing.T) {
 	}
 }
 
-// dockerBuild runs the docker on PATH with the tag, the Dockerfile next to the config and the
-// config's folder as the context, and passes on its exit status.
 func TestDockerBuildCommand(t *testing.T) {
 	bin := t.TempDir()
 	argsFile := filepath.Join(t.TempDir(), "args")

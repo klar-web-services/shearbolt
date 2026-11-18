@@ -26,9 +26,9 @@ type output struct {
 }
 
 type fakeScanner struct {
-	outputs map[string]output // keyed by Request.Source
+	outputs map[string]output
 	calls   []grype.Request
-	cancel  context.CancelFunc // called when the source "registry:app:local" is scanned
+	cancel  context.CancelFunc
 }
 
 func (f *fakeScanner) Scan(_ context.Context, req grype.Request) error {
@@ -49,7 +49,6 @@ func (f *fakeScanner) Scan(_ context.Context, req grype.Request) error {
 	return os.WriteFile(req.SBOM, []byte(out.sbom), 0o644)
 }
 
-// project writes files (relative path -> content) and a shearbolt.yaml, then loads it.
 func project(t *testing.T, yaml string, files map[string]string) (*config.Config, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -130,7 +129,6 @@ func TestSourceWithoutLockfileIsAnError(t *testing.T) {
 	}
 }
 
-// Packages from other files (here a workflow `uses:` line) must not hide an unread lockfile.
 func TestUnreadLockfileIsAnErrorEvenWithOtherPackages(t *testing.T) {
 	cfg, root := project(t, sourceTarget, lock)
 	sbom := `{"bomFormat":"CycloneDX","components":[{"type":"library","name":"actions/checkout","purl":"pkg:github/actions/checkout@v4","properties":[{"name":"syft:location:0:path","value":"/.github/workflows/ci.yml"}]}]}`
@@ -193,7 +191,6 @@ func TestBunLockfileWithoutPackageJSONStaysUnread(t *testing.T) {
 	}
 }
 
-// The package.json must come from the lockfile's own folder, not the source root.
 func TestDevOnlyCheckReadsTheLockfilesOwnFolder(t *testing.T) {
 	r := devOnlyRun(t, map[string]string{
 		"package.json":     `{"devDependencies":{"a":"1.0.0"}}`,
@@ -205,7 +202,6 @@ func TestDevOnlyCheckReadsTheLockfilesOwnFolder(t *testing.T) {
 	}
 }
 
-// The exception covers only yarn.lock and bun.lock, which Grype reads together with package.json.
 func TestDevOnlyExceptionIsLimitedToYarnAndBun(t *testing.T) {
 	r := devOnlyRun(t, map[string]string{"pnpm-lock.yaml": "", "package.json": `{"devDependencies":{"a":"1.0.0"}}`})
 	if r.ExitCode != 2 || codes(r.Errors) != "LOCKFILE_UNREAD" || len(r.Warnings) != 0 {
@@ -356,7 +352,6 @@ func TestCancelledScanIsAnError(t *testing.T) {
 	}
 }
 
-// P2: raw files of the other kinds stay on the target.
 func TestRawFilesStayOnTheTargetForOtherKinds(t *testing.T) {
 	want := func(t *testing.T, got []string, files ...string) {
 		t.Helper()

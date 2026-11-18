@@ -8,24 +8,15 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// Upgrade is one version bump that clears every blocking finding of a package.
 type Upgrade struct {
 	Type, Package, Version string
-	Count                  int // blocking findings it clears
+	Count                  int
 }
 
-// upgradeTypes are the semver ecosystems that get an upgrade line.
 var upgradeTypes = map[string]bool{"npm": true, "rust-crate": true}
 
-// Upgrades returns at most one Upgrade per (Type, Package) of the blocking findings, by D5.
-// Sorted by Count descending, then Package.
-//
 // Findings with an Image (inside a compose image) are skipped: the fix is to re-pin the image,
 // which Repins reports instead.
-//
-// A package gets one only when it is an npm package or a Rust crate, every one of its blocking
-// findings is fixed with at least one fix version, every fix and installed version is semver,
-// and the highest fix version is spelled one way only and is above every installed version.
 // The version is always one that Grype reported; none is derived.
 func Upgrades(blocked []model.Finding) []Upgrade {
 	type key struct{ typ, pkg string }
@@ -53,7 +44,6 @@ func Upgrades(blocked []model.Finding) []Upgrade {
 	return out
 }
 
-// upgradeVersion is the highest fix version of one package's blocking findings, if D5 allows a line.
 func upgradeVersion(typ string, findings []model.Finding) (string, bool) {
 	if !upgradeTypes[typ] {
 		return "", false
@@ -97,14 +87,13 @@ func upgradeVersion(typ string, findings []model.Finding) (string, bool) {
 	return best, true
 }
 
-// semver is a parsed semver 2.0 version. Numbers stay decimal strings without leading zeros,
-// so arbitrarily large values compare correctly. Build metadata is dropped.
+// Numbers stay decimal strings without leading zeros, so arbitrarily large values compare
+// correctly. Build metadata is dropped.
 type semver struct {
 	core [3]string
-	pre  []string // pre-release identifiers; empty for a release
+	pre  []string
 }
 
-// parseSemver parses MAJOR.MINOR.PATCH with optional -pre and +build and an optional leading v.
 func parseSemver(s string) (semver, bool) {
 	s = strings.TrimPrefix(s, "v")
 	if i := strings.IndexByte(s, '+'); i >= 0 {
@@ -134,7 +123,6 @@ func parseSemver(s string) (semver, bool) {
 	return v, true
 }
 
-// validIdentifiers checks dot-separated pre-release (pre) or build identifiers.
 func validIdentifiers(s string, pre bool) bool {
 	for _, id := range strings.Split(s, ".") {
 		if id == "" {
@@ -153,9 +141,6 @@ func validIdentifiers(s string, pre bool) bool {
 	return true
 }
 
-// compareSemver orders by semver 2.0 precedence: numeric core, then a pre-release below its
-// release, identifiers numerically or else in ASCII order, numeric below alphanumeric, and a
-// shorter identifier list below a longer one with the same prefix.
 func compareSemver(a, b semver) int {
 	for i := range a.core {
 		if c := compareDecimal(a.core[i], b.core[i]); c != 0 {

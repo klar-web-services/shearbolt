@@ -12,14 +12,12 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-// reached is setup's marker condition for the step with id shearbolt-build.
 const reached = "steps.shearbolt-build.outputs.shearbolt-reached != ''"
 
 // composeImage is a compose file, which gives the root project the target docker-compose.
 const composeImage = "services:\n  web:\n    image: nginx:1.27\n"
 
-// rootRepo is a repository with only a Dockerfile, so the root project owns its image builds,
-// plus the workflow and extra files.
+// rootRepo is a repository with only a Dockerfile, so the root project owns its image builds.
 func rootRepo(workflow string, extra map[string]string) map[string]string {
 	files := map[string]string{"Dockerfile": "FROM alpine\n", wf: workflow}
 	for k, v := range extra {
@@ -28,18 +26,14 @@ func rootRepo(workflow string, extra map[string]string) map[string]string {
 	return files
 }
 
-// withGateIf gives the shearbolt gate step in workflow text s the condition cond.
 func withGateIf(s, cond string) string {
 	return strings.Replace(s, "      - name: shearbolt\n", "      - name: shearbolt\n        if: "+cond+"\n", 1)
 }
 
-// skipping and running are the two forms of EARLY_STOP (design §3.3).
 func skipping(stop string, line int) string {
 	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step and the shearbolt gate run only when the build ran. If you add a target to shearbolt.yaml by hand, run setup again, so the gate stops skipping.", stop, line)
 }
 
-// running is the running form with the advice for the reasons about targets: the gate fails on
-// early stops when the image built in the split step is missing.
 func running(stop string, line int, reason string) string {
 	return runningAdvice(stop, line, reason, "Remove targets that do not ship from shearbolt.yaml and run setup again, or move the early stop into the job's if:.")
 }
@@ -48,14 +42,12 @@ func runningAdvice(stop string, line int, reason, advice string) string {
 	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step runs only when the build ran, but the shearbolt gate still runs on early stops and fails when the image was not built, because %s. %s", stop, line, reason, advice)
 }
 
-// The running form's advice for the reasons that are about the gate itself.
 const (
 	adviceNotNext  = "Move the shearbolt gate directly after this step and run setup again."
 	adviceRunStep  = "Use the Shearbolt action for the gate (uses: klar-web-services/shearbolt@v1) and run setup again."
 	adviceTemplate = "Write the gate's if: without ${{ }} inside it and run setup again."
 )
 
-// removed is EARLY_STOP for a gate whose marker term setup took away.
 func removed(id string) string {
 	return "setup removed the early-stop condition from this shearbolt gate, because it no longer directly follows a step that sets steps." + id + ".outputs.shearbolt-reached; the gate now runs on every run."
 }
@@ -70,7 +62,6 @@ func earlyStops(p *plan.Plan) []plan.Note {
 	return out
 }
 
-// wantEarlyStop checks that p has exactly one EARLY_STOP, with message msg on the workflow's line.
 func wantEarlyStop(t *testing.T, p *plan.Plan, msg string, line int) {
 	t.Helper()
 	ns := earlyStops(p)
@@ -79,7 +70,6 @@ func wantEarlyStop(t *testing.T, p *plan.Plan, msg string, line int) {
 	}
 }
 
-// wantEarlyStopSays checks that p has exactly one EARLY_STOP, and that it contains text.
 func wantEarlyStopSays(t *testing.T, p *plan.Plan, text string) {
 	t.Helper()
 	ns := earlyStops(p)
@@ -88,7 +78,6 @@ func wantEarlyStopSays(t *testing.T, p *plan.Plan, text string) {
 	}
 }
 
-// applied runs setup on files and writes its plan, and returns the tree's root.
 func applied(t *testing.T, files map[string]string) string {
 	t.Helper()
 	root := tree(t, files)
@@ -142,7 +131,6 @@ func recompute(t *testing.T, root, path string, edit func(string) string) (*plan
 	return p, out
 }
 
-// readFile returns file path under root.
 func readFile(t *testing.T, root, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
@@ -152,8 +140,8 @@ func readFile(t *testing.T, root, path string) string {
 	return string(b)
 }
 
-// ES-1: the gate scans only the image built in the split step and nothing later pushes, so it
-// is skipped on early stops like the rest of the step. A re-run changes nothing and says nothing.
+// The gate scans only the image built in the split step and nothing later pushes, so it is
+// skipped on early stops like the rest of the step.
 func TestGitHubEarlyStopSkipsGate(t *testing.T) {
 	p, got := result(t, rootRepo(head+earlyStop, nil))
 	wantWorkflow(t, got, head+withGateIf(earlyStopEdited, reached)+lines("        if: "+reached)+continuedRun)
@@ -166,8 +154,6 @@ func TestGitHubEarlyStopSkipsGate(t *testing.T) {
 	}
 }
 
-// The gate's copied if: is combined with the marker, unwrapped, and the continued step's keeps
-// no ${{ }} inside either.
 func TestGitHubEarlyStopSkipsGateKeepsIf(t *testing.T) {
 	const cond = "${{ github.event_name == 'push' }}"
 	step := strings.Replace(earlyStop, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
@@ -179,14 +165,12 @@ func TestGitHubEarlyStopSkipsGateKeepsIf(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 12), 12)
 }
 
-// ES-2: a compose target keeps the gate running; only the continued step gets the marker.
 func TestGitHubEarlyStopComposeKeepsGate(t *testing.T) {
 	p, got := result(t, rootRepo(head+earlyStop, map[string]string{"docker-compose.yml": composeImage}))
 	wantWorkflow(t, got, head+earlyStopEdited+lines("        if: "+reached)+continuedRun)
 	wantEarlyStop(t, p, running("exit", 11, "it also checks docker-compose"), 11)
 }
 
-// ES-3: a later step that pushes keeps the gate running.
 func TestGitHubEarlyStopLaterPushKeepsGate(t *testing.T) {
 	later := lines("      - run: docker push other")
 	p, got := result(t, rootRepo(head+earlyStop+later, nil))
@@ -194,7 +178,6 @@ func TestGitHubEarlyStopLaterPushKeepsGate(t *testing.T) {
 	wantEarlyStop(t, p, runningAdvice("exit", 11, "a later step pushes or deploys", adviceLater), 11)
 }
 
-// A later push step that runs only when the build ran, by setup's marker form, does not count.
 func TestGitHubEarlyStopGuardedLaterPush(t *testing.T) {
 	later := lines(
 		"      - if: "+reached,
@@ -205,8 +188,6 @@ func TestGitHubEarlyStopGuardedLaterPush(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 11), 11)
 }
 
-// A later push step guarded by setup's other marker form, success() && (<X>) && <marker>, does
-// not count either.
 func TestGitHubEarlyStopGuardedLaterPushSuccessForm(t *testing.T) {
 	later := lines(
 		"      - if: success() && (github.ref == 'refs/heads/main') && "+reached,
@@ -217,10 +198,7 @@ func TestGitHubEarlyStopGuardedLaterPushSuccessForm(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 11), 11)
 }
 
-// Anything the gate scans besides the split step's own images keeps it running, and the note
-// names it.
 func TestGitHubEarlyStopOtherTargetsKeepGate(t *testing.T) {
-	// An npm project's source target.
 	p, got := result(t, npmRepo("edge", head+earlyStop, nil))
 	wantWorkflow(t, got, head+earlyStopEdited+lines("        if: "+reached)+continuedRun)
 	wantEarlyStop(t, p, running("exit", 11, "it also checks source"), 11)
@@ -254,8 +232,6 @@ func TestGitHubEarlyStopOtherTargetsKeepGate(t *testing.T) {
 	wantEarlyStopSays(t, p, "because it also checks "+strings.Trim(m[1], `"'`)+".")
 }
 
-// ES-4: after the compose target is removed from shearbolt.yaml, a re-run gives the gate the
-// marker term and says so; another re-run changes nothing.
 func TestGitHubEarlyStopReRunAddsTerm(t *testing.T) {
 	root := applied(t, rootRepo(head+earlyStop, map[string]string{"docker-compose.yml": composeImage}))
 	before := readFile(t, root, wf)
@@ -266,7 +242,6 @@ func TestGitHubEarlyStopReRunAddsTerm(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 12), 12)
 }
 
-// A push step added after ES-1's result: the re-run removes the gate's marker term and says why.
 func TestGitHubEarlyStopReRunRemovesTerm(t *testing.T) {
 	root := applied(t, rootRepo(head+earlyStop, nil))
 	before := readFile(t, root, wf)
@@ -275,7 +250,6 @@ func TestGitHubEarlyStopReRunRemovesTerm(t *testing.T) {
 	wantWorkflow(t, got, strings.Replace(before, "        if: "+reached+"\n        uses:", "        uses:", 1)+later)
 	wantEarlyStop(t, p, runningAdvice("exit", 12, "a later step pushes or deploys", adviceLater), 12)
 
-	// With a condition of its own, the gate keeps it.
 	const cond = "github.event_name == 'push'"
 	step := strings.Replace(earlyStop, "        run: |\n", "        if: "+cond+"\n        run: |\n", 1)
 	root = applied(t, rootRepo(head+step, nil))
@@ -288,8 +262,6 @@ func TestGitHubEarlyStopReRunRemovesTerm(t *testing.T) {
 	wantEarlyStop(t, p, runningAdvice("exit", 13, "a later step pushes or deploys", adviceLater), 13)
 }
 
-// A marker term the user reformatted is setup's term all the same: nothing is rewritten, and
-// nothing is said.
 func TestGitHubEarlyStopReformattedTerm(t *testing.T) {
 	for _, term := range []string{
 		"steps.shearbolt-build.outputs.shearbolt-reached  !=  ''",
@@ -377,8 +349,6 @@ const existingGateEdited = "      - name: Ship\n" +
 	"        if: steps.shearbolt-build.outputs.shearbolt-reached != ''\n" +
 	"        run: docker push ghcr.io/acme/edge:latest\n"
 
-// A step split with the marker before an existing action gate: the gate gets the marker term
-// when it may be skipped, and EARLY_STOP is added because the split is new.
 func TestGitHubEarlyStopExistingGate(t *testing.T) {
 	p, got := result(t, rootRepo(head+existingGate, nil))
 	wantWorkflow(t, got, head+withGateIf(existingGateEdited, reached))
@@ -388,14 +358,13 @@ func TestGitHubEarlyStopExistingGate(t *testing.T) {
 		t.Errorf("a re-run changes %d files, notes %+v", len(again.Changes), earlyStops(again))
 	}
 
-	// A compose target keeps it running.
 	p, got = result(t, rootRepo(head+existingGate, map[string]string{"docker-compose.yml": composeImage}))
 	wantWorkflow(t, got, head+existingGateEdited)
 	wantEarlyStop(t, p, running("exit", 10, "it also checks docker-compose"), 10)
 }
 
 // A gate condition with ${{ }} inside an expression is a string, which is always true, so the
-// marker cannot be combined with it: the gate keeps running and the note says why.
+// marker cannot be combined with it.
 func TestGitHubEarlyStopTemplateGateIf(t *testing.T) {
 	const cond = "github.ref == ${{ env.REF }}"
 	gate := strings.Replace(existingGate, "      - name: shearbolt\n", "      - name: shearbolt\n        if: "+cond+"\n", 1)
@@ -403,7 +372,6 @@ func TestGitHubEarlyStopTemplateGateIf(t *testing.T) {
 	wantWorkflow(t, got, head+withGateIf(existingGateEdited, cond))
 	wantEarlyStop(t, p, runningAdvice("exit", 10, "its condition cannot be combined with the marker", adviceTemplate), 10)
 
-	// On a re-run, a marker term next to such a condition is removed.
 	root := applied(t, rootRepo(head+existingGate, nil))
 	before := readFile(t, root, wf)
 	p, got = recompute(t, root, wf, func(s string) string {
@@ -413,7 +381,6 @@ func TestGitHubEarlyStopTemplateGateIf(t *testing.T) {
 	wantEarlyStop(t, p, runningAdvice("exit", 11, "its condition cannot be combined with the marker", adviceTemplate), 11)
 }
 
-// No EARLY_STOP without an early stop, and none for a split without the marker.
 func TestGitHubNoEarlyStopNote(t *testing.T) {
 	for _, files := range []map[string]string{
 		rootRepo(head+lines(
@@ -434,7 +401,6 @@ func TestGitHubNoEarlyStopNote(t *testing.T) {
 	}
 }
 
-// The note names the command that stops: exec too.
 func TestGitHubEarlyStopNamesExec(t *testing.T) {
 	p, _ := result(t, rootRepo(head+lines(
 		"      - name: Ship",
@@ -448,11 +414,8 @@ func TestGitHubEarlyStopNamesExec(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exec", 11), 11)
 }
 
-// gateTermLine is ES-1's gate with its marker term, as setup writes it.
 const gateTermLine = "      - name: shearbolt\n        if: " + reached + "\n"
 
-// stale applies ES-1, edits its workflow with edit, and runs setup again; a further run must
-// change nothing. It returns the edited workflow, the plan and the workflow setup writes.
 func stale(t *testing.T, edit func(string) string) (string, *plan.Plan, string) {
 	t.Helper()
 	root := applied(t, rootRepo(head+earlyStop, nil))
@@ -461,9 +424,9 @@ func stale(t *testing.T, edit func(string) string) (string, *plan.Plan, string) 
 	return edited, p, got
 }
 
-// (A) A step inserted between the split step and its gate: the gate no longer directly follows
-// a step that sets the marker, so a re-run takes the term away instead of keeping it while a
-// later push goes unchecked.
+// A step inserted between the split step and its gate: the gate no longer directly follows a
+// step that sets the marker, so a re-run takes the term away instead of keeping it while a later
+// push goes unchecked.
 func TestGitHubEarlyStopStaleTermStepBetween(t *testing.T) {
 	later := lines("      - run: docker push other")
 	edited, p, got := stale(t, func(s string) string {
@@ -473,7 +436,7 @@ func TestGitHubEarlyStopStaleTermStepBetween(t *testing.T) {
 	wantEarlyStop(t, p, removed("shearbolt-build"), 17)
 }
 
-// (B) The split step's id renamed, and the continued step updated: the term with the old id is
+// The split step's id renamed, and the continued step updated: the term with the old id is
 // replaced, not kept next to the new one, which would never let the gate run.
 func TestGitHubEarlyStopStaleTermRenamedID(t *testing.T) {
 	edited, p, got := stale(t, func(s string) string {
@@ -485,8 +448,8 @@ func TestGitHubEarlyStopStaleTermRenamedID(t *testing.T) {
 	wantEarlyStop(t, p, skipping("exit", 12), 12)
 }
 
-// (G) The id deleted and a later push added: the re-run gives the step its id back and decides
-// with it, so the term goes in one run.
+// The id deleted and a later push added: the re-run gives the step its id back and decides with
+// it, so the term goes in one run.
 func TestGitHubEarlyStopStaleTermDeletedID(t *testing.T) {
 	later := lines("      - run: docker push other")
 	edited, p, got := stale(t, func(s string) string {
@@ -497,8 +460,8 @@ func TestGitHubEarlyStopStaleTermDeletedID(t *testing.T) {
 	wantEarlyStop(t, p, runningAdvice("exit", 11, "a later step pushes or deploys", adviceLater), 11)
 }
 
-// (H) The marker line deleted and a later push added: nothing sets the marker any more, so the
-// term goes; kept, it would never let the gate run.
+// The marker line deleted and a later push added: nothing sets the marker any more, so the term
+// goes; kept, it would never let the gate run.
 func TestGitHubEarlyStopStaleTermDeletedMarker(t *testing.T) {
 	later := lines("      - run: docker push other")
 	edited, p, got := stale(t, func(s string) string {
@@ -519,19 +482,14 @@ func TestGitHubEarlyStopDashLineIf(t *testing.T) {
 	wantEarlyStop(t, p, runningAdvice("exit", 12, "a later step pushes or deploys", adviceLater), 12)
 }
 
-// still is the running form of EARLY_STOP for a gate that scans nothing built in the split step:
-// it passes on early stops, so the note gives no advice.
 func still(stop string, line int, targets string) string {
 	return fmt.Sprintf("this step can stop before its build (%s at line %d); the rest of the step runs only when the build ran, and the shearbolt gate still runs on early stops and checks %s.", stop, line, targets)
 }
 
-// adviceLater is the running form's advice when a later step pushes or deploys, or the gate
-// follows builds in other steps: removing targets would not let it skip.
 const adviceLater = "Move the early stop into the job's if: to skip the gate as well."
 
 // An npm build that is not an image: the gate checks only source, which does not need the build,
-// so it passes on early stops and the note neither blames a missing image nor asks to remove
-// targets.
+// so it passes on early stops.
 func TestGitHubEarlyStopNoImage(t *testing.T) {
 	step := lines(
 		"      - name: Deploy",
@@ -560,8 +518,6 @@ func TestGitHubEarlyStopNoImage(t *testing.T) {
 	wantEarlyStop(t, p, still("exit", 10, "source"), 10)
 }
 
-// A Rust binary built in the split step: its file target fails the gate when the build did not
-// run, so the note blames the missing artifact.
 func TestGitHubEarlyStopArtifact(t *testing.T) {
 	files := map[string]string{
 		"Cargo.toml":  "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",

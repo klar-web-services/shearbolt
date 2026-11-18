@@ -24,7 +24,6 @@ Exit codes: 0 success, 2 error.
 Flags:
 `
 
-// projectSkillDir is the project install's folder as shown to the user.
 var projectSkillDir = filepath.Join(".claude", "skills", skill.Name)
 
 func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
@@ -85,7 +84,6 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	var outcome skill.Outcome
 	var err error
 	if !*project {
-		// Follow symlinks anywhere: dotfiles layouts link ~/.claude elsewhere.
 		outcome, err = skill.Install(skill.Dir(base))
 	} else {
 		outcome, err = skill.InstallInside(skill.Dir(base), base)

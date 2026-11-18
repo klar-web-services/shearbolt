@@ -7,7 +7,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/model"
 )
 
-// blockF is one blocking finding of a package.
 func blockF(typ, pkg, version, fixState string, fixes ...string) model.Finding {
 	return model.Finding{
 		ID: "GHSA-" + pkg + "-" + version, Type: typ, Package: pkg, Version: version,

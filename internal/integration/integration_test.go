@@ -1,17 +1,5 @@
 //go:build integration
 
-// Package integration runs Shearbolt against the real pinned Grype.
-//
-// The snapshot tests (snapshot_test.go) scan with the pinned vulnerability database snapshot
-// (testdata/db-snapshot.sha256), so their results are deterministic. The one live test
-// (live_test.go) uses today's database. Run with:
-//
-//	export SHEARBOLT_TEST_DB_ARCHIVE=$(scripts/db-snapshot.sh fetch ~/.cache/shearbolt-db-snapshot)
-//	go test -tags integration -count=1 ./internal/integration/ -v -timeout 30m
-//
-// Caches live below $SHEARBOLT_CACHE_DIR (default: the user cache dir's shearbolt-integration):
-// snapshot/ for snapshot scans and live/ for the live test. The first snapshot scan imports the
-// archive; the later ones find the import marker and skip it.
 package integration
 
 import (
@@ -35,11 +23,10 @@ import (
 // nodeImage is node:22-alpine pinned by digest (multi-arch index); it ships a Node.js runtime binary.
 const nodeImage = "docker.io/library/node@sha256:ab07539e0988b63558ff621f5fbe1077054c39d9809112974fb79993949d41cd"
 
-// snapshotPolicy lets snapshot scans pass the database age check (spec section 4).
 const snapshotPolicy = "policy:\n  maxDatabaseAgeHours: 1000000\n"
 
 var (
-	cacheBase string // the absolute base cache folder for all integration scans
+	cacheBase string
 	testdata  string // the absolute testdata folder, fixed before any test changes directory
 
 	// firstSnapshotDB holds run.json's database fields from the first snapshot scan, which
@@ -81,23 +68,17 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// fixture is the absolute path of a file or folder below testdata, whatever the working directory.
 func fixture(parts ...string) string {
 	return filepath.Join(append([]string{testdata}, parts...)...)
 }
 
-// quoted is a fixture path as a YAML double-quoted scalar.
 func quoted(parts ...string) string { return strconv.Quote(fixture(parts...)) }
 
-// sourceTarget is one `source` target of a config's targets block.
 func sourceTarget(name string, parts ...string) string {
 	return fmt.Sprintf("  - name: %s\n    source: %s\n", name, quoted(parts...))
 }
 
-// useSnapshotEnv makes the scans of the calling test use the pinned database snapshot: it sets
-// SHEARBOLT_DB_ARCHIVE to $SHEARBOLT_TEST_DB_ARCHIVE and SHEARBOLT_CACHE_DIR to <base>/snapshot,
-// so no import lands in the live cache. Every test that scans with a policy written for the
-// snapshot must call it (snapshotScan does; Plan 2's setup integration tests call it directly).
+// Every test that scans with a policy written for the snapshot must call it.
 func useSnapshotEnv(t *testing.T) string {
 	t.Helper()
 	archive := os.Getenv("SHEARBOLT_TEST_DB_ARCHIVE")
@@ -109,8 +90,6 @@ func useSnapshotEnv(t *testing.T) string {
 	return archive
 }
 
-// snapshotScan scans one config, made of the given targets block and the snapshot policy, on
-// the pinned snapshot.
 func snapshotScan(t *testing.T, targets string) (int, model.Run) {
 	t.Helper()
 	return snapshotScanWithPolicy(t, targets, snapshotPolicy)
@@ -130,8 +109,6 @@ func snapshotScanWithPolicy(t *testing.T, targets, policy string) (int, model.Ru
 	return code, r
 }
 
-// checkSnapshotRun requires that a scan used the snapshot archive and reports the same database
-// as the first (importing) snapshot scan.
 func checkSnapshotRun(t *testing.T, archive string, r model.Run) {
 	t.Helper()
 	if r.DBArchive != archive {
@@ -146,7 +123,6 @@ func checkSnapshotRun(t *testing.T, archive string, r model.Run) {
 	}
 }
 
-// liveScan scans with today's database (ad hoc flags, default policy) in <base>/live.
 func liveScan(t *testing.T, args ...string) (int, model.Run) {
 	t.Helper()
 	t.Setenv("SHEARBOLT_CACHE_DIR", filepath.Join(cacheBase, "live"))
@@ -155,7 +131,6 @@ func liveScan(t *testing.T, args ...string) (int, model.Run) {
 	return runScan(t, args...)
 }
 
-// runScan runs `shearbolt scan --json` and parses run.json. EvidenceDir is set to the evidence folder.
 func runScan(t *testing.T, args ...string) (int, model.Run) {
 	t.Helper()
 	evidence := filepath.Join(t.TempDir(), "evidence")
@@ -169,14 +144,12 @@ func runScan(t *testing.T, args ...string) (int, model.Run) {
 	return code, r
 }
 
-// blocked reports a blocking finding for pkg@version, in target unless target is empty.
 func blocked(r model.Run, target, pkg, version string) bool {
 	return slices.ContainsFunc(r.Findings, func(f model.Finding) bool {
 		return f.Package == pkg && f.Version == version && f.Decision.Action == model.Block && (target == "" || f.Target == target)
 	})
 }
 
-// blockedIn is like blocked, but also requires a location ending in the given lockfile path.
 func blockedIn(r model.Run, target, pkg, version, lockfile string) bool {
 	return slices.ContainsFunc(r.Findings, func(f model.Finding) bool {
 		return f.Package == pkg && f.Version == version && f.Decision.Action == model.Block && (target == "" || f.Target == target) &&
@@ -184,12 +157,10 @@ func blockedIn(r model.Run, target, pkg, version, lockfile string) bool {
 	})
 }
 
-// hasCode reports a diagnostic with the code, for target unless target is empty.
 func hasCode(ds []model.Diagnostic, code, target string) bool {
 	return slices.ContainsFunc(ds, func(d model.Diagnostic) bool { return d.Code == code && (target == "" || d.Target == target) })
 }
 
-// targetStatus is the status of the named target, or "" if the run has no such target.
 func targetStatus(r model.Run, name string) string {
 	for _, t := range r.Targets {
 		if t.Name == name {

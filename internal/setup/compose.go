@@ -11,10 +11,6 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-// findCompose returns the repo-relative paths of the compose files to gate (those that pull at
-// least one image) in walk order, and notes for the others and for unset image variables:
-// COMPOSE_NOT_READ (unreadable, invalid or unsupported), COMPOSE_NO_IMAGES (pulls nothing),
-// COMPOSE_VARIABLE (one per service whose image needs an unset variable; the file is gated).
 func findCompose(r plan.Repo) ([]string, []plan.Note, error) {
 	var candidates []string
 	err := r.Walk(func(dir string, names []string) {
@@ -64,8 +60,7 @@ func findCompose(r plan.Repo) ([]string, []plan.Note, error) {
 
 // attachCompose gives each compose file to the deepest npm or Rust project whose Dir contains
 // it, as a path relative to that Dir, and puts the rest into the root project (ecosystem docker)
-// at ".", named after the repository directory. Without an npm or Rust project, that project
-// also owns the image builds (attachImageBuilds). projects is sorted by Dir and stays sorted.
+// at ".", named after the repository directory.
 func attachCompose(projects []plan.Project, files []string, root string) []plan.Project {
 	var rest []string
 	for _, f := range files {
@@ -103,10 +98,6 @@ func attachCompose(projects []plan.Project, files []string, root string) []plan.
 	return projects
 }
 
-// attachImageBuilds returns projects with a root project (ecosystem docker, Dir ".", named after
-// the repository directory, no lockfiles) when no project is npm or Rust and jobs hold at least
-// one non-RewriteOnly image build. An existing root project is kept as it is. projects is
-// sorted by Dir and stays sorted.
 func attachImageBuilds(projects []plan.Project, jobs []plan.Job, root string) []plan.Project {
 	// An npm or Rust project owns the builds; a root project is already there.
 	if slices.ContainsFunc(projects, func(p plan.Project) bool { return p.Ecosystem != plan.EcosystemDocker || p.Dir == "." }) {
