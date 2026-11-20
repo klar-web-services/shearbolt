@@ -20,9 +20,11 @@ Usage:
   shearbolt setup [flags]              Add the Shearbolt gate to this repository's CI
   shearbolt scan [flags]               Scan the targets in shearbolt.yaml, or ad-hoc targets
   shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)
+  shearbolt zosia enable|disable       Send this repository's CI reports to Zosia (zosiasec.com), or stop
   shearbolt version                    Print version information
 
-Run "shearbolt setup -h", "shearbolt scan -h" or "shearbolt skill install -h" for their flags.
+Run "shearbolt setup -h", "shearbolt scan -h" or "shearbolt skill install -h" for their flags,
+and "shearbolt zosia -h" for what it changes.
 `
 
 type deps struct {
@@ -77,6 +79,8 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		return runScan(args[1:], stdout, stderr, d)
 	case "skill":
 		return runSkill(args[1:], stdout, stderr, d)
+	case "zosia":
+		return runZosia(args[1:], stdout, stderr, d)
 	case "version", "--version":
 		if len(args) > 1 {
 			fmt.Fprintf(stderr, "shearbolt version: unexpected argument %q\n\n%s", args[1], usage)

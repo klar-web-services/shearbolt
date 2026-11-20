@@ -163,3 +163,119 @@ func TestGitHubZosiaFlowStyleStepIsRefused(t *testing.T) {
 		t.Errorf("notes = %v, workflow:\n%s", noteCodes(p), got)
 	}
 }
+
+// zosiaCmd runs what `shearbolt zosia enable` (on) or `disable` computes and returns the plan and
+// the workflow afterwards ("" when it is unchanged).
+func zosiaCmd(t *testing.T, files map[string]string, on bool) (*plan.Plan, string) {
+	t.Helper()
+	p := setup.Zosia(tree(t, files), on)
+	if p.Error != nil {
+		t.Fatalf("error: %+v", p.Error)
+	}
+	if c := change(p, wf); c != nil {
+		if c.Diff == "" || c.Mode == 0 {
+			t.Errorf("the change has no diff or mode: %+v", c)
+		}
+		return p, c.Content
+	}
+	return p, ""
+}
+
+const gateStep = "      - uses: klar-web-services/shearbolt@v1"
+
+func TestZosiaEnable(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		before, want []string
+		notes        []string
+	}{
+		{"no inputs", []string{gateStep}, []string{gateStep, "        with:", zosiaWith}, []string{"ZOSIA_ADDED", "ZOSIA_SECRET"}},
+		{"targets are kept",
+			[]string{gateStep, "        with:", "          targets: web  # keep"},
+			[]string{gateStep, "        with:", "          targets: web  # keep", zosiaWith},
+			[]string{"ZOSIA_ADDED", "ZOSIA_SECRET"}},
+		{"already enabled", []string{gateStep, "        with:", zosiaWith}, nil, []string{"ZOSIA_ALREADY", "ZOSIA_SECRET"}},
+		{"run step",
+			[]string{"      - run: |", "          curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh", `          "$HOME/.local/bin/shearbolt" scan --ci`},
+			nil, []string{"ZOSIA_RUN_GATE", "ZOSIA_SECRET"}},
+		{"flow style", []string{"      - {uses: klar-web-services/shearbolt@v1}"}, nil, []string{"UNSUPPORTED_EDIT", "ZOSIA_SECRET"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, got := zosiaCmd(t, npmRepo("web", publish+lines(tc.before...)+"      - run: npm publish\n", nil), true)
+			want := ""
+			if tc.want != nil {
+				want = publish + lines(tc.want...) + "      - run: npm publish\n"
+			}
+			wantWorkflow(t, got, want)
+			if !slices.Equal(noteCodes(p), tc.notes) {
+				t.Errorf("notes = %v, want %v", noteCodes(p), tc.notes)
+			}
+			if len(p.Changes) > 1 {
+				t.Errorf("changes = %d: only the workflow may change", len(p.Changes))
+			}
+		})
+	}
+}
+
+func TestZosiaEnableNamesTheGitHubCLI(t *testing.T) {
+	p, _ := zosiaCmd(t, npmRepo("web", publish+gateStep+"\n", nil), true)
+	n := p.Notes[len(p.Notes)-1]
+	if n.Code != "ZOSIA_SECRET" || n.File != wf || !strings.Contains(n.Message, "https://zosiasec.com/app/secrets") || !strings.Contains(n.Message, "gh secret set ZOSIA_SECRET") {
+		t.Errorf("note = %+v", n)
+	}
+}
+
+func TestZosiaDisable(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		before, want []string
+		notes        []string
+	}{
+		{"only input", []string{gateStep, "        with:", zosiaWith}, []string{gateStep}, []string{"ZOSIA_REMOVED", "ZOSIA_SECRET_STAYS"}},
+		{"other inputs stay",
+			[]string{gateStep, "        with:", "          targets: web", zosiaWith},
+			[]string{gateStep, "        with:", "          targets: web"},
+			[]string{"ZOSIA_REMOVED", "ZOSIA_SECRET_STAYS"}},
+		{"not enabled", []string{gateStep}, nil, []string{"ZOSIA_OFF", "ZOSIA_SECRET_STAYS"}},
+		{"run step with the secret",
+			[]string{"      - run: shearbolt scan --ci", "        env:", "          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}"},
+			nil, []string{"ZOSIA_KEPT", "ZOSIA_SECRET_STAYS"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, got := zosiaCmd(t, npmRepo("web", publish+lines(tc.before...)+"      - run: npm publish\n", nil), false)
+			want := ""
+			if tc.want != nil {
+				want = publish + lines(tc.want...) + "      - run: npm publish\n"
+			}
+			wantWorkflow(t, got, want)
+			if !slices.Equal(noteCodes(p), tc.notes) {
+				t.Errorf("notes = %v, want %v", noteCodes(p), tc.notes)
+			}
+		})
+	}
+}
+
+// What enable writes is what setup would have written, so setup has nothing to add afterwards,
+// and what disable leaves is what setup leaves with the answer no.
+func TestZosiaEnableAgreesWithSetup(t *testing.T) {
+	root := tree(t, npmRepo("web", publish+"      - run: npm publish\n", nil))
+	first := setup.Compute(setup.Options{Root: root, Yes: true, Version: "1.2.3"})
+	if err := setup.Write(root, first); err != nil {
+		t.Fatal(err)
+	}
+	on := setup.Zosia(root, true)
+	if on.Error != nil || len(on.Changes) != 1 {
+		t.Fatalf("enable: %+v, %d changes", on.Error, len(on.Changes))
+	}
+	if err := setup.Write(root, on); err != nil {
+		t.Fatal(err)
+	}
+	again := setup.Compute(setup.Options{Root: root, Yes: true, Version: "1.2.3"})
+	if again.Error != nil || len(again.Changes) != 0 || len(zosiaNotes(again)) != 0 {
+		t.Errorf("setup after enable: %+v, %d changes, notes %v", again.Error, len(again.Changes), zosiaNotes(again))
+	}
+	off := setup.Zosia(root, false)
+	if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != first.Changes[slices.IndexFunc(first.Changes, func(c plan.FileChange) bool { return c.Path == wf })].Content {
+		t.Errorf("disable does not restore the workflow setup wrote: %+v", off.Changes)
+	}
+}

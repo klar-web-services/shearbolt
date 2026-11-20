@@ -319,21 +319,29 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		if i > 0 && changes[i-1].Path == c.Path {
 			return fail("READ", fmt.Sprintf("setup planned two changes to %s; this is a bug, please report it", c.Path), c.Path)
 		}
-		if c.Action == "create" {
-			c.Base, c.Mode = nil, 0o644
-			c.Diff = plan.UnifiedDiff(c.Path, nil, []byte(c.Content))
-			continue
-		}
-		c.Diff = plan.UnifiedDiff(c.Path, c.Base, []byte(c.Content))
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(c.Path)))
-		if err != nil {
+		if err := describeChange(root, c); err != nil {
 			return fail("READ", err.Error(), c.Path)
 		}
-		c.Mode = info.Mode().Perm()
 	}
 	p.Changes = changes
 	p.Notes = dedupeNotes(notes)
 	return p
+}
+
+// describeChange fills in the diff and the file mode of c.
+func describeChange(root string, c *plan.FileChange) error {
+	if c.Action == "create" {
+		c.Base, c.Mode = nil, 0o644
+		c.Diff = plan.UnifiedDiff(c.Path, nil, []byte(c.Content))
+		return nil
+	}
+	c.Diff = plan.UnifiedDiff(c.Path, c.Base, []byte(c.Content))
+	info, err := os.Stat(filepath.Join(root, filepath.FromSlash(c.Path)))
+	if err != nil {
+		return err
+	}
+	c.Mode = info.Mode().Perm()
+	return nil
 }
 
 // pinSnippets re-renders the snippets in a CI file's Jobs notes, which plugins render for

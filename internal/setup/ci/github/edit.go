@@ -85,11 +85,7 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 		})
 	}
 	if zosia {
-		out.Notes = append(out.Notes, plan.Note{
-			Code:    "ZOSIA_SECRET",
-			Message: "Add the repository secret ZOSIA_SECRET (Settings → Secrets and variables → Actions) with a secret from https://zosiasec.com/app/secrets.",
-			File:    file,
-		})
+		out.Notes = append(out.Notes, plan.ZosiaSecretNote(p.Name(), file))
 	}
 	return out, nil
 }

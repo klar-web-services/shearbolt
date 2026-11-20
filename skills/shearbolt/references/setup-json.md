@@ -80,7 +80,9 @@ The questions come in this order:
    env), so a re-run keeps the earlier answer. With `yes`, every GitHub gate step setup
    writes or updates gets `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under `with:`; on
    Bitbucket and GitLab no file changes. With `no`, setup adds nothing and removes
-   nothing. It always applies: it has no `project` and no `unlessChosen`.
+   nothing. It always applies: it has no `project` and no `unlessChosen`. Later,
+   `shearbolt zosia enable` and `shearbolt zosia disable` change only this input in a
+   repository that is already gated (they write directly and have no JSON mode).
 
 ## Which questions apply
 

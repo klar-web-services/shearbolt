@@ -174,10 +174,18 @@ When `ZOSIA_SECRET` is set in CI, every scan sends its result (`run.json` plus t
 
 To connect a repository, make a secret at https://zosiasec.com/app/secrets (sign-up is closed for now), then:
 
-- GitHub Actions: run `shearbolt setup` and answer `yes` to "Send reports to Zosia?" (or add `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the step's `with:`), and add the repository secret `ZOSIA_SECRET`.
-- GitLab CI, Bitbucket Pipelines: add a masked CI variable `ZOSIA_SECRET`. Nothing else changes.
+```bash
+shearbolt zosia enable
+```
 
-To disconnect, delete the secret in Zosia, or remove the variable and the `zosia-secret` line. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
+Run it in the repository root, in a repository `shearbolt setup` has already gated. It changes only what Zosia needs, shows the change as a diff, and says where the secret goes:
+
+- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step. Then add the repository secret `ZOSIA_SECRET` (Settings → Secrets and variables → Actions, or `gh secret set ZOSIA_SECRET`).
+- GitLab CI, Bitbucket Pipelines: no file changes. Add a masked CI variable `ZOSIA_SECRET`.
+
+Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same while it adds the gate. A gate that runs `shearbolt scan` in a GitHub `run:` step takes no input: the command says so, and you add `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to that step's `env:` yourself.
+
+To disconnect, run `shearbolt zosia disable`, which removes the `zosia-secret` lines again, and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
 
 ## Supported projects and CI
 
@@ -276,6 +284,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
 | `shearbolt skill install [--project]` | Installs the [agent skill](#agent-skill-claude-code) for Claude Code. |
+| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps and write directly. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
 `setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.

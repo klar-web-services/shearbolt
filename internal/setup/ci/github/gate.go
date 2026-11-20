@@ -491,11 +491,8 @@ func (e *jobEditor) setZosia(st *step, targets []string) error {
 		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
 	}
 	pad := strings.Repeat(" ", e.unit)
-	e.zosia = true
 	switch {
-	case with == nil && targets == nil:
-		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+pad+zosiaLine, ""))
-	case with == nil:
+	case with == nil && targets != nil:
 		// setTargets adds the with: block after the step's last entry; the line follows it there.
 		if err := e.setTargets(st, targets); err != nil {
 			return err
@@ -509,15 +506,86 @@ func (e *jobEditor) setZosia(st *step, targets []string) error {
 		if err != nil {
 			return fail(err)
 		}
+		e.zosia = true
 		return wrapErr(fail, e.d.InsertAfter(end, []string{strings.Repeat(" ", kc) + pad + zosiaLine}))
 	case targets == nil && slices.Equal(keys(with), []string{"targets"}):
 		// setTargets would remove the whole with: block; the block stays and its only line changes.
+		e.zosia = true
 		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+pad+zosiaLine, ""))
 	}
 	if err := e.setTargets(st, targets); err != nil {
 		return err
 	}
+	return e.addZosia(st)
+}
+
+// addZosia adds the zosia-secret input to a gate step that has none, leaving its other inputs alone.
+func (e *jobEditor) addZosia(st *step) error {
+	with := e.d.Get(st.m, "with")
+	if slices.Contains(keys(with), zosiaInput) {
+		return nil
+	}
+	fail := func(err error) error {
+		return failAt(st.line, "the existing gate cannot get the zosia-secret input (%v)", err)
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	e.zosia = true
+	if with == nil {
+		return wrapErr(fail, e.d.SetKey(st.m, "with", "\n"+strings.Repeat(" ", e.unit)+zosiaLine, ""))
+	}
 	return wrapErr(fail, e.d.SetKey(with, zosiaInput, strings.TrimPrefix(zosiaLine, zosiaInput+": "), ""))
+}
+
+func (e *jobEditor) removeZosia(st *step) error {
+	with := e.d.Get(st.m, "with")
+	if !slices.Contains(keys(with), zosiaInput) {
+		return nil
+	}
+	fail := func(err error) error {
+		return failAt(st.line, "the gate's zosia-secret input cannot be removed (%v)", err)
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	if len(keys(with)) == 1 {
+		return wrapErr(fail, e.d.DeleteEntry(st.m, "with"))
+	}
+	return wrapErr(fail, e.d.DeleteEntry(with, zosiaInput))
+}
+
+// SetZosia implements plan.ZosiaEditor.
+func (p Plugin) SetZosia(file string, src []byte, gates []plan.GateCmd, on bool) ([]byte, map[int]error, error) {
+	wf, err := parseWorkflow(file, src)
+	if err != nil {
+		return nil, nil, err
+	}
+	d := wf.doc
+	failed := map[int]error{}
+	for i, g := range gates {
+		cp := d.Checkpoint()
+		err := fmt.Errorf("the step is not in the workflow")
+		if j := wf.job(g.Pos.Job); j != nil && g.Pos.Step < len(j.steps) && j.steps[g.Pos.Step].m != nil {
+			e := &jobEditor{d: d, wf: wf, j: j, unit: yamledit.IndentUnit(d)}
+			if on {
+				err = e.addZosia(j.steps[g.Pos.Step])
+			} else {
+				err = e.removeZosia(j.steps[g.Pos.Step])
+			}
+		}
+		if err == nil {
+			if _, rerr := d.Result(); rerr != nil {
+				err = rerr
+			}
+		}
+		if err != nil {
+			d.Rollback(cp)
+			failed[i] = err
+		}
+	}
+	res, err := d.Result()
+	return res, failed, err
 }
 
 // errexitShell reports whether a shell: setting stops at a failing command: GitHub's bash and sh

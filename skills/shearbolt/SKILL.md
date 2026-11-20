@@ -196,7 +196,8 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
   or artifacts are not gated.
 - When the user answered `zosia` with `yes`, tell them where to add the `ZOSIA_SECRET`
   secret, from the `ZOSIA_SECRET` note. Reports are sent only once it exists; the gate's
-  result never depends on it.
+  result never depends on it. A user who decides later runs `shearbolt zosia enable`
+  (or `disable`) in the repository root; it changes only that input.
 - An `EARLY_STOP` note whose gate still runs on early stops and fails when the image or
   its artifact was not built means those runs fail, although nothing ships.
   - When it asks to remove targets that do not ship, ask the user whether each target it

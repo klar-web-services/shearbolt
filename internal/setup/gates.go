@@ -1021,11 +1021,7 @@ func zosiaNotes(answer string, files []*ciSource, gates []plan.Gate) []plan.Note
 						if !g.Zosia {
 							continue
 						}
-						msg := "this step still sends to Zosia; remove its zosia-secret line to stop."
-						if g.Pos.Command >= 0 {
-							msg = "this step still sends to Zosia; remove ZOSIA_SECRET from its env to stop."
-						}
-						notes = append(notes, plan.Note{Code: "ZOSIA_KEPT", Message: msg, File: g.Pos.File, Line: g.Pos.Line})
+						notes = append(notes, zosiaKeptNote(g))
 					}
 				}
 			}
@@ -1038,21 +1034,29 @@ func zosiaNotes(answer string, files []*ciSource, gates []plan.Gate) []plan.Note
 			}
 			switch name := f.ci.Name(); {
 			case len(gated) == 0:
-			case name == "gitlab":
-				notes = append(notes, plan.Note{Code: "ZOSIA_SECRET", File: f.path,
-					Message: "Add a masked CI/CD variable ZOSIA_SECRET (Settings → CI/CD → Variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the job's environment."})
-			case name == "bitbucket":
-				notes = append(notes, plan.Note{Code: "ZOSIA_SECRET", File: f.path,
-					Message: "Add a secured repository variable ZOSIA_SECRET (Repository settings → Repository variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the step's environment."})
+			case name != "github":
+				notes = append(notes, plan.ZosiaSecretNote(name, f.path))
 			default:
 				for _, g := range gated {
 					if ex := g.Existing; ex != nil && ex.Pos.Command >= 0 && !ex.Zosia {
-						notes = append(notes, plan.Note{Code: "ZOSIA_RUN_GATE", File: ex.Pos.File, Line: ex.Pos.Line,
-							Message: "this gate runs shearbolt in a run: step, which setup does not change; add env: ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step to send its reports."})
+						notes = append(notes, zosiaRunGateNote(*ex))
 					}
 				}
 			}
 		}
 	}
 	return notes
+}
+
+func zosiaKeptNote(g plan.GateCmd) plan.Note {
+	msg := "this step still sends to Zosia; remove its zosia-secret line to stop."
+	if g.Pos.Command >= 0 {
+		msg = "this step still sends to Zosia; remove ZOSIA_SECRET from its env to stop."
+	}
+	return plan.Note{Code: "ZOSIA_KEPT", Message: msg, File: g.Pos.File, Line: g.Pos.Line}
+}
+
+func zosiaRunGateNote(g plan.GateCmd) plan.Note {
+	return plan.Note{Code: "ZOSIA_RUN_GATE", File: g.Pos.File, Line: g.Pos.Line,
+		Message: "this gate runs shearbolt in a run: step, which setup does not change; add env: ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step to send its reports."}
 }

@@ -67,6 +67,14 @@ type CI interface {
 	Snippet(r Repo, file string, g Gate) string
 }
 
+// ZosiaEditor is a CI whose gates send to Zosia through an input in the file (GitHub's
+// zosia-secret); the others read the CI variable ZOSIA_SECRET and need no edit.
+type ZosiaEditor interface {
+	// SetZosia adds (on) or removes the input of the action gate steps at gates. A gate that
+	// cannot be edited is left as it is and listed in failed by its index.
+	SetZosia(file string, src []byte, gates []GateCmd, on bool) (edited []byte, failed map[int]error, err error)
+}
+
 type Edited struct {
 	Src    []byte // the edited file; src itself when nothing changes
 	Notes  []Note // notes about the edits, UNSUPPORTED_EDIT for each failed job included
@@ -285,6 +293,18 @@ func UnpinnedNote(file string) Note {
 		Message: "this is a development build of shearbolt, so the CI install is not pinned; run setup with a released shearbolt to pin it.",
 		File:    file,
 	}
+}
+
+// ZosiaSecretNote says where the CI system named ci takes the secret from.
+func ZosiaSecretNote(ci, file string) Note {
+	msg := "Add the repository secret ZOSIA_SECRET (Settings → Secrets and variables → Actions) with a secret from https://zosiasec.com/app/secrets."
+	switch ci {
+	case "gitlab":
+		msg = "Add a masked CI/CD variable ZOSIA_SECRET (Settings → CI/CD → Variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the job's environment."
+	case "bitbucket":
+		msg = "Add a secured repository variable ZOSIA_SECRET (Repository settings → Repository variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the step's environment."
+	}
+	return Note{Code: "ZOSIA_SECRET", Message: msg, File: file}
 }
 
 type Note struct {
