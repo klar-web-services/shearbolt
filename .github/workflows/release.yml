@@ -16,8 +16,8 @@ defaults:
   run:
     shell: bash # bash -eo pipefail
 env:
-  GATE_VERSION: '1.4.0'
-  GATE_SHA256: 'eaf908e6b7bb6dcfbf17b9551af5bc36b525b0a15553eff2b270427aedc9581a'
+  GATE_VERSION: '1.5.0'
+  GATE_SHA256: 'eac1eadb2bcf49e565df507c05755bc50140d4cd907a7ab120e62b52f4e72c58'
 jobs:
   build:
     runs-on: ubuntu-latest
