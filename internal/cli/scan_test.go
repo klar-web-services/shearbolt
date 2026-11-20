@@ -15,6 +15,7 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/config"
 	"github.com/klar-web-services/shearbolt/internal/model"
 	"github.com/klar-web-services/shearbolt/internal/testutil"
+	"github.com/klar-web-services/shearbolt/internal/zosia"
 )
 
 func testDeps(t *testing.T, vars map[string]string) deps {
@@ -244,4 +245,75 @@ func TestScanTargetFlagScansOnlyTheComposeTarget(t *testing.T) {
 	if len(lines) != 1 || strings.Contains(string(data), "dir:") || !strings.Contains(lines[0], "nginx:1.27") {
 		t.Fatalf("grype calls:\n%s", data)
 	}
+}
+
+func TestScanSendsToZosiaWithoutChangingTheExitCode(t *testing.T) {
+	block := testutil.GrypeJSON(time.Now(), testutil.Match{ID: "GHSA-1", Package: "lodash", Version: "4.17.20", FixState: "fixed", FixVersions: []string{"4.17.21"}})
+	config := func(t *testing.T) string {
+		dir := projectDir(t)
+		cfg := filepath.Join(dir, "shearbolt.yaml")
+		if err := os.WriteFile(cfg, []byte("version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	for _, tc := range []struct {
+		name    string
+		vars    map[string]string
+		noGrype bool
+		want    int
+	}{
+		{"pass", nil, false, 0},
+		{"block", map[string]string{"FAKE_GRYPE_JSON": block}, false, 1},
+		{"error", nil, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exit := func(secret string) (int, string, string, int) {
+				vars := githubEnv(tc.vars)
+				if secret != "" {
+					vars["ZOSIA_SECRET"] = secret
+				}
+				d := testDeps(t, vars)
+				if tc.noGrype {
+					d.ensureGrype = func(context.Context, string) (string, error) { return "", errors.New("offline") }
+				}
+				sent := 0
+				d.sendZosia = func(context.Context, zosia.Request) (zosia.Result, error) {
+					sent++
+					return zosia.Result{}, &zosia.Error{Code: "NETWORK", Message: "cannot reach Zosia"}
+				}
+				code, out, errb := scanCmd(t, d, "--ci", "--config", config(t), "--output-dir", evidence(t), "--json")
+				return code, out, errb, sent
+			}
+			plainCode, _, plainErr, plainSent := exit("")
+			code, out, errb, sent := exit("zosia_x")
+			var r model.Run
+			if err := json.Unmarshal([]byte(out), &r); err != nil {
+				t.Fatalf("stdout is not run.json: %v\n%s", err, out)
+			}
+			if code != tc.want || plainCode != tc.want || r.ExitCode != tc.want || sent != 1 || plainSent != 0 ||
+				strings.Contains(plainErr, "Zosia:") || strings.Contains(errb, "zosia_x") ||
+				!strings.HasSuffix(errb, "Zosia: report not sent (NETWORK): cannot reach Zosia\n") {
+				t.Fatalf("exit = %d (without a secret %d), want %d, sent %d and %d\nstderr: %s", code, plainCode, tc.want, sent, plainSent, errb)
+			}
+		})
+	}
+	never := func(t *testing.T, vars map[string]string, args ...string) {
+		t.Helper()
+		d := testDeps(t, vars)
+		d.sendZosia = func(context.Context, zosia.Request) (zosia.Result, error) {
+			t.Error("sent to Zosia")
+			return zosia.Result{}, nil
+		}
+		code, _, errb := scanCmd(t, d, append(args, "--output-dir", evidence(t))...)
+		if code != 0 || strings.Contains(errb, "Zosia:") {
+			t.Fatalf("exit = %d, stderr = %s", code, errb)
+		}
+	}
+	t.Run("local", func(t *testing.T) {
+		never(t, githubEnv(map[string]string{"ZOSIA_SECRET": "zosia_x"}), "--config", config(t))
+	})
+	t.Run("ad hoc", func(t *testing.T) {
+		never(t, githubEnv(map[string]string{"ZOSIA_SECRET": "zosia_x"}), "--ci", "--source", projectDir(t))
+	})
 }

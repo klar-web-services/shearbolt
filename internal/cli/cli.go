@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
 	"github.com/klar-web-services/shearbolt/internal/buildinfo"
 	"github.com/klar-web-services/shearbolt/internal/grype"
+	"github.com/klar-web-services/shearbolt/internal/zosia"
 )
 
 const usage = `Shearbolt stops a deployment when what you are about to ship contains
@@ -34,6 +36,7 @@ type deps struct {
 	stdin       io.Reader
 	stdinTTY    func() bool
 	version     string
+	sendZosia   func(ctx context.Context, r zosia.Request) (zosia.Result, error)
 }
 
 func defaultDeps() deps {
@@ -52,6 +55,9 @@ func defaultDeps() deps {
 		stdin:    os.Stdin,
 		stdinTTY: func() bool { return isTerminal(os.Stdin) },
 		version:  buildinfo.Version,
+		sendZosia: func(ctx context.Context, r zosia.Request) (zosia.Result, error) {
+			return zosia.Send(ctx, &http.Client{}, zosiaPolicy, r)
+		},
 	}
 }
 

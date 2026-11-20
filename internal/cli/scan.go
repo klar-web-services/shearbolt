@@ -85,6 +85,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	case *buildFlag && adHoc:
 		return configError("--build builds the image target in shearbolt.yaml, so it cannot be used with ad-hoc flags")
 	}
+	cfgPath := ""
 	var cfg *config.Config
 	switch {
 	case adHoc && *configPath != "":
@@ -104,6 +105,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 			}
 			return configError(what + ". Run `shearbolt setup` to create one and add the gate to your CI (or see https://github.com/klar-web-services/shearbolt#readme), or scan ad hoc with --image, --dir, --file or --source.")
 		}
+		cfgPath = path
 		cfg, err = config.Load(path, env, now)
 	}
 	if err != nil {
@@ -194,6 +196,9 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintln(stdout, string(data))
 	} else {
 		fmt.Fprint(stdout, report.Text(result, d.color(stdout)))
+	}
+	if ciMode && !adHoc {
+		reportToZosia(ctx, d, stderr, result, cfgPath, only)
 	}
 	return result.ExitCode
 }
