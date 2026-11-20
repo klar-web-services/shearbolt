@@ -16,6 +16,9 @@ inputs:
   targets:
     description: "Space-separated target names to scan (default: every target in the config)."
     default: ''
+  zosia-secret:
+    description: "Zosia secret (zosiasec.com). When set, the scan result is sent to Zosia, encrypted; the job's result never depends on it."
+    default: ''
 outputs:
   exit-code:
     description: 0 passed, 1 blocked by policy, 2 error or incomplete scan.
@@ -118,6 +121,7 @@ runs:
         SHEARBOLT_CONFIG: ${{ inputs.config }}
         SHEARBOLT_ARTIFACT_NAME: ${{ inputs.artifact-name }}
         SHEARBOLT_TARGETS: ${{ inputs.targets }}
+        SHEARBOLT_ZOSIA_SECRET: ${{ inputs.zosia-secret }}
       run: |
         # A fresh folder per step, so several shearbolt steps can run in one job (monorepos).
         evidence="$(mktemp -d "$RUNNER_TEMP/shearbolt-evidence-XXXXXX")"
@@ -127,6 +131,9 @@ runs:
         # One --target per name in the targets input; none scans every target in the config.
         # set -f: a name is never a file pattern.
         set -f; set --; for t in $SHEARBOLT_TARGETS; do set -- "$@" --target "$t"; done; set +f
+        # Only a non-empty input replaces a ZOSIA_SECRET the job's env may already set.
+        if [ -n "$SHEARBOLT_ZOSIA_SECRET" ]; then export ZOSIA_SECRET="$SHEARBOLT_ZOSIA_SECRET"; fi
+        unset SHEARBOLT_ZOSIA_SECRET
         set +e
         "$RUNNER_TEMP/shearbolt-bin/shearbolt" scan --ci --config "$SHEARBOLT_CONFIG" --output-dir "$evidence" "$@"
         echo "exit-code=$?" >> "$GITHUB_OUTPUT"
