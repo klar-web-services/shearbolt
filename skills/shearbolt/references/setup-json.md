@@ -73,6 +73,14 @@ The questions come in this order:
    `unlessChosen` lists every `build-project` question, because assigning an unattributed
    build to the project gives it a build and makes the question moot. A `docker`
    project's `gate-job` has no `unlessChosen`: no build can be assigned to it by a question.
+4. `zosia` (`choice`, options `yes` and `no`), last, once per repository, whenever setup
+   found a CI job it can gate: whether to send scan reports to Zosia (zosiasec.com), an
+   optional dashboard. The default is `no`, or `yes` when a Shearbolt step in a GitHub
+   workflow already has the `zosia-secret` input (or `ZOSIA_SECRET` in a `run:` gate's
+   env), so a re-run keeps the earlier answer. With `yes`, every GitHub gate step setup
+   writes or updates gets `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under `with:`; on
+   Bitbucket and GitLab no file changes. With `no`, setup adds nothing and removes
+   nothing. It always applies: it has no `project` and no `unlessChosen`.
 
 ## Which questions apply
 
@@ -342,6 +350,19 @@ again.
   files ship, Shearbolt is the wrong tool for the repository.
 - `COMPOSE_NO_IMAGES`: a compose file pulls no image (only build services, or only
   overrides), so it is not gated.
+- `ZOSIA_SECRET`: the gates of this CI file send their reports to Zosia once the secret
+  exists. The message says where to add it: a repository secret `ZOSIA_SECRET` on GitHub
+  (setup added the `zosia-secret` input), a masked CI/CD variable on GitLab, a secured
+  repository variable on Bitbucket; its value is a secret the user makes at
+  https://zosiasec.com/app/secrets. Until then nothing is sent, and the gate works as
+  before. On GitHub the note appears only when setup added a `zosia-secret` line; on
+  GitLab and Bitbucket whenever `zosia` is answered `yes`.
+- `ZOSIA_KEPT`: `zosia` was answered `no`, but this step already sends to Zosia. Setup
+  never removes that; the user deletes the step's `zosia-secret` line (or the
+  `ZOSIA_SECRET` in a `run:` gate's env) to stop.
+- `ZOSIA_RUN_GATE` *(GitHub)*: `zosia` was answered `yes`, but this gate runs
+  `shearbolt scan` in a `run:` step, which takes no input. The user adds
+  `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to that step's `env:` to send its reports.
 
 - `TAG_ADDED`: setup adds a local tag `<repository>:shearbolt-<commit>` to each gated image
   build, and the gate scans that tag. It is never pushed. This makes the gate scan exactly

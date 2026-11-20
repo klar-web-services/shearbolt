@@ -46,6 +46,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 - In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
 - If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
+- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it writes or updates get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. Setup never removes the line; answering no later leaves it in place and says so.
 - What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (its image cannot be scanned, so the gate checks only the rest of the project, such as its lockfiles or compose images), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
 - A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
@@ -164,6 +165,19 @@ The first scan downloads the pinned Grype release, verified by its SHA-256, and 
 | `0` | Passed. |
 | `1` | Blocked by policy. The report says what to upgrade. |
 | `2` | Error: an invalid config or usage, a scanner failure, or an incomplete scan. Nothing is approved. |
+
+## Zosia (optional)
+
+[Zosia](https://zosiasec.com) is a dashboard for every repository Shearbolt gates and every machine Tripcoil watches. Shearbolt works the same without it.
+
+When `ZOSIA_SECRET` is set in CI, every scan sends its result (`run.json` plus the repository, branch, commit and CI run link) to Zosia after the report is written. The report is encrypted to Zosia's public key and bound to your secret, so only Zosia can read it and only into your account. Sending never changes the exit code: a failed send prints one `Zosia: report not sent` line and the gate's result stands. Local scans and ad-hoc scans are never sent.
+
+To connect a repository, make a secret at https://zosiasec.com/app/secrets (sign-up is closed for now), then:
+
+- GitHub Actions: run `shearbolt setup` and answer `yes` to "Send reports to Zosia?" (or add `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the step's `with:`), and add the repository secret `ZOSIA_SECRET`.
+- GitLab CI, Bitbucket Pipelines: add a masked CI variable `ZOSIA_SECRET`. Nothing else changes.
+
+To disconnect, delete the secret in Zosia, or remove the variable and the `zosia-secret` line. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
 
 ## Supported projects and CI
 
@@ -325,6 +339,7 @@ An error never hides findings: everything collected before it is still written. 
 | `working-directory` | `.` | Where to run, relative to the repository root. A job's `defaults.run.working-directory` does not apply to the Action. |
 | `targets` | every target | Space-separated target names, for a job that builds only some of the config's artifacts. Setup sets it only when it is needed. |
 | `artifact-name` | unique per step | Name of the uploaded evidence artifact. |
+| `zosia-secret` | empty | A [Zosia](#zosia-optional) secret, usually `${{ secrets.ZOSIA_SECRET }}`. When set, the scan result is sent to Zosia, encrypted. The job's result never depends on it. A `ZOSIA_SECRET` in the job's `env` works too. |
 
 | Output | Meaning |
 |---|---|
@@ -394,6 +409,8 @@ build-image:
 | `CI` | `scan` | Turns on [CI mode](#ci-mode). |
 | `GITHUB_STEP_SUMMARY` | `scan` | When set, as in GitHub Actions, the report is appended to this file (the job summary). |
 | `NO_COLOR` | `scan` | Turns off colors in the terminal report. |
+| `ZOSIA_SECRET` | `scan` | When set in CI, the scan result is sent to [Zosia](#zosia-optional). The exit code never depends on it. |
+| `ZOSIA_URL`, `ZOSIA_KEY` | `scan` | For tests: another Zosia to send to, and its public key (`<key id>:<base64url key>`). |
 | `SHEARBOLT_DB_ARCHIVE` | `scan` | For tests: imports this Grype database archive instead of updating the database. `maxDatabaseAgeHours` still applies to it, and `run.json` and `summary.md` record its use. |
 | `SHEARBOLT_VERSION`, `SHEARBOLT_INSTALL_DIR`, `SHEARBOLT_BASE_URL` | `install.sh` | See [Install options](#install-options). |
 

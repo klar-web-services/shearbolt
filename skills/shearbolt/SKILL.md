@@ -114,7 +114,7 @@ say so and stop. If the user only asked what setup would do, stop here.
 ### 3.3 Ask only the questions that apply
 
 Go through `questions` in their order (`projects`, then `build-project:*`, then
-`gate-job:*`), one at a time. Before you ask a question, skip it if any of these holds:
+`gate-job:*`, then `zosia`), one at a time. Before you ask a question, skip it if any of these holds:
 
 - it already has an `answer`;
 - its `project` is set and that project is not among the chosen `projects` values;
@@ -194,6 +194,9 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
   A block fails the job and the job summary explains it.
 - Repeat what the notes ask the user to add or change by hand. Until they do, those jobs
   or artifacts are not gated.
+- When the user answered `zosia` with `yes`, tell them where to add the `ZOSIA_SECRET`
+  secret, from the `ZOSIA_SECRET` note. Reports are sent only once it exists; the gate's
+  result never depends on it.
 - An `EARLY_STOP` note whose gate still runs on early stops and fails when the image or
   its artifact was not built means those runs fail, although nothing ships.
   - When it asks to remove targets that do not ship, ask the user whether each target it
