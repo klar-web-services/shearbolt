@@ -26,7 +26,7 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 	d := wf.doc
 	out := plan.Edited{Src: src}
 	var tags []string
-	attest := false
+	attest, zosia := false, false
 	for _, pj := range jobs {
 		var jg []plan.Gate
 		for _, g := range gates {
@@ -59,6 +59,7 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 		out.Notes = append(out.Notes, e.notes...)
 		tags = append(tags, e.tags...)
 		attest = attest || e.attest
+		zosia = zosia || e.zosia
 	}
 	res, err := d.Result()
 	if err != nil {
@@ -80,6 +81,13 @@ func (p Plugin) Edit(r plan.Repo, file string, src []byte, jobs []plan.Job, gate
 		out.Notes = append(out.Notes, plan.Note{
 			Code:    "ATTESTATIONS_DROPPED",
 			Message: "the --push image builds now load the image instead, and docker push sends their original tags after the gate; pushing with docker push drops the provenance and SBOM attestations BuildKit attaches when it pushes directly",
+			File:    file,
+		})
+	}
+	if zosia {
+		out.Notes = append(out.Notes, plan.Note{
+			Code:    "ZOSIA_SECRET",
+			Message: "Add the repository secret ZOSIA_SECRET (Settings → Secrets and variables → Actions) with a secret from https://zosiasec.com/app/secrets.",
 			File:    file,
 		})
 	}
@@ -130,6 +138,7 @@ type jobEditor struct {
 	notes   []plan.Note
 	tags    []string
 	attest  bool
+	zosia   bool // a zosia-secret line was added
 }
 
 type stepPlan struct {

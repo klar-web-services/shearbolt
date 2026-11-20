@@ -51,6 +51,7 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 		if err := e.d.InsertItem(e.j.seq, g.At.Step-1, gateLines(g, "", env, e.unit)); err != nil {
 			return failAt(e.j.steps[g.At.Step].line, "setup cannot add the gate step (%v)", err)
 		}
+		e.zosia = e.zosia || g.Zosia
 	default:
 		st := e.j.steps[g.At.Step]
 		ifCond, err := e.gateIf(g)
@@ -71,6 +72,7 @@ func (e *jobEditor) placeGate(gi int, g plan.Gate) error {
 		if err := e.d.InsertItem(e.j.seq, g.At.Step, gateLines(g, ifCond, env, e.unit)); err != nil {
 			return failAt(st.line, "setup cannot add the gate step (%v)", err)
 		}
+		e.zosia = e.zosia || g.Zosia
 	}
 	for _, sp := range e.sortedPlans() {
 		if sp.gate != gi {
@@ -228,7 +230,11 @@ func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	if err := e.setEnv(st, env); err != nil {
 		return err
 	}
-	if err := e.setTargets(st, g.Targets); err != nil {
+	if g.Zosia {
+		if err := e.setZosia(st, g.Targets); err != nil {
+			return err
+		}
+	} else if err := e.setTargets(st, g.Targets); err != nil {
 		return err
 	}
 	return e.gateTerm(gi, g, st)
@@ -468,6 +474,50 @@ func (e *jobEditor) setTargets(st *step, targets []string) error {
 		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+strings.Repeat(" ", e.unit)+"targets: "+yamledit.Scalar(want), ""))
 	}
 	return wrapErr(fail, e.d.SetKey(with, "targets", yamledit.Scalar(want), ""))
+}
+
+// setZosia sets the existing gate's targets and adds the zosia-secret input when the step has
+// none. Both edits can touch the same with: block, so they are queued together.
+func (e *jobEditor) setZosia(st *step, targets []string) error {
+	m := st.m
+	with := e.d.Get(m, "with")
+	if slices.Contains(keys(with), zosiaInput) {
+		return e.setTargets(st, targets)
+	}
+	fail := func(err error) error {
+		return failAt(st.line, "the existing gate cannot get the zosia-secret input (%v)", err)
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	pad := strings.Repeat(" ", e.unit)
+	e.zosia = true
+	switch {
+	case with == nil && targets == nil:
+		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+pad+zosiaLine, ""))
+	case with == nil:
+		// setTargets adds the with: block after the step's last entry; the line follows it there.
+		if err := e.setTargets(st, targets); err != nil {
+			return err
+		}
+		kc, err := e.d.KeyColumn(m)
+		if err != nil {
+			return fail(err)
+		}
+		ks := keys(m)
+		end, err := e.d.EntryEnd(m, ks[len(ks)-1])
+		if err != nil {
+			return fail(err)
+		}
+		return wrapErr(fail, e.d.InsertAfter(end, []string{strings.Repeat(" ", kc) + pad + zosiaLine}))
+	case targets == nil && slices.Equal(keys(with), []string{"targets"}):
+		// setTargets would remove the whole with: block; the block stays and its only line changes.
+		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+pad+zosiaLine, ""))
+	}
+	if err := e.setTargets(st, targets); err != nil {
+		return err
+	}
+	return wrapErr(fail, e.d.SetKey(with, zosiaInput, strings.TrimPrefix(zosiaLine, zosiaInput+": "), ""))
 }
 
 // errexitShell reports whether a shell: setting stops at a failing command: GitHub's bash and sh

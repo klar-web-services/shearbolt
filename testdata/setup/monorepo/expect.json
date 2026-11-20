@@ -1,7 +1,8 @@
 {
   "questions": [
     "projects",
-    "gate-job:apps/api"
+    "gate-job:apps/api",
+    "zosia"
   ],
   "notes": [
     "NO_BUILD_FOUND",

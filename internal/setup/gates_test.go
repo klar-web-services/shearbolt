@@ -136,7 +136,7 @@ func TestGatesProjectsQuestion(t *testing.T) {
 	r := repo(t, nil)
 	job := mkJob(t, r, "test", run("npm run build"))
 	qs := newGateModel([]plan.Project{npmProject(".", "web")}, []plan.Job{job}, []string{ciFile}).questions()
-	if len(qs) != 0 {
+	if !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("one project: %v", questionIDs(qs))
 	}
 	projects := []plan.Project{npmProject("apps/a", "a"), {Ecosystem: "rust", Dir: "crates/b", Name: "b"}}
@@ -160,7 +160,7 @@ func TestGatesBuildProjectAndGateJob(t *testing.T) {
 	m := newGateModel(projects, jobs, []string{ciFile})
 	qs := m.questions()
 	bp := "build-project:" + ciFile + ":200"
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", bp, "gate-job:apps/b"}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", bp, "gate-job:apps/b", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	q := qs[1]
@@ -206,7 +206,7 @@ func TestGatesQuestionIDsOnOneLine(t *testing.T) {
 	jobs := []plan.Job{mkJob(t, r, "test", run("npm run build && npm run build:docs"), run("cd $X && npm run build"))}
 	got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions())
 	want := []string{"projects", "build-project:" + ciFile + ":100:1", "build-project:" + ciFile + ":100:2", "build-project:" + ciFile + ":200",
-		"gate-job:apps/a", "gate-job:apps/b"}
+		"gate-job:apps/a", "gate-job:apps/b", "zosia"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("questions %v, want %v", got, want)
 	}
@@ -219,7 +219,7 @@ func TestGatesRewriteOnly(t *testing.T) {
 	jobs := []plan.Job{mkJob(t, r, "test", run("make test"))}
 	m := newGateModel(projects, jobs, []string{ciFile})
 	qs := m.questions()
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:apps/a", "gate-job:apps/b"}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:apps/a", "gate-job:apps/b", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	pl := m.place(resolve(t, qs, nil), "1.2.3", fakeSnippet)
@@ -233,7 +233,7 @@ func TestGatesRewriteOnly(t *testing.T) {
 	jobs = []plan.Job{mkJob(t, r, "test", run("cd apps/a && npm run build"), run("make -C crates/cli test"))}
 	m = newGateModel(projects, jobs, []string{ciFile})
 	qs = m.questions()
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:crates/cli"}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:crates/cli", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	pl = m.place(resolve(t, qs, nil), "1.2.3", fakeSnippet)
@@ -257,7 +257,7 @@ func TestGatesUnknownDirectoryAsks(t *testing.T) {
 		t.Fatalf("questions: %v", got)
 	}
 	m := newGateModel(projects[:1], jobs, []string{ciFile})
-	if qs := m.questions(); len(qs) != 0 {
+	if qs := m.questions(); !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("one project: %v", questionIDs(qs))
 	}
 	pl := m.place(map[string]string{}, "1.2.3", fakeSnippet)
@@ -516,7 +516,7 @@ func TestGatesExistingGate(t *testing.T) {
 		mkJob(t, r, "two", run(`"$HOME/.local/bin/shearbolt" scan --ci --config apps/b/shearbolt.yaml`)),
 	}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
-	if q := qs[len(qs)-1]; q.ID != "gate-job:apps/b" || q.Default != jobs[1].ID {
+	if q := qs[len(qs)-2]; q.ID != "gate-job:apps/b" || q.Default != jobs[1].ID {
 		t.Fatalf("gate-job default: %+v", q)
 	}
 	gates, _, _ = planGates(t, r, projects, jobs, nil)
@@ -1012,14 +1012,14 @@ func TestGatesComposeOnlyOwnsNoBuilds(t *testing.T) {
 	r := repo(t, map[string]string{"Dockerfile": "FROM x\n", "docker-compose.yml": composeImage})
 	web := npmProject("web", "web")
 	jobs := []plan.Job{mkJob(t, r, "ci", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/web:1 ."), run("cd web && npm run build"))}
-	if qs := newGateModel([]plan.Project{web}, jobs, []string{ciFile}).questions(); len(qs) != 0 {
+	if qs := newGateModel([]plan.Project{web}, jobs, []string{ciFile}).questions(); !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("without compose: %v", questionIDs(qs))
 	}
 	before, _, plBefore := planGates(t, r, []plan.Project{web}, jobs, nil)
 
 	projects := []plan.Project{rootDocker("docker-compose.yml"), web}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:."}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:.", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	if qs[0].Default != ".,web" || qs[0].Options[0].Label != ". (docker)" {
@@ -1071,7 +1071,7 @@ func TestGatesComposeOnlyNotABuildOption(t *testing.T) {
 	jobs := []plan.Job{mkJob(t, r, "ci", run(`cd "$X" && npm run build`), scanStep)}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
 	bp := "build-project:" + ciFile + ":100"
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", bp, "gate-job:.", "gate-job:apps/a", "gate-job:apps/b"}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", bp, "gate-job:.", "gate-job:apps/a", "gate-job:apps/b", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	var opts []string
@@ -1108,7 +1108,7 @@ func TestGatesComposeOnlyRepoWithBuild(t *testing.T) {
 	projects := []plan.Project{rootDocker("compose.yml")}
 	jobs := []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("docker build -t ghcr.io/acme/app:1 ."),
 		run("docker push ghcr.io/acme/app:1"))}
-	if qs := newGateModel(projects, jobs, []string{ciFile}).questions(); len(qs) != 0 {
+	if qs := newGateModel(projects, jobs, []string{ciFile}).questions(); !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("questions: %v", questionIDs(qs))
 	}
 	gates, planned, pl := planGates(t, r, projects, jobs, nil)
@@ -1139,7 +1139,7 @@ func TestGatesComposeGateJobDefault(t *testing.T) {
 		mkJob(t, r, "deploy", checkout, run("docker stack deploy -c compose.yml app")),
 	}
 	qs := newGateModel(projects, jobs, []string{ciFile}).questions()
-	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:.", "gate-job:apps/a"}) {
+	if got := questionIDs(qs); !slices.Equal(got, []string{"projects", "gate-job:.", "gate-job:apps/a", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	if qs[1].Default != jobs[1].ID || qs[2].Default != jobs[0].ID {
@@ -1153,7 +1153,7 @@ func TestGatesComposeGateJobDefault(t *testing.T) {
 	// An existing gate of the compose-only project in test keeps it there.
 	jobs[0] = mkJob(t, r, "test", checkout, scanStep, run("docker compose up -d"))
 	qs = newGateModel(projects[:1], jobs, []string{ciFile}).questions()
-	if len(qs) != 1 || qs[0].Default != jobs[0].ID {
+	if len(qs) != 2 || qs[0].Default != jobs[0].ID {
 		t.Fatalf("existing gate: %+v", qs)
 	}
 	if gates, _, _ = planGates(t, r, projects[:1], jobs, nil); len(gates) != 1 || gates[0].Job != jobs[0].ID || gates[0].Existing == nil {
@@ -1276,7 +1276,7 @@ func TestGatesRootOwnsImageBuild(t *testing.T) {
 	if !slices.Equal(m.owner, []string{"."}) {
 		t.Fatalf("owners: %q", m.owner)
 	}
-	if qs := m.questions(); len(qs) != 0 {
+	if qs := m.questions(); !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("questions: %v", questionIDs(qs))
 	}
 	gates, planned, pl := planGates(t, r, projects, jobs, nil)
@@ -1314,7 +1314,7 @@ func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 	if !slices.Equal(kinds, []plan.BuildKind{plan.BuildImage, plan.BuildBinary, plan.BuildOther}) || !slices.Equal(m.owner, []string{".", "", ""}) {
 		t.Fatalf("builds %v, owners %q", kinds, m.owner)
 	}
-	if qs := m.questions(); len(qs) != 0 {
+	if qs := m.questions(); !slices.Equal(questionIDs(qs), []string{"zosia"}) {
 		t.Fatalf("questions: %v", questionIDs(qs))
 	}
 	gates, planned, pl := planGates(t, r, projects, jobs, nil)
@@ -1336,7 +1336,7 @@ func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 	r = repo(t, map[string]string{"compose.yml": composeImage})
 	projects = []plan.Project{rootDocker("compose.yml")}
 	jobs = []plan.Job{mkJob(t, r, "deploy", fstep{uses: "actions/checkout@v5"}, run("cargo build --release"), run("docker stack deploy -c compose.yml app"))}
-	if got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions()); !slices.Equal(got, []string{"gate-job:."}) {
+	if got := questionIDs(newGateModel(projects, jobs, []string{ciFile}).questions()); !slices.Equal(got, []string{"gate-job:.", "zosia"}) {
 		t.Fatalf("questions: %v", got)
 	}
 	gates, planned, pl = planGates(t, r, projects, jobs, nil)

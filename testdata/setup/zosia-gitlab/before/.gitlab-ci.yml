@@ -1,0 +1,33 @@
+# CI for the ledger service
+stages:
+  - test
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: "/certs"
+
+test:
+  stage: test
+  image: node:22
+  script:
+    - npm ci
+    - npm test
+
+build-image:
+  stage: build
+  image: docker:27
+  services:
+    - docker:27-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    # one line keeps the push next to the build it belongs to
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" . && docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
+
+deploy:
+  stage: deploy
+  image: alpine:3.20
+  script:
+    - ./deploy.sh "$CI_COMMIT_SHA"
+  environment: production

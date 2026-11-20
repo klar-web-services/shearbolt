@@ -303,6 +303,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 			changes = append(changes, plan.FileChange{Path: f.path, Action: "modify", Content: string(ed.Src), Base: f.src})
 		}
 	}
+	notes = append(notes, zosiaNotes(o.Answers["zosia"], files, gates)...)
 	vc, vn := viaChanges(r, via, failed)
 	changes = append(changes, vc...)
 	notes = append(notes, vn...)

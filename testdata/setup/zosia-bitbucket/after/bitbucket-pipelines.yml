@@ -1,0 +1,43 @@
+# Pipelines for the api service
+image: atlassian/default-image:4
+
+definitions:
+  services:
+    docker:
+      memory: 2048
+  caches:
+    shearbolt: ~/.cache/shearbolt
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Build and push
+          services:
+            - docker
+          caches:
+            - docker
+            - shearbolt
+          script:
+            - export IMAGE=registry.example.com/acme/api
+            - echo "$REGISTRY_PASSWORD" | docker login registry.example.com -u "$REGISTRY_USER" --password-stdin
+            - docker build -t $IMAGE:$BITBUCKET_COMMIT -t $IMAGE:shearbolt-$BITBUCKET_COMMIT .
+            - (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
+            - SHEARBOLT_IMAGE=$IMAGE:shearbolt-$BITBUCKET_COMMIT "$HOME/.local/bin/shearbolt" scan --ci --config "$BITBUCKET_CLONE_DIR/shearbolt.yaml"
+            - docker push $IMAGE:$BITBUCKET_COMMIT
+  tags:
+    'v*':
+      - step:
+          name: Release to ECR
+          services:
+            - docker
+          caches:
+            - shearbolt
+          script:
+            - docker build -t api:$BITBUCKET_TAG -t api:shearbolt-$BITBUCKET_COMMIT .  # tag for the ECR pipe
+            - (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
+            - SHEARBOLT_IMAGE=api:shearbolt-$BITBUCKET_COMMIT "$HOME/.local/bin/shearbolt" scan --ci --config "$BITBUCKET_CLONE_DIR/shearbolt.yaml"
+            - pipe: atlassian/aws-ecr-push-image:2.4.2
+              variables:
+                IMAGE_NAME: api
+                TAGS: $BITBUCKET_TAG

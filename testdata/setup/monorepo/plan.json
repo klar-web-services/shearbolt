@@ -75,6 +75,22 @@
       ],
       "default": ".github/workflows/ci.yml#test",
       "project": "apps/api"
+    },
+    {
+      "id": "zosia",
+      "prompt": "Send reports to Zosia (zosiasec.com)? Needs a ZOSIA_SECRET repository secret or CI variable.",
+      "kind": "choice",
+      "options": [
+        {
+          "value": "yes",
+          "label": "yes"
+        },
+        {
+          "value": "no",
+          "label": "no"
+        }
+      ],
+      "default": "no"
     }
   ],
   "complete": false,

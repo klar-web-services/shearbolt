@@ -331,7 +331,7 @@ func TestSetupComplete(t *testing.T) {
 	if len(p.Changes) == 0 {
 		t.Error("changes are computed with the defaults even when answers are missing")
 	}
-	p = compute(Options{Root: root, Version: "dev", Answers: map[string]string{"projects": "."}}, ecosystems, []plan.CI{ci})
+	p = compute(Options{Root: root, Version: "dev", Answers: map[string]string{"projects": ".", "zosia": "no"}}, ecosystems, []plan.CI{ci})
 	if !p.Complete || p.Questions[0].Answer != "." {
 		t.Errorf("complete = %v, answer = %q", p.Complete, p.Questions[0].Answer)
 	}
@@ -669,7 +669,7 @@ func TestComputeRootProjectFromImageBuild(t *testing.T) {
 	if want := []plan.Project{rootProject(root)}; !reflect.DeepEqual(p.Projects, want) {
 		t.Fatalf("projects = %+v, want %+v", p.Projects, want)
 	}
-	if !p.Complete || len(p.Questions) != 0 || hasCode(p.Notes, "BUILD_NOT_GATED") {
+	if !p.Complete || !slices.Equal(questionIDs(p.Questions), []string{"zosia"}) || hasCode(p.Notes, "BUILD_NOT_GATED") {
 		t.Fatalf("complete = %v, questions = %v, notes = %v", p.Complete, questionIDs(p.Questions), codes(p.Notes))
 	}
 	cfg := change(p, "shearbolt.yaml")

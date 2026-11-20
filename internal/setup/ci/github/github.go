@@ -444,6 +444,7 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 					if cl.Gate != nil {
 						g := *cl.Gate
 						g.Pos = pos
+						g.Zosia = !g.Install && env["ZOSIA_SECRET"]
 						ps.Gates = append(ps.Gates, g)
 					}
 				}
@@ -460,7 +461,8 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 				pos := plan.Pos{File: file, Job: j.id, Step: s, Command: -1, Line: st.line}
 				switch {
 				case actionIs(st.uses, gateAction):
-					ps.Gates = append(ps.Gates, plan.GateCmd{Project: gateProject(wf.doc, st), Pos: pos})
+					ps.Gates = append(ps.Gates, plan.GateCmd{Project: gateProject(wf.doc, st), Pos: pos,
+						Zosia: slices.Contains(keys(wf.doc.Get(st.m, "with")), zosiaInput)})
 				case actionIs(st.uses, buildPushAction):
 					// Its own push is derived from Image.Push and OutputPush, never Step.Push.
 					b := buildPushBuild(wf.doc, st, j.steps)
@@ -781,6 +783,11 @@ func inDoubleQuotes(w string) (string, bool) {
 	return inner, true
 }
 
+const (
+	zosiaInput = "zosia-secret"
+	zosiaLine  = zosiaInput + ": ${{ secrets.ZOSIA_SECRET }}"
+)
+
 func gateLines(g plan.Gate, ifCond string, env [][2]string, unit int) []string {
 	pad := strings.Repeat(" ", unit)
 	out := []string{"name: shearbolt"}
@@ -800,6 +807,9 @@ func gateLines(g plan.Gate, ifCond string, env [][2]string, unit int) []string {
 	}
 	if g.Targets != nil {
 		with = append(with, pad+"targets: "+yamledit.Scalar(strings.Join(g.Targets, " ")))
+	}
+	if g.Zosia {
+		with = append(with, pad+zosiaLine)
 	}
 	if len(with) > 0 {
 		out = append(append(out, "with:"), with...)

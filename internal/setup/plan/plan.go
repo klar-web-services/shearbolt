@@ -173,6 +173,7 @@ type Step struct {
 type GateCmd struct {
 	Project string // project dir from --config, or working-directory + dir(with.config)
 	Install bool   // the install command (Bitbucket/GitLab)
+	Zosia   bool   // the step already sends to Zosia (with.zosia-secret, or ZOSIA_SECRET in a run step's env)
 	Pos     Pos
 }
 
@@ -188,6 +189,7 @@ type Gate struct {
 	Builds   []Build      // gated builds (the plugin adds tags, --load, splits, converts)
 	Existing *GateCmd     // update this gate instead of inserting one
 	Version  string       // "dev" = unpinned
+	Zosia    bool         // add with.zosia-secret (GitHub)
 	// Scans is the sorted names of every target the gate scans, resolved also when Targets is nil;
 	// nil when the config could not be read or edited, so what the gate scans is unknown.
 	Scans []string

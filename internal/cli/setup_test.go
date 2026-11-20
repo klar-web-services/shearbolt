@@ -184,7 +184,7 @@ func decodePlan(t *testing.T, out string) plan.Plan {
 func TestSetupPlanJSONWritesNothing(t *testing.T) {
 	dir := fixtureRepo(t, "nextjs-docker")
 	before := tree(t, dir)
-	code, out, errb := setupCmd(t, setupDeps(false, ""), "--plan", "--json")
+	code, out, errb := setupCmd(t, setupDeps(false, ""), "--plan", "--json", "--answer", "zosia=no")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, errb)
 	}
@@ -219,7 +219,7 @@ func TestSetupNeedsTerminal(t *testing.T) {
 
 func TestSetupInteractiveApplies(t *testing.T) {
 	dir := fixtureRepo(t, "nextjs-docker")
-	code, out, errb := setupCmd(t, setupDeps(true, "y\n"))
+	code, out, errb := setupCmd(t, setupDeps(true, "\ny\n"))
 	if code != 0 {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -251,7 +251,7 @@ func TestSetupInteractiveDeclines(t *testing.T) {
 		t.Run(strings.TrimSpace(stdin), func(t *testing.T) {
 			dir := fixtureRepo(t, "nextjs-docker")
 			before := tree(t, dir)
-			code, out, errb := setupCmd(t, setupDeps(true, stdin))
+			code, out, errb := setupCmd(t, setupDeps(true, "\n"+stdin))
 			if code != 0 || !strings.HasSuffix(out, "No changes written.\n") || strings.Contains(out, reviewLine) {
 				t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 			}
@@ -263,7 +263,7 @@ func TestSetupInteractiveDeclines(t *testing.T) {
 func TestSetupInteractiveEOFAtConfirmWritesNothing(t *testing.T) {
 	dir := fixtureRepo(t, "nextjs-docker")
 	before := tree(t, dir)
-	code, out, errb := setupCmd(t, setupDeps(true, ""))
+	code, out, errb := setupCmd(t, setupDeps(true, "\n"))
 	if code != 2 || !strings.Contains(out, "No changes written.") || !strings.Contains(errb, "no answer") {
 		t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -272,8 +272,9 @@ func TestSetupInteractiveEOFAtConfirmWritesNothing(t *testing.T) {
 
 func TestSetupInteractiveAsksOnlyApplicableQuestions(t *testing.T) {
 	dir := tempRepo(t, twoProjects())
-	// projects: option 1 (apps/a); gate-job:apps/a: Enter (default); gate-job:apps/b no longer applies.
-	code, out, errb := setupCmd(t, setupDeps(true, "1\n\ny\n"))
+	// projects: option 1 (apps/a); gate-job:apps/a: Enter (default); gate-job:apps/b no longer applies;
+	// zosia: Enter (default).
+	code, out, errb := setupCmd(t, setupDeps(true, "1\n\n\ny\n"))
 	if code != 0 {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -299,7 +300,7 @@ func TestSetupInteractiveAsksOnlyApplicableQuestions(t *testing.T) {
 
 func TestSetupInteractiveSkipsPreAnswered(t *testing.T) {
 	dir := tempRepo(t, twoProjects())
-	code, out, errb := setupCmd(t, setupDeps(true, "1\ny\n"), "--answer", "projects=apps/b")
+	code, out, errb := setupCmd(t, setupDeps(true, "1\n\ny\n"), "--answer", "projects=apps/b")
 	if code != 0 {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -313,8 +314,8 @@ func TestSetupInteractiveSkipsPreAnswered(t *testing.T) {
 
 func TestSetupInteractiveAnswerByValue(t *testing.T) {
 	dir := tempRepo(t, twoProjects())
-	// projects by value and number; gate-job:apps/a by value; gate-job:apps/b by number.
-	code, out, errb := setupCmd(t, setupDeps(true, "apps/b, 1\n.github/workflows/ci.yml#test\n1\ny\n"))
+	// projects by value and number; gate-job:apps/a by value; gate-job:apps/b by number; zosia by value.
+	code, out, errb := setupCmd(t, setupDeps(true, "apps/b, 1\n.github/workflows/ci.yml#test\n1\nno\ny\n"))
 	if code != 0 {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -349,7 +350,7 @@ func TestSetupInteractiveInvalidAnswers(t *testing.T) {
 
 func TestSetupInteractiveRetriesInvalidAnswer(t *testing.T) {
 	tempRepo(t, twoProjects())
-	code, out, errb := setupCmd(t, setupDeps(true, "9\napps/c\n1,2\n\n\nn\n"))
+	code, out, errb := setupCmd(t, setupDeps(true, "9\napps/c\n1,2\n\n\n\nn\n"))
 	if code != 0 || strings.Count(out, "Which projects should Shearbolt protect?") != 1 || !strings.Contains(out, "No changes written.") {
 		t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -376,7 +377,7 @@ func TestSetupApplyWithoutAnswers(t *testing.T) {
 func TestSetupApplyWithAnswers(t *testing.T) {
 	dir := tempRepo(t, twoProjects())
 	code, out, errb := setupCmd(t, setupDeps(false, ""), "--apply", "--json",
-		"--answer", "projects=apps/a", "--answer", "gate-job:apps/a=.github/workflows/ci.yml#test")
+		"--answer", "projects=apps/a", "--answer", "gate-job:apps/a=.github/workflows/ci.yml#test", "--answer", "zosia=no")
 	if code != 0 {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -482,7 +483,7 @@ func TestSetupSecondRunNothingToChange(t *testing.T) {
 	if code != 0 || !strings.HasSuffix(out, "Shearbolt is already set up here; nothing to change.\n"+reviewLine) || strings.Contains(out, "+++ ") {
 		t.Errorf("second run: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
-	code, out, errb = setupCmd(t, setupDeps(true, ""))
+	code, out, errb = setupCmd(t, setupDeps(true, "\n"))
 	if code != 0 || !strings.HasSuffix(out, "Shearbolt is already set up here; nothing to change.\n"+reviewLine) || strings.Contains(out, "Apply these changes") {
 		t.Errorf("interactive second run: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -564,7 +565,7 @@ func TestNoteLine(t *testing.T) {
 
 func TestSetupInteractiveLastLineWithoutNewline(t *testing.T) {
 	dir := fixtureRepo(t, "nextjs-docker")
-	code, out, errb := setupCmd(t, setupDeps(true, "y"))
+	code, out, errb := setupCmd(t, setupDeps(true, "\ny"))
 	if code != 0 || !strings.HasSuffix(out, reviewLine) {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -579,7 +580,7 @@ func TestSetupNumbersWinOverValues(t *testing.T) {
 		"a/package.json": `{"name":"a"}`, "a/package-lock.json": "{}",
 		".github/workflows/ci.yml": "name: ci\non: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - run: npm test\n",
 	})
-	code, out, errb := setupCmd(t, setupDeps(true, "2\n\ny\n"))
+	code, out, errb := setupCmd(t, setupDeps(true, "2\n\n\ny\n"))
 	if code != 0 || !strings.Contains(out, "  1) 2 (npm)\n  2) a (npm)\n") {
 		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
@@ -601,7 +602,7 @@ func (zeros) Read(b []byte) (int, error) {
 func TestSetupLongAnswers(t *testing.T) {
 	t.Run("long line is an invalid try", func(t *testing.T) {
 		dir := tempRepo(t, twoProjects())
-		code, out, errb := setupCmd(t, setupDeps(true, strings.Repeat("1", 5000)+"\n1\n\nn\n"))
+		code, out, errb := setupCmd(t, setupDeps(true, strings.Repeat("1", 5000)+"\n1\n\n\nn\n"))
 		if code != 0 || !strings.Contains(out, "longer than 4 KiB") || !strings.Contains(out, "No changes written.") {
 			t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 		}
@@ -625,7 +626,7 @@ func TestSetupLongAnswers(t *testing.T) {
 		before := tree(t, dir)
 		d := setupDeps(true, "")
 		d.stdin = zeros{}
-		code, out, errb := setupCmd(t, d)
+		code, out, errb := setupCmd(t, d, "--answer", "zosia=no")
 		if code != 0 || !strings.HasSuffix(out, "No changes written.\n") {
 			t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 		}
@@ -718,7 +719,7 @@ func TestSetupEscapesRepositoryText(t *testing.T) {
 	})
 	t.Run("interactive", func(t *testing.T) {
 		escRepo(t)
-		code, out, errb := setupCmd(t, setupDeps(true, "\ny\n"))
+		code, out, errb := setupCmd(t, setupDeps(true, "\n\ny\n"))
 		check(t, code, out, errb, 0)
 		if !strings.Contains(out, `e\x1b[2Jvil.yml: bad\x1b[31mjob`) {
 			t.Errorf("the job option is not shown escaped:\n%s", out)
@@ -739,7 +740,7 @@ func TestSetupEscapesRepositoryText(t *testing.T) {
 	})
 	t.Run("invalid interactive answer", func(t *testing.T) {
 		escRepo(t)
-		code, out, errb := setupCmd(t, setupDeps(true, "x\x1b[1m\n\nn\n"))
+		code, out, errb := setupCmd(t, setupDeps(true, "x\x1b[1m\n\n\nn\n"))
 		check(t, code, out, errb, 0)
 	})
 }
@@ -789,7 +790,7 @@ func TestSetupPlanJSONGolden(t *testing.T) {
 		t.Errorf("--plan --json differs from %s:\n%s", golden, plan.UnifiedDiff("plan.json", want, []byte(out)))
 	}
 	p := decodePlan(t, out)
-	if p.Complete || len(p.Questions) != 2 || p.Questions[1].ID != "gate-job:apps/api" || p.Questions[1].Project != "apps/api" {
+	if p.Complete || len(p.Questions) != 3 || p.Questions[1].ID != "gate-job:apps/api" || p.Questions[1].Project != "apps/api" {
 		t.Errorf("plan: complete %v, questions %+v", p.Complete, p.Questions)
 	}
 	for _, c := range p.Changes {
@@ -923,6 +924,9 @@ func TestSetupModesAgree(t *testing.T) {
 				t.Fatalf("--plan --json: exit = %d, stderr = %s", code, errb)
 			}
 			p := decodePlan(t, out)
+			if _, err := os.Stat(filepath.Join(setupFixtures, name, "after")); err != nil && p.Error == nil && len(p.Changes) == 0 {
+				t.Skip("the fixture changes nothing")
+			}
 			if p.Error != nil || len(p.Changes) == 0 {
 				t.Fatalf("plan: error %+v, %d changes", p.Error, len(p.Changes))
 			}
@@ -990,7 +994,7 @@ func TestSetupApplyWithoutAnswersOnMonorepo(t *testing.T) {
 	dir := fixtureRepo(t, "monorepo")
 	before := tree(t, dir)
 	code, out, errb := setupCmd(t, setupDeps(false, ""), "--apply")
-	if code != 2 || out != "" || !strings.Contains(errb, "no answer: projects, gate-job:apps/api.") {
+	if code != 2 || out != "" || !strings.Contains(errb, "no answer: projects, gate-job:apps/api, zosia.") {
 		t.Errorf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
 	sameTree(t, dir, before)

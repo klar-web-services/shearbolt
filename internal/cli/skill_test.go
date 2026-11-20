@@ -334,7 +334,7 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 		}
 		return q.Default
 	})
-	if !slices.Equal(asked, []string{"projects", "gate-job:apps/api"}) {
+	if !slices.Equal(asked, []string{"projects", "gate-job:apps/api", "zosia"}) {
 		t.Errorf("asked %v", asked)
 	}
 	answers := answerArgs(p, chosen)
@@ -408,10 +408,10 @@ jobs:
 			bp = q.ID
 		}
 	}
-	if bp == "" || !slices.Equal(ids, []string{"projects", bp, "gate-job:apps/a", "gate-job:apps/b"}) {
+	if bp == "" || !slices.Equal(ids, []string{"projects", bp, "gate-job:apps/a", "gate-job:apps/b", "zosia"}) {
 		t.Fatalf("questions = %v", ids)
 	}
-	for _, q := range p.Questions[2:] {
+	for _, q := range p.Questions[2:4] {
 		if !slices.Equal(q.UnlessChosen, []string{bp}) {
 			t.Errorf("%s: unlessChosen = %v, want [%s]", q.ID, q.UnlessChosen, bp)
 		}
@@ -426,7 +426,7 @@ jobs:
 		}
 		return q.Default
 	})
-	if !slices.Equal(asked, []string{"projects", bp, "gate-job:apps/a"}) {
+	if !slices.Equal(asked, []string{"projects", bp, "gate-job:apps/a", "zosia"}) {
 		t.Fatalf("asked %v, want gate-job:apps/b skipped", asked)
 	}
 	if chosen["gate-job:apps/a"] != ".github/workflows/ci.yml#test" {

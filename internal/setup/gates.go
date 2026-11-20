@@ -43,6 +43,7 @@ type gateModel struct {
 	// compose holds, per project dir, whether the project's merged config keeps a compose
 	// target (keptCompose).
 	compose map[string]bool
+	zosia   bool // the zosia answer: gates get the zosia-secret input (GitHub)
 }
 
 // A Via build found twice in one command (a file reached by two calls) counts once.
@@ -223,7 +224,29 @@ func (m *gateModel) questions() []plan.Question {
 		}
 		qs = append(qs, q)
 	}
+	z := plan.Question{
+		ID:      "zosia",
+		Prompt:  "Send reports to Zosia (zosiasec.com)? Needs a ZOSIA_SECRET repository secret or CI variable.",
+		Kind:    "choice",
+		Options: []plan.Option{{Value: "yes", Label: "yes"}, {Value: "no", Label: "no"}},
+		Default: "no",
+	}
+	if m.sendsToZosia() {
+		z.Default = "yes"
+	}
+	qs = append(qs, z)
 	return qs
+}
+
+func (m *gateModel) sendsToZosia() bool {
+	for _, job := range m.jobs {
+		for _, st := range job.Steps {
+			if slices.ContainsFunc(st.Gates, func(g plan.GateCmd) bool { return g.Zosia }) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Only owners' gates count, so the default is always one of the build-project options
@@ -343,6 +366,7 @@ type projectPlan struct {
 // gone.
 func (m *gateModel) place(values map[string]string, version string, snippet func(file string, g plan.Gate) string) *placement {
 	pl := &placement{projects: map[string]*projectPlan{}, attributed: map[string][]plan.Build{}}
+	m.zosia = values["zosia"] == "yes"
 	selected := map[string]bool{}
 	if v, ok := values["projects"]; ok {
 		for _, d := range strings.Split(v, ",") {
@@ -515,7 +539,7 @@ func (m *gateModel) firstPushFrom(j int, from at) at {
 func (m *gateModel) placeAtStart(p plan.Project, j int, version string) (*gatePlace, []plan.Note) {
 	job := m.jobs[j]
 	file := m.jobFile(j)
-	g := plan.Gate{Project: p, Config: configFile(p), Job: job.ID, Version: version,
+	g := plan.Gate{Project: p, Config: configFile(p), Job: job.ID, Version: version, Zosia: m.zosia,
 		At: plan.Pos{File: file, Job: job.ID, Step: 0, Command: -1}, Before: true}
 	first := m.firstPush(j)
 	if c := slices.IndexFunc(job.Steps, func(st plan.Step) bool { return isCheckout(st.Uses) }); c >= 0 && first.step > c {
@@ -562,7 +586,7 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 			bset = append(bset, b)
 		}
 	}
-	gate := plan.Gate{Project: p, Config: configFile(p), Job: m.jobs[j].ID, Version: version}
+	gate := plan.Gate{Project: p, Config: configFile(p), Job: m.jobs[j].ID, Version: version, Zosia: m.zosia}
 	var notes []plan.Note
 	note := func(b located, code, msg string) {
 		notes = append(notes, plan.Note{Code: code, Message: msg, File: b.Pos.File, Line: b.Pos.Line})
@@ -982,4 +1006,53 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 		out = append(out, g)
 	}
 	return out
+}
+
+// zosiaNotes are the notes an explicit zosia answer adds (the GitHub plugin itself notes the
+// lines it adds). A run with the defaults adds none, so running setup again stays quiet.
+func zosiaNotes(answer string, files []*ciSource, gates []plan.Gate) []plan.Note {
+	var notes []plan.Note
+	for _, f := range files {
+		switch answer {
+		case "no":
+			for _, j := range f.jobs {
+				for _, st := range j.Steps {
+					for _, g := range st.Gates {
+						if !g.Zosia {
+							continue
+						}
+						msg := "this step still sends to Zosia; remove its zosia-secret line to stop."
+						if g.Pos.Command >= 0 {
+							msg = "this step still sends to Zosia; remove ZOSIA_SECRET from its env to stop."
+						}
+						notes = append(notes, plan.Note{Code: "ZOSIA_KEPT", Message: msg, File: g.Pos.File, Line: g.Pos.Line})
+					}
+				}
+			}
+		case "yes":
+			var gated []plan.Gate
+			for _, g := range gates {
+				if strings.HasPrefix(g.Job, f.path+"#") {
+					gated = append(gated, g)
+				}
+			}
+			switch name := f.ci.Name(); {
+			case len(gated) == 0:
+			case name == "gitlab":
+				notes = append(notes, plan.Note{Code: "ZOSIA_SECRET", File: f.path,
+					Message: "Add a masked CI/CD variable ZOSIA_SECRET (Settings → CI/CD → Variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the job's environment."})
+			case name == "bitbucket":
+				notes = append(notes, plan.Note{Code: "ZOSIA_SECRET", File: f.path,
+					Message: "Add a secured repository variable ZOSIA_SECRET (Repository settings → Repository variables) with a secret from https://zosiasec.com/app/secrets; the gate reads it from the step's environment."})
+			default:
+				for _, g := range gated {
+					if ex := g.Existing; ex != nil && ex.Pos.Command >= 0 && !ex.Zosia {
+						notes = append(notes, plan.Note{Code: "ZOSIA_RUN_GATE", File: ex.Pos.File, Line: ex.Pos.Line,
+							Message: "this gate runs shearbolt in a run: step, which setup does not change; add env: ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step to send its reports."})
+					}
+				}
+			}
+		}
+	}
+	return notes
 }
