@@ -52,6 +52,11 @@ main() {
 	version=${version#v}
 	# The value itself is not printed: it may come from the server.
 	case $version in '' | *[!0-9A-Za-z._-]*) fail "invalid version from $from" ;; esac
+	# shearbolt update sets SHEARBOLT_UPDATE_FROM to its own version.
+	if [ "$version" = "${SHEARBOLT_UPDATE_FROM:-}" ]; then
+		say "shearbolt $version is already up to date."
+		exit 0
+	fi
 
 	asset="shearbolt-$arch-$os.tar.gz"
 	url="$base/v$version"
@@ -84,6 +89,7 @@ main() {
 	fi
 	new=
 	say "Installed shearbolt $version to $install_dir/shearbolt"
+	[ -z "${SHEARBOLT_UPDATE_FROM:-}" ] || exit 0
 	case ":$PATH:" in *":$install_dir:"*) ;; *) say "Add $install_dir to your PATH." ;; esac
 	say "Next: run 'shearbolt setup' in your project."
 }

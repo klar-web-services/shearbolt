@@ -31,6 +31,14 @@ The installer downloads the release for your platform with `curl` (or `wget` whe
 curl -fsSL https://tools.klar.ws/shearbolt/install.sh | SHEARBOLT_VERSION=1.0.0 sh
 ```
 
+### Update
+
+```bash
+shearbolt update
+```
+
+It replaces the binary, in the folder it is installed in, with the latest release, or says that it is already up to date. It runs the installer that came with your version, with the same checksum check, and `SHEARBOLT_BASE_URL` and `SHEARBOLT_VERSION` work as above. Releases before 1.6.0 have no `update`: run the installer again instead.
+
 ### What setup changes
 
 Run setup from your repository root: it treats the current directory as the root and looks for your CI files there. It shows every change as a diff and asks `Apply these changes? [y/N]` before it writes anything. It never commits; new files such as `shearbolt.yaml` show only in `git status`.

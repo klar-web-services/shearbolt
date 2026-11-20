@@ -887,3 +887,28 @@ func TestInstallTruncatedScriptRunsNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallUpdateFrom(t *testing.T) {
+	t.Run("same version", func(t *testing.T) {
+		srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64))
+		dir, previous := previousInstall(t)
+		r := runInstall(t, map[string]string{"SHEARBOLT_BASE_URL": srv.URL, "SHEARBOLT_INSTALL_DIR": dir, "SHEARBOLT_UPDATE_FROM": "1.2.3"}, tools("curl"))
+		if r.code != 0 || r.stderr != "" || r.stdout != "shearbolt 1.2.3 is already up to date.\n" {
+			t.Fatalf("exit %d\nstdout:\n%s\nstderr:\n%s", r.code, r.stdout, r.stderr)
+		}
+		wantUntouched(t, dir, previous)
+		if got := srv.requests(); !slices.Equal(got, []string{"/latest"}) {
+			t.Fatalf("requests = %v", got)
+		}
+	})
+	t.Run("other version", func(t *testing.T) {
+		srv := serve(t, fakeRelease(t, "1.2.3", linuxAmd64))
+		dir, _ := previousInstall(t)
+		r := runInstall(t, map[string]string{"SHEARBOLT_BASE_URL": srv.URL, "SHEARBOLT_INSTALL_DIR": dir, "SHEARBOLT_UPDATE_FROM": "0.9.0"}, tools("curl"))
+		wantOK(t, r)
+		wantInstalled(t, filepath.Join(dir, "shearbolt"), "shearbolt 1.2.3 "+linuxAmd64)
+		if want := "Installed shearbolt 1.2.3 to " + dir + "/shearbolt\n"; r.stdout != want {
+			t.Fatalf("stdout = %q, want only %q", r.stdout, want)
+		}
+	})
+}

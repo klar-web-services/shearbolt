@@ -21,6 +21,7 @@ Usage:
   shearbolt scan [flags]               Scan the targets in shearbolt.yaml, or ad-hoc targets
   shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)
   shearbolt zosia enable|disable       Send this repository's CI reports to Zosia (zosiasec.com), or stop
+  shearbolt update                     Update shearbolt to the latest release
   shearbolt version                    Print version information
 
 Run "shearbolt setup -h", "shearbolt scan -h" or "shearbolt skill install -h" for their flags,
@@ -39,6 +40,7 @@ type deps struct {
 	stdinTTY    func() bool
 	version     string
 	sendZosia   func(ctx context.Context, r zosia.Request) (zosia.Result, error)
+	update      func(version string, stdout, stderr io.Writer) error
 }
 
 func defaultDeps() deps {
@@ -60,6 +62,7 @@ func defaultDeps() deps {
 		sendZosia: func(ctx context.Context, r zosia.Request) (zosia.Result, error) {
 			return zosia.Send(ctx, &http.Client{}, zosiaPolicy, r)
 		},
+		update: updateSelf,
 	}
 }
 
@@ -81,6 +84,8 @@ func run(args []string, stdout, stderr io.Writer, d deps) int {
 		return runSkill(args[1:], stdout, stderr, d)
 	case "zosia":
 		return runZosia(args[1:], stdout, stderr, d)
+	case "update":
+		return runUpdate(args[1:], stdout, stderr, d)
 	case "version", "--version":
 		if len(args) > 1 {
 			fmt.Fprintf(stderr, "shearbolt version: unexpected argument %q\n\n%s", args[1], usage)
