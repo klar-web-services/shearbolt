@@ -189,7 +189,7 @@ shearbolt zosia enable
 
 Run it in the repository root, in a repository `shearbolt setup` has already gated. It changes only what Zosia needs, shows the change as a diff, and says where the secret goes:
 
-- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step. Then add the repository secret `ZOSIA_SECRET` (Settings → Secrets and variables → Actions, or `gh secret set ZOSIA_SECRET`).
+- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step. Then add the repository secret `ZOSIA_SECRET` (Settings → Secrets and variables → Actions, or `gh secret set ZOSIA_SECRET`). On a terminal, in a repository with only GitHub workflows, `enable` does this for you when the GitHub CLI is logged in with access to the repository's secrets: it asks you to paste the secret and `gh` stores it. Shearbolt never reads the secret, and asks before it replaces an existing one.
 - GitLab CI, Bitbucket Pipelines: no file changes. Add a masked CI variable `ZOSIA_SECRET`.
 
 Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same while it adds the gate. A gate that runs `shearbolt scan` in a GitHub `run:` step takes no input: the command says so, and you add `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to that step's `env:` yourself.
@@ -295,7 +295,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
 | `shearbolt skill install [--project]` | Installs the [agent skill](#agent-skill-claude-code) for Claude Code. |
-| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps and write directly. |
+| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps and write directly. On a terminal, `enable` can also store the secret through the GitHub CLI. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
 `setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.

@@ -41,6 +41,7 @@ type deps struct {
 	version     string
 	sendZosia   func(ctx context.Context, r zosia.Request) (zosia.Result, error)
 	update      func(version string, stdout, stderr io.Writer) error
+	gh          func(dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error
 }
 
 func defaultDeps() deps {
@@ -63,6 +64,7 @@ func defaultDeps() deps {
 			return zosia.Send(ctx, &http.Client{}, zosiaPolicy, r)
 		},
 		update: updateSelf,
+		gh:     runGH,
 	}
 }
 
