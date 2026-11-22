@@ -93,7 +93,7 @@ type Classified struct {
 }
 
 type Project struct {
-	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "docker"
+	Ecosystem string   `json:"ecosystem"` // "npm" | "rust" | "go" | "docker"
 	Dir       string   `json:"dir"`       // "." for the root; also the project's ID
 	Name      string   `json:"name"`
 	Lockfiles []string `json:"lockfiles"`           // relative to Dir
@@ -180,6 +180,7 @@ type Step struct {
 // GateCmd is an existing Shearbolt install or scan.
 type GateCmd struct {
 	Project string // project dir from --config, or working-directory + dir(with.config)
+	Config  string // repo-relative path of the config it reads; "" when that is not certain
 	Install bool   // the install command (Bitbucket/GitLab)
 	Zosia   bool   // the step already sends to Zosia (with.zosia-secret, or ZOSIA_SECRET in a run step's env)
 	Pos     Pos

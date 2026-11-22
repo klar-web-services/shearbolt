@@ -489,6 +489,27 @@ func TestSetupSecondRunNothingToChange(t *testing.T) {
 	}
 }
 
+func TestSetupGatedByHandSaysSo(t *testing.T) {
+	fixtureRepo(t, "go-hand-gated")
+	const want = "Shearbolt is already set up here; nothing to change.\n"
+	for name, d := range map[string]deps{"--yes": setupDeps(false, ""), "interactive": setupDeps(true, "")} {
+		args := []string{"--yes"}
+		if name == "interactive" {
+			args = nil
+		}
+		code, out, errb := setupCmd(t, d, args...)
+		if code != 0 || !strings.HasSuffix(out, want+reviewLine) || !strings.Contains(out, "Found: tool (go) in .") ||
+			!strings.Contains(out, ".github/workflows/release.yml:50: this Shearbolt gate already checks the lockfiles of tool through .github/release-gate.yaml") ||
+			strings.Contains(out, "+++ ") || strings.Contains(out, "Zosia") {
+			t.Errorf("%s: exit = %d\nstdout: %s\nstderr: %s", name, code, out, errb)
+		}
+	}
+	code, out, errb := setupCmd(t, setupDeps(false, ""), "--plan")
+	if code != 0 || !strings.HasSuffix(out, want) || strings.Contains(out, "Questions:") {
+		t.Errorf("--plan: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+}
+
 func TestSetupFoundLineComposeOnlyIsDocker(t *testing.T) {
 	fixtureRepo(t, "compose-github")
 	code, out, errb := setupCmd(t, setupDeps(false, ""), "--plan")

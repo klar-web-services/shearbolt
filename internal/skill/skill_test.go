@@ -143,7 +143,7 @@ func TestSetupJSONDocumentsThePlanSchema(t *testing.T) {
 	for _, want := range []string{
 		"This is the contract the skill drives, at `schemaVersion` " + v + ".",
 		"| `schemaVersion` | `" + v + "`. Any other value means the contract changed: stop,",
-		"`ecosystem` (`npm`, `rust` or `" + plan.EcosystemDocker + "`)",
+		"`ecosystem` (`npm`, `rust`, `go` or `" + plan.EcosystemDocker + "`)",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup-json.md does not contain %q", want)

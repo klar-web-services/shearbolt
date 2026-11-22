@@ -33,7 +33,7 @@ func (l located) at() at { return at{l.step, l.Pos.Command} }
 
 type gateModel struct {
 	projects []plan.Project
-	owners   []plan.Project // the projects that can own builds: npm and Rust; without them, the root project
+	owners   []plan.Project // the projects that can own builds: npm, Rust and Go; without them, the root project
 	rootOwns bool           // the root project (ecosystem docker) is the owner: it owns only image builds
 	jobs     []plan.Job
 	ciFiles  []string
@@ -43,7 +43,10 @@ type gateModel struct {
 	// compose holds, per project dir, whether the project's merged config keeps a compose
 	// target (keptCompose).
 	compose map[string]bool
-	zosia   bool // the zosia answer: gates get the zosia-secret input (GitHub)
+	// hand holds, per project dir and job ID, the existing gate that already checks the project
+	// there through a config that is not its own (handGates): setup leaves those jobs alone.
+	hand  map[string]map[string]plan.GateCmd
+	zosia bool // the zosia answer: gates get the zosia-secret input (GitHub)
 }
 
 // A Via build found twice in one command (a file reached by two calls) counts once.
@@ -187,8 +190,14 @@ func (m *gateModel) questions() []plan.Question {
 	if len(m.jobs) == 0 {
 		return qs
 	}
+	// A project that a hand-written gate checks, with no build left to gate, needs no gate job;
+	// when that holds for every project, no gate is placed and there is nothing to ask.
+	settled := func(p plan.Project) bool { return len(m.hand[p.Dir]) > 0 && !m.hasBuild(p.Dir) }
+	if len(bp) == 0 && !slices.ContainsFunc(m.projects, func(p plan.Project) bool { return !settled(p) }) {
+		return qs
+	}
 	for _, p := range m.projects {
-		if m.hasBuild(p.Dir) {
+		if m.hasBuild(p.Dir) || settled(p) {
 			continue
 		}
 		q := plan.Question{
@@ -267,13 +276,20 @@ func (m *gateModel) gateAfter(b located) string {
 	return best
 }
 
+// A build in a job where a hand-written gate checks the project does not count: setup places no
+// gate there.
 func (m *gateModel) hasBuild(dir string) bool {
 	for i, b := range m.builds {
-		if !b.RewriteOnly && m.owner[i] == dir {
+		if !b.RewriteOnly && m.owner[i] == dir && !m.handGated(dir, b.job) {
 			return true
 		}
 	}
 	return false
+}
+
+func (m *gateModel) handGated(dir string, job int) bool {
+	_, ok := m.hand[dir][m.jobs[job].ID]
+	return ok
 }
 
 func projectOption(p plan.Project) string {
@@ -386,7 +402,7 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				o = ""
 			}
 		}
-		if !selected[o] {
+		if !selected[o] || m.handGated(o, b.job) {
 			continue
 		}
 		owner[i] = o
@@ -398,12 +414,12 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 			pl.notes = append(pl.notes, n)
 		}
 	}
-	if m.rootOwns || len(m.owners) == 0 { // no npm or Rust project
+	if m.rootOwns || len(m.owners) == 0 { // no npm, Rust or Go project
 		for i, b := range m.builds {
 			if b.RewriteOnly || b.Kind != plan.BuildBinary || m.owner[i] != "" {
 				continue
 			}
-			pl.notes = append(pl.notes, plan.Note{Code: "BUILD_NOT_GATED", Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds",
+			pl.notes = append(pl.notes, plan.Note{Code: "BUILD_NOT_GATED", Message: "this build belongs to no npm, Rust or Go project, so the gate does not scan what it builds",
 				File: b.Pos.File, Line: b.Pos.Line})
 		}
 	}
@@ -414,6 +430,13 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 		}
 		pp := &projectPlan{project: p}
 		pl.projects[p.Dir] = pp
+		var noted []plan.GateCmd
+		for _, job := range m.jobs {
+			if g, ok := m.hand[p.Dir][job.ID]; ok && !slices.Contains(noted, g) {
+				noted = append(noted, g)
+				pl.notes = append(pl.notes, alreadyGatedNote(p, g))
+			}
+		}
 		if len(m.jobs) == 0 {
 			g := plan.Gate{Project: p, Config: configFile(p), Version: version}
 			where := "the job that builds it, after the build and before any push"
@@ -483,6 +506,10 @@ func (m *gateModel) place(values map[string]string, version string, snippet func
 				pp.gates = append(pp.gates, gp)
 			}
 			pl.notes = append(pl.notes, notes...)
+		}
+		if len(pp.gates) == 0 && len(m.hand[p.Dir]) > 0 {
+			delete(pl.projects, p.Dir) // the hand-written gate is all it has: no config to write
+			continue
 		}
 		pp.plan()
 	}
@@ -862,7 +889,7 @@ func (pp *projectPlan) plan() {
 		pp.slots = append(pp.slots, name)
 		images = append(images, config.Target{Name: name, Image: fmt.Sprintf("${%s:-%s:local}", v, dockerRepoName(name))})
 	}
-	if p.Ecosystem == "rust" {
+	if fallback, ok := binaryFallback[p.Ecosystem]; ok {
 		byBin := map[string]bool{}
 		for _, g := range pp.gates {
 			for _, b := range g.binaries {
@@ -884,7 +911,7 @@ func (pp *projectPlan) plan() {
 					byBin[bin] = true
 					name = uniqueName(name, taken)
 					pp.files[f] = name
-					files = append(files, config.Target{Name: name, File: f, LockfileFallback: "Cargo.lock"})
+					files = append(files, config.Target{Name: name, File: f, LockfileFallback: fallback})
 				}
 			}
 		}
@@ -898,6 +925,10 @@ func (pp *projectPlan) plan() {
 		pp.targets = append(pp.targets, config.Target{Name: pp.source, Source: ".", Exclude: slices.Clone(p.Excludes)})
 	}
 }
+
+// binaryFallback holds the ecosystems whose binary builds get file targets, with the lockfile
+// that stands in for a binary without a package list. A Go binary always carries its module list.
+var binaryFallback = map[string]string{"rust": "Cargo.lock", "go": ""}
 
 func composeName(f string) string {
 	n := strings.ReplaceAll(strings.TrimSuffix(f, path.Ext(f)), "/", "-")

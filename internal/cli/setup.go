@@ -23,7 +23,7 @@ import (
 const setupUsage = `Usage: shearbolt setup [--yes] [--plan] [--apply] [--json] [--answer id=value ...]
 
 Adds the Shearbolt gate to this repository's CI. Setup treats the current directory as the
-repository root. It finds the npm and Rust projects there, the Docker images the CI builds and
+repository root. It finds the npm, Rust and Go projects there, the Docker images the CI builds and
 the Docker Compose files that pull images, writes a shearbolt.yaml for each project, and edits
 the CI so the gate runs after each build and before any push or deploy. It shows every change
 as a diff and never commits.

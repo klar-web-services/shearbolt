@@ -833,11 +833,18 @@ func TestScriptExistingCustomConfig(t *testing.T) {
 		`    - '"$HOME/.local/bin/shearbolt" scan --ci --config shearbolt.prod.yaml'`,
 		"    - docker push x:$CI_COMMIT_SHA",
 	))
-	files["shearbolt.prod.yaml"] = "version: 1\nproject: web\ntargets:\n  - name: source\n    source: .\n"
+	files["shearbolt.prod.yaml"] = "version: 1\nproject: web\ntargets:\n  - name: site\n    image: x:local\n"
 	p, got := result(t, files, "1.2.3")
 	i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "UNSUPPORTED_EDIT" })
 	if got != "" || i < 0 || !strings.Contains(p.Notes[i].Message, "shearbolt.prod.yaml") {
 		t.Errorf("ci.yml:\n%s\nnotes %v", got, noteCodes(p))
+	}
+
+	// A custom config that checks the project's lockfiles is a gate written by hand: left alone.
+	files["shearbolt.prod.yaml"] = "version: 1\nproject: web\ntargets:\n  - name: source\n    source: .\n"
+	p, got = result(t, files, "1.2.3")
+	if got != "" || len(p.Changes) != 0 || len(p.Notes) != 1 || p.Notes[0].Code != "ALREADY_GATED" {
+		t.Errorf("ci.yml:\n%s\nchanges %d, notes %v", got, len(p.Changes), noteCodes(p))
 	}
 
 	// The project's own config, by the clone directory, relative, or relative to a cd, is fine.

@@ -637,7 +637,7 @@ func TestSetupHandAddedComposeTarget(t *testing.T) {
 
 // wantNoProject is NO_PROJECT's message when setup finds nothing to protect, written out so the
 // tests pin its text.
-const wantNoProject = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
+const wantNoProject = "No npm, Rust or Go project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so setup has nothing to set up. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
 const edgeWorkflow = `on: push
 jobs:
@@ -692,7 +692,7 @@ func TestComputeRootProjectFromImageBuild(t *testing.T) {
 	}
 }
 
-const wantNoGateable = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
+const wantNoGateable = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm, Rust or Go project or Docker Compose file to protect."
 
 func TestComputeNoGateableImage(t *testing.T) {
 	for _, tc := range []struct {

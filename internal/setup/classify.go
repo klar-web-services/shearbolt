@@ -614,7 +614,11 @@ func gateCmd(cmd shell.Command, args []shell.Word, ctx plan.Context) *plan.GateC
 		cfg = val
 	}
 	if !found {
-		return &plan.GateCmd{Project: ctx.Dir}
+		g := &plan.GateCmd{Project: ctx.Dir}
+		if ctx.Dir != "" {
+			g.Config = path.Join(ctx.Dir, "shearbolt.yaml")
+		}
+		return g
 	}
 	base := ctx.Dir
 	for _, v := range cloneDirs {
@@ -627,5 +631,5 @@ func gateCmd(cmd shell.Command, args []shell.Word, ctx plan.Context) *plan.GateC
 	if !ok {
 		return &plan.GateCmd{}
 	}
-	return &plan.GateCmd{Project: path.Dir(p)}
+	return &plan.GateCmd{Project: path.Dir(p), Config: p}
 }

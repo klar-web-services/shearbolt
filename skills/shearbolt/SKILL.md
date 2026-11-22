@@ -99,8 +99,8 @@ This writes nothing.
 Tell the user, briefly:
 
 - the projects found (`projects[].dir`, `ecosystem`, `framework`) and the CI files (`ci`).
-  The ecosystem is `npm`, `rust` or `docker`. A `docker` project is the repository root:
-  it holds the compose files, and, when there is no npm or Rust project, the images CI
+  The ecosystem is `npm`, `rust`, `go` or `docker`. A `docker` project is the repository root:
+  it holds the compose files, and, when there is no npm, Rust or Go project, the images CI
   builds;
 - each change: `changes[].path`, and whether setup creates or modifies it;
 - every note, in plain words. Show `UNSUPPORTED_EDIT` and `NO_GATE_PLACED` messages in

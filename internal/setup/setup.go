@@ -17,13 +17,14 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/bitbucket"
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/github"
 	"github.com/klar-web-services/shearbolt/internal/setup/ci/gitlab"
+	"github.com/klar-web-services/shearbolt/internal/setup/ecosystem/golang"
 	"github.com/klar-web-services/shearbolt/internal/setup/ecosystem/npm"
 	"github.com/klar-web-services/shearbolt/internal/setup/ecosystem/rust"
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
 // ecosystems are the project kinds setup supports, in recognition order.
-var ecosystems = []plan.Ecosystem{npm.Plugin{}, rust.Plugin{}}
+var ecosystems = []plan.Ecosystem{npm.Plugin{}, rust.Plugin{}, golang.Plugin{}}
 
 var cis = []plan.CI{github.Plugin{}, bitbucket.Plugin{}, gitlab.Plugin{}}
 
@@ -36,9 +37,9 @@ type Options struct {
 
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
 
-const noProjectMessage = "No npm or Rust project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so there is nothing for Shearbolt to protect. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
+const noProjectMessage = "No npm, Rust or Go project with a lockfile, no Docker Compose file that pulls images and no Docker image build in the CI files was found here, so setup has nothing to set up. Run setup from the repository root. (Setup does not look for Docker builds inside scripts the CI calls.)"
 
-const noGateableMessage = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm or Rust project or Docker Compose file to protect."
+const noGateableMessage = "CI builds Docker images, but none of them can be gated (see the notes below), and there is no npm, Rust or Go project or Docker Compose file to protect."
 
 var noGateableCodes = []string{"MULTI_PLATFORM", "PUSH_IN_BUILD", "BUILD_AFTER_PUSH", "BUILD_AFTER_GATE"}
 
@@ -108,7 +109,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	slices.SortFunc(p.CI, func(a, b plan.CIFile) int { return strings.Compare(a.File, b.File) })
 	slices.SortFunc(files, func(a, b *ciSource) int { return strings.Compare(a.path, b.path) })
 
-	// Without an npm or Rust project, the image builds of the jobs make the root project.
+	// Without an npm, Rust or Go project, the image builds of the jobs make the root project.
 	var jobs []plan.Job
 	var paths []string
 	for _, f := range files {
@@ -124,7 +125,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 			p.Error = parseErr
 			return p
 		}
-		msg := noProjectMessage
+		msg := noProjectMessage + noProjectHelp(root, files, findNotes)
 		for _, n := range findNotes {
 			msg += "\n" + n.Message
 		}
@@ -144,6 +145,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 
 	m := newGateModel(projects, jobs, paths)
 	m.compose = keptCompose(r, projects)
+	m.hand = handGates(r, projects, files)
 	p.Questions = m.questions()
 	for i := range p.Questions {
 		p.Questions[i].Answer = o.Answers[p.Questions[i].ID]
@@ -311,7 +313,9 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	for _, g := range gates {
 		gated = append(gated, g.Builds...)
 	}
-	changes = append(changes, ignoreChanges(r, selected, gated)...)
+	if len(selected) > 0 {
+		changes = append(changes, ignoreChanges(r, selected, gated)...)
+	}
 
 	slices.SortStableFunc(changes, func(a, b plan.FileChange) int { return strings.Compare(a.Path, b.Path) })
 	for i := range changes {

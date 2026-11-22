@@ -1,0 +1,9 @@
+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme
+version: 1
+project: tool
+targets:
+  - name: tool
+    file: dist/tool
+  - name: source
+    source: .
+    exclude: [testdata/]

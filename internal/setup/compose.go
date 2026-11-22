@@ -58,7 +58,7 @@ func findCompose(r plan.Repo) ([]string, []plan.Note, error) {
 	return files, notes, nil
 }
 
-// attachCompose gives each compose file to the deepest npm or Rust project whose Dir contains
+// attachCompose gives each compose file to the deepest npm, Rust or Go project whose Dir contains
 // it, as a path relative to that Dir, and puts the rest into the root project (ecosystem docker)
 // at ".", named after the repository directory.
 func attachCompose(projects []plan.Project, files []string, root string) []plan.Project {
@@ -99,7 +99,7 @@ func attachCompose(projects []plan.Project, files []string, root string) []plan.
 }
 
 func attachImageBuilds(projects []plan.Project, jobs []plan.Job, root string) []plan.Project {
-	// An npm or Rust project owns the builds; a root project is already there.
+	// An npm, Rust or Go project owns the builds; a root project is already there.
 	if slices.ContainsFunc(projects, func(p plan.Project) bool { return p.Ecosystem != plan.EcosystemDocker || p.Dir == "." }) {
 		return projects
 	}

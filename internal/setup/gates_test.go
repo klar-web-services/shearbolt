@@ -1325,7 +1325,7 @@ func TestGatesRootOwnsOnlyImageBuilds(t *testing.T) {
 		t.Fatalf("planned: %v", got)
 	}
 	got := noteCodes(pl.notes, "BUILD_NOT_GATED")
-	want := []plan.Note{{Code: "BUILD_NOT_GATED", File: ciFile, Line: 300, Message: "this build belongs to no npm or Rust project, so the gate does not scan what it builds"}}
+	want := []plan.Note{{Code: "BUILD_NOT_GATED", File: ciFile, Line: 300, Message: "this build belongs to no npm, Rust or Go project, so the gate does not scan what it builds"}}
 	if !slices.Equal(got, want) {
 		t.Fatalf("BUILD_NOT_GATED: %+v", got)
 	}

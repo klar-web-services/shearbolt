@@ -461,7 +461,8 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 				pos := plan.Pos{File: file, Job: j.id, Step: s, Command: -1, Line: st.line}
 				switch {
 				case actionIs(st.uses, gateAction):
-					ps.Gates = append(ps.Gates, plan.GateCmd{Project: gateProject(wf.doc, st), Pos: pos,
+					project, config := gateProject(wf.doc, st)
+					ps.Gates = append(ps.Gates, plan.GateCmd{Project: project, Config: config, Pos: pos,
 						Zosia: slices.Contains(keys(wf.doc.Get(st.m, "with")), zosiaInput)})
 				case actionIs(st.uses, buildPushAction):
 					// Its own push is derived from Image.Push and OutputPush, never Step.Push.
@@ -493,7 +494,7 @@ func actionIs(uses, action string) bool {
 	return strings.EqualFold(strings.TrimSuffix(name, "/"), action)
 }
 
-func gateProject(d *yamledit.Doc, st *step) string {
+func gateProject(d *yamledit.Doc, st *step) (project, config string) {
 	wd, cfg := ".", "shearbolt.yaml"
 	if v := scalar(d.Get(st.m, "with", "working-directory")); v != nil {
 		wd = v.Value
@@ -502,9 +503,9 @@ func gateProject(d *yamledit.Doc, st *step) string {
 		cfg = v.Value
 	}
 	if strings.ContainsAny(wd+cfg, "$`") || path.IsAbs(cfg) {
-		return ""
+		return "", ""
 	}
-	return plan.CleanDir(path.Join(wd, path.Dir(cfg)))
+	return plan.CleanDir(path.Join(wd, path.Dir(cfg))), plan.CleanDir(path.Join(wd, cfg))
 }
 
 func pushesAction(d *yamledit.Doc, st *step) bool {

@@ -11,7 +11,7 @@ cd your-project && shearbolt setup
 
 `shearbolt: command not found`? The installer put it in `~/.local/bin`, which may not be on your `PATH` yet (the installer says so). Run `export PATH="$HOME/.local/bin:$PATH"`, add that line to your shell profile, then run setup again.
 
-Setup finds your npm or Rust project, your Docker Compose files and the images your CI builds from a Dockerfile, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
+Setup finds your npm, Rust or Go project, your Docker Compose files and the images your CI builds from a Dockerfile, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
 
 With Claude Code: `shearbolt skill install`, then type `/shearbolt setup`.
 
@@ -45,7 +45,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 | Where | What setup does |
 |---|---|
-| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, if the project has any, plus a target for each image or Rust binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
+| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, if the project has any, plus a target for each image and each Rust or Go binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
 | GitHub Actions | Adds a `shearbolt` step (`uses: klar-web-services/shearbolt@v1`) after the build. A `docker/build-push-action` step that pushes is split: it builds with `push: false` and `load: true`, `shearbolt` scans, then a new step runs `docker push` for the same tags, so you push exactly what was scanned. Other repositories can use the Action only while this repository is public ([note](#supported-projects-and-ci)). |
 | Bitbucket Pipelines, GitLab CI | Adds two commands to the step or job that builds, between the build and the push: install a pinned Shearbolt, then run `shearbolt scan --ci`. A combined `docker build … && docker push …` line is split around them. Adds a CI cache for the vulnerability database. |
 | Image builds | Adds a local tag, `<image>:shearbolt-<commit>`, and passes it to the gate. The gate scans that tag, and it is never pushed. |
@@ -59,6 +59,7 @@ Run setup from your repository root: it treats the current directory as the root
 - A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
 - Running setup again is safe. It never overwrites an existing `shearbolt.yaml` (it only adds missing targets), and a second run changes nothing.
+- A gate you wrote by hand counts. When a workflow or pipeline already runs `shearbolt scan` with a config of your own whose `source` target covers the project, setup adds nothing to that workflow and says so in a note. When that leaves nothing to gate, it reports that Shearbolt is already set up. On Bitbucket this holds per step.
 - Without a terminal, use `shearbolt setup --yes` to accept the defaults, or `--plan --json` and `--apply --answer` (see [CLI](#cli)).
 
 ## What a blocked build looks like
@@ -201,7 +202,8 @@ To disconnect, run `shearbolt zosia disable`, which removes the `zosia-secret` l
 |---|---|
 | npm | npm, pnpm, Yarn and Bun lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, text `bun.lock`); Next.js apps |
 | Rust | Cargo projects with a `Cargo.lock`; release binaries built with cargo-auditable |
-| Docker images | Images that CI builds from a Dockerfile (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`), in any repository, including one with no npm or Rust project. The gate runs between the build and the push. |
+| Go | Go modules whose `go.mod` requires at least one module; binaries built with `go build -o <file>` |
+| Docker images | Images that CI builds from a Dockerfile (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`), in any repository, including one with no npm, Rust or Go project. The gate runs between the build and the push. |
 | Docker Compose | Repositories that deploy with Docker Compose: the images their compose files pull |
 | CI | GitHub Actions, Bitbucket Pipelines, GitLab CI |
 | Targets | Container images (local Docker or registry), images pulled by Docker Compose files, binaries and other single files, directories, source trees |
@@ -209,6 +211,7 @@ To disconnect, run `shearbolt zosia disable`, which removes the `zosia-secret` l
 Scanning works for anything Grype understands; supported means setup support and tests.
 
 - Grype cannot read Bun's binary `bun.lockb`. Run `bun install --save-text-lockfile` and commit `bun.lock`; setup tells you when this applies.
+- A Go binary gets a target when `go build` names it with `-o <file>`. Without `-o`, with a variable in the path, or inside a shell loop or conditional, setup cannot know where the binary is: the gate then checks `go.mod` only, and a note says so. A `go.mod` that requires no modules holds nothing to check, so setup skips that module.
 - A Rust binary built without cargo-auditable carries no crate list. With `lockfileFallback: Cargo.lock` (setup adds it), Shearbolt checks that lockfile instead and warns: "binary is not auditable; rebuild with cargo-auditable".
 
 The GitHub Action (`uses: klar-web-services/shearbolt@v1`) can be used by other repositories only while this repository is public.

@@ -26,7 +26,7 @@ writes it only with `--apply`. This is the contract the skill drives, at `schema
 | --- | --- |
 | `schemaVersion` | `2`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
 | `shearboltVersion` | The version that computed the plan; `dev` for a development build. |
-| `projects[]` | Detected projects: `ecosystem` (`npm`, `rust` or `docker`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `docker` project is the root project (`dir` `.`, named after the repository's folder) and has no lockfiles. It holds the compose files that no npm or Rust project contains. When the repository has no npm or Rust project, it also owns the image builds setup finds in CI (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`) and gets an image target for each. It never has a `source` target. |
+| `projects[]` | Detected projects: `ecosystem` (`npm`, `rust`, `go` or `docker`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `docker` project is the root project (`dir` `.`, named after the repository's folder) and has no lockfiles. It holds the compose files that no npm, Rust or Go project contains. When the repository has no npm, Rust or Go project, it also owns the image builds setup finds in CI (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`) and gets an image target for each. It never has a `source` target. |
 | `ci[]` | CI files found: `system` (`github`, `bitbucket` or `gitlab`) and `file`. |
 | `questions[]` | Every question setup can ask, computed from the repository alone. See below. |
 | `complete` | `true` when every applicable question has an `--answer`. |
@@ -57,7 +57,7 @@ The questions come in this order:
    project; otherwise every project is selected.
 2. `build-project:<file>:<line>` (`choice`), sorted by file and line. When two such builds
    share a line, the ID ends in `:<line>:<n>`. A build in CI that setup cannot attribute
-   to a project by its directory. The options are the `dir` of each npm and Rust project plus `none` (do not
+   to a project by its directory. The options are the `dir` of each npm, Rust and Go project plus `none` (do not
    gate this build). The default is the project of an existing Shearbolt gate that follows
    the build in its job, so a re-run keeps the earlier answer; otherwise the first project.
    The line moves when setup edits the file, so always take IDs from the latest plan.
@@ -169,9 +169,9 @@ An error plan has `error` set and `changes: []`. It keeps `projects`, `ci` and
 
 | Code | Cause | What to tell the user |
 | --- | --- | --- |
-| `NO_PROJECT` | One of two messages. **Nothing found:** no npm or Rust project with a lockfile Grype can read, no compose file that pulls images, and no Docker image build in the CI files (setup does not look inside scripts the CI calls). **Nothing gateable:** CI builds Docker images, but none of them can be gated, and there is no npm or Rust project or compose file. | Pass on the message. For nothing found, it names what setup protects. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects, Cargo projects with a `Cargo.lock`, compose files that pull at least one image, and images that CI builds. For nothing gateable, the message lists each build's `MULTI_PLATFORM`, `PUSH_IN_BUILD`, `BUILD_AFTER_PUSH` or `BUILD_AFTER_GATE` note: change those builds as the notes say, then run setup again. Both messages then include any `BUN_LOCKB`, `NO_CARGO_LOCK`, `COMPOSE_NO_IMAGES` or `COMPOSE_NOT_READ` advice, and the CI files' own notes, each as `<file>:<line>: <message>` (or `<file>: <message>`): for example `INCLUDE_NOT_READ`, when a GitLab pipeline includes files setup does not read and an image build may be there, or `UNSUPPORTED_EDIT` for jobs setup cannot edit. |
+| `NO_PROJECT` | One of two messages. **Nothing found:** no npm, Rust or Go project with a lockfile Grype can read, no compose file that pulls images, and no Docker image build in the CI files (setup does not look inside scripts the CI calls). **Nothing gateable:** CI builds Docker images, but none of them can be gated, and there is no npm, Rust or Go project or compose file. | Pass on the message. For nothing found, it names what setup protects. It then says what Shearbolt can still do there: `CI already runs Shearbolt at <file>:<line>` lists gates written by hand, which setup leaves as they are, and a list of lockfiles names what `shearbolt scan --source .` reads, which the user can gate by hand with their own `shearbolt.yaml` and scan step. Setup supports npm, pnpm, Yarn and Bun (text `bun.lock`) projects, Cargo projects with a `Cargo.lock`, Go modules whose `go.mod` requires at least one module, compose files that pull at least one image, and images that CI builds. For nothing gateable, the message lists each build's `MULTI_PLATFORM`, `PUSH_IN_BUILD`, `BUILD_AFTER_PUSH` or `BUILD_AFTER_GATE` note: change those builds as the notes say, then run setup again. Both messages then include any `BUN_LOCKB`, `NO_CARGO_LOCK`, `GO_NO_REQUIREMENTS`, `COMPOSE_NO_IMAGES` or `COMPOSE_NOT_READ` advice, and the CI files' own notes, each as `<file>:<line>: <message>` (or `<file>: <message>`): for example `INCLUDE_NOT_READ`, when a GitLab pipeline includes files setup does not read and an image build may be there, or `UNSUPPORTED_EDIT` for jobs setup cannot edit. |
 | `NO_CI` | No `.github/workflows/*.yml` or `*.yaml`, `bitbucket-pipelines.yml` or `.gitlab-ci.yml`. | Shearbolt is a CI gate, so there is nothing to add it to. Pass on the message: run setup from the repository root, or add a pipeline that builds the project first; meanwhile `shearbolt scan --source .` checks the lockfiles locally. |
-| `PARSE` | A CI file is not valid YAML. The message names the file and line. When setup found no npm, Rust or compose project, this comes before `NO_PROJECT` (the same holds for a CI file that cannot be read, `READ`), because the file might hold an image build. | Fix that YAML, then run setup again. |
+| `PARSE` | A CI file is not valid YAML. The message names the file and line. When setup found no npm, Rust, Go or compose project, this comes before `NO_PROJECT` (the same holds for a CI file that cannot be read, `READ`), because the file might hold an image build. | Fix that YAML, then run setup again. |
 | `READ` | The repository could not be read (an I/O error). | Show the message. |
 | `BAD_ANSWER` | An answer is invalid (see Answers). | Correct the answer. |
 | `UNANSWERED` | `--apply` without an answer for every applicable question. | Ask the listed questions, then apply again. |
@@ -184,9 +184,9 @@ the user's terms, using the meanings below. Codes marked *(Bitbucket and GitLab)
 only in Bitbucket Pipelines and GitLab CI files, and codes marked *(GitHub)* only in GitHub
 Actions workflows.
 
-Eight notes are informational: `COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`,
-`COMPOSE_NOT_READ`, `COMPOSE_VARIABLE`, `BUILD_NOT_GATED`, `NO_DEPLOY_SEEN` and
-`EARLY_STOP`. None is a reason to say Shearbolt is "not set up": setup can be complete with
+Nine notes are informational: `COMPOSE_ADDED`, `COMPOSE_NOT_GATED`, `COMPOSE_NO_IMAGES`,
+`COMPOSE_NOT_READ`, `COMPOSE_VARIABLE`, `BUILD_NOT_GATED`, `NO_DEPLOY_SEEN`, `EARLY_STOP`
+and `ALREADY_GATED`. None is a reason to say Shearbolt is "not set up": setup can be complete with
 them present.
 
 ### Gaps: something runs unchecked until the user acts
@@ -231,6 +231,8 @@ Every note here except the informational ones listed in the intro above counts a
 - `NO_CARGO_LOCK`: a `Cargo.toml` without `Cargo.lock`, so its dependencies cannot be
   checked and it is not protected. Run `cargo generate-lockfile` there, commit
   `Cargo.lock`, and run setup again.
+- `GO_NO_REQUIREMENTS`: a `go.mod` that requires no modules, so there are no dependencies
+  in it to check and setup does not protect that module. Nothing to do.
 - `PUSH_BEFORE_GATE`: the job pushes or deploys before the project's first build, ahead of
   the gate, so that push is never checked. The message lists the pushes. Move them after
   the build and the gate.
@@ -276,8 +278,8 @@ Every note here except the informational ones listed in the intro above counts a
   scan fails for those services (`COMPOSE_VARIABLE`) unless the CI job sets them. Set them
   in the job that runs the gate, or add the service to the target's `exclude` if CI
   builds that image and gates it another way. Never exclude a service for the user.
-- `BUILD_NOT_GATED`: the repository has no npm or Rust project, so a binary build in CI
-  (a release `cargo build`) belongs to no project and the gate does not scan what it
+- `BUILD_NOT_GATED`: the repository has no npm, Rust or Go project, so a binary build in CI
+  (a release `cargo build` or a `go build`) belongs to no project and the gate does not scan what it
   produces. Image builds never get this note: the `docker` project owns them. Setup
   cannot clear this note.
 - `NO_DEPLOY_SEEN`: a project of any ecosystem with compose or image targets, and setup
@@ -286,6 +288,14 @@ Every note here except the informational ones listed in the intro above counts a
   deploys by itself, for example on every push, a failed `shearbolt` check does not stop
   it. The user can require the check before merging to the deployed branch, or deploy
   from CI after the gate.
+- `ALREADY_GATED`: a workflow or pipeline already runs `shearbolt scan` with a config
+  setup did not write (not the project's `shearbolt.yaml`), and that config has a `source`
+  target that covers the project. Setup adds no gate for the project there and changes
+  nothing in that workflow (GitHub) or file (GitLab); on Bitbucket this holds only for the
+  step that runs the gate. When no other build of the project is left, setup writes no
+  `shearbolt.yaml` either and asks nothing. Setup did not check what else that config
+  scans or where the gate runs: tell the user to make sure it covers what the pipeline
+  builds and that every push or deploy waits for it.
 
 ### Partial coverage: an artifact is not scanned, the rest still is
 
@@ -313,6 +323,11 @@ Every note here except the informational ones listed in the intro above counts a
 - `RUST_CONDITIONAL_BUILD`: a cargo build inside a shell conditional or loop. It was
   rewritten to `cargo auditable build` but gets no binary target. The source target
   checks `Cargo.lock`.
+- `GO_PATH_UNKNOWN`: the output path of a `go build` is not certain (the message says
+  why: no `-o`, a variable or a directory in `-o`, or a build inside a shell conditional
+  or loop), so it gets no binary target. The source target still checks `go.mod`. Naming
+  the binary with `-o <file>` in a plain command, then running setup again, adds the
+  target.
 - `IMAGE_REF_FIXED`: an image target in an existing `shearbolt.yaml` names a fixed image
   reference, so the gate scans that reference instead of the image the job just built.
   Change it to the `${SHEARBOLT_IMAGE:-<name>:local}` form the message shows, and run
@@ -322,10 +337,10 @@ Every note here except the informational ones listed in the intro above counts a
   check with the user that the existing target still points at what CI builds, or that
   artifact may go unscanned. With a different kind, setup adds its target under a new
   name such as `<name>-2`.
-- `DUPLICATE_PROJECT`: one directory holds both an npm and a Rust project (for example a
-  napi-rs package). Setup protects it as the npm project, whose source target still checks
-  every lockfile there, `Cargo.lock` included. Its cargo builds are not rewritten and get
-  no binary target.
+- `DUPLICATE_PROJECT`: one directory holds projects of two ecosystems, for example an npm
+  and a Rust project (a napi-rs package). Setup protects it as the first of npm, Rust and
+  Go, whose source target still checks every lockfile there, `Cargo.lock` or `go.mod`
+  included. The other ecosystem's builds are not rewritten and get no binary target.
 
 **Jobs a `docker` project cannot scan.** A `docker` project has no lockfiles. In a job
 where none of its image builds can be scanned (multi-platform, pushing through outputs, or
