@@ -70,6 +70,8 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" -o build/aarch64-apple-darwin/shearbolt ./cmd/shearbolt
       - name: shearbolt
         uses: klar-web-services/shearbolt@v1
+        with:
+          zosia-secret: ${{ secrets.ZOSIA_SECRET }}
       - name: Package
         run: |
           mkdir -p dist
