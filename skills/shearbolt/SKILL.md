@@ -78,6 +78,24 @@ the root. Read [references/setup-json.md](references/setup-json.md) before you s
 plan. It has every field, the question rule with an example, the errors, and what each
 note code means for the user.
 
+Setup writes the gate; you do not design one. Never write a Shearbolt gate of your own:
+no `run:` step or script that downloads, pins or runs the `shearbolt` binary, no config
+file other than the project's `shearbolt.yaml`, no extra gate job. Setup and
+`shearbolt zosia enable` do not maintain such a gate, so it goes stale unnoticed (an old
+pinned release, reports that are never sent). When setup cannot place a gate, do this
+instead, in this order:
+
+1. Pass on the snippet from the note (`UNSUPPORTED_EDIT`, `NO_GATE_PLACED`) and add
+   exactly that, with the user's go-ahead.
+2. If a note says why setup could not handle a build (for example a `go build` inside a
+   shell loop, `GO_PATH_UNKNOWN`), propose the smallest change to the build that removes
+   the reason, such as writing the looped builds as separate commands, and run setup
+   again after the user agrees.
+3. Otherwise tell the user what stays ungated and stop.
+
+Write a custom gate only when the user explicitly agrees to one after you have told them
+that the Shearbolt commands will not maintain it.
+
 ### 3.1 Get the plan
 
 ```sh
@@ -299,7 +317,8 @@ Never add an exception, change `policy`, or remove a target on your own.
 | `shearbolt setup` | success | not used | error |
 
 Never edit the generated CI step by hand to make a scan pass, and never move a gate after
-a push or deploy.
+a push or deploy. Never write a gate of your own design unless the user explicitly agrees
+(section 3).
 
 ## Reference
 
