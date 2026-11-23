@@ -75,12 +75,14 @@ The questions come in this order:
    project's `gate-job` has no `unlessChosen`: no build can be assigned to it by a question.
 4. `zosia` (`choice`, options `yes` and `no`), last, once per repository, whenever setup
    found a CI job it can gate: whether to send scan reports to Zosia (zosiasec.com), an
-   optional dashboard. The default is `no`, or `yes` when a Shearbolt step in a GitHub
-   workflow already has the `zosia-secret` input (or `ZOSIA_SECRET` in a `run:` gate's
-   env), so a re-run keeps the earlier answer. With `yes`, every GitHub gate step setup
-   writes or updates gets `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under `with:`; on
-   Bitbucket and GitLab no file changes. With `no`, setup adds nothing and removes
-   nothing. It always applies: it has no `project` and no `unlessChosen`. Later,
+   optional dashboard. The answer is about the gates setup adds in this run; a gate that
+   is there already keeps what it has. The default is `no`, or `yes` when a Shearbolt step
+   in a GitHub workflow already has the `zosia-secret` input (or `ZOSIA_SECRET` in a `run:`
+   gate's env): the prompt then says that gates already send and asks whether the new ones
+   should too. With `yes`, every GitHub gate step setup adds gets
+   `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under `with:`; on Bitbucket and GitLab no
+   file changes. With `no`, setup adds nothing and removes nothing. It always applies: it
+   has no `project` and no `unlessChosen`. For gates that are there already,
    `shearbolt zosia enable` and `shearbolt zosia disable` change only this input, and
    `ZOSIA_SECRET` in the env of a `run:` step that runs the gate, in a repository that is
    already gated (they write directly and have no JSON mode).
@@ -373,15 +375,13 @@ again.
   (setup added the `zosia-secret` input), a masked CI/CD variable on GitLab, a secured
   repository variable on Bitbucket; its value is a secret the user makes at
   https://zosiasec.com/app/secrets. Until then nothing is sent, and the gate works as
-  before. On GitHub the note appears only when setup added a `zosia-secret` line; on
+  before. When other gates of the repository already send, the message says instead that
+  the new gates read the same secret, so there is nothing to add unless it is missing. On GitHub the note appears only when setup added a `zosia-secret` line; on
   GitLab and Bitbucket whenever `zosia` is answered `yes`.
-- `ZOSIA_KEPT`: `zosia` was answered `no`, but this step already sends to Zosia. Setup
-  never removes that; the user deletes the step's `zosia-secret` line (or the
-  `ZOSIA_SECRET` in a `run:` gate's env) to stop.
-- `ZOSIA_RUN_GATE` *(GitHub)*: `zosia` was answered `yes`, but this gate runs
-  `shearbolt scan` in a `run:` step, which setup does not change. The user runs
-  `shearbolt zosia enable`, which adds `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to
-  that step's `env:`, to send its reports.
+- `ZOSIA_NOT_ADDED` *(GitHub)*: `zosia` was answered `yes`, but this gate was there
+  already and does not send. Setup leaves existing gates as they are; the user runs
+  `shearbolt zosia enable`, which adds the secret to them (the `zosia-secret` input, or
+  `ZOSIA_SECRET` in the env of a `run:` step).
 
 - `TAG_ADDED`: setup adds a local tag `<repository>:shearbolt-<commit>` to each gated image
   build, and the gate scans that tag. It is never pushed. This makes the gate scan exactly

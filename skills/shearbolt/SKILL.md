@@ -213,7 +213,9 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
 - Repeat what the notes ask the user to add or change by hand. Until they do, those jobs
   or artifacts are not gated.
 - When the user answered `zosia` with `yes`, tell them where to add the `ZOSIA_SECRET`
-  secret, from the `ZOSIA_SECRET` note. Reports are sent only once it exists; the gate's
+  secret, from the `ZOSIA_SECRET` note. The answer covers only the gates setup added in
+  this run; pass on every `ZOSIA_NOT_ADDED` note, which names a gate that was there
+  already and does not send. Reports are sent only once it exists; the gate's
   result never depends on it. A user who decides later runs `shearbolt zosia enable`
   (or `disable`) in the repository root; it changes only that input, or `ZOSIA_SECRET`
   in the env of a `run:` step that runs the gate. When its last line says that no

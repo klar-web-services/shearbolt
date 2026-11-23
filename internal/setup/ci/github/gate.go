@@ -230,11 +230,7 @@ func (e *jobEditor) updateExisting(gi int, g plan.Gate, env [][2]string) error {
 	if err := e.setEnv(st, env); err != nil {
 		return err
 	}
-	if g.Zosia {
-		if err := e.setZosia(st, g.Targets); err != nil {
-			return err
-		}
-	} else if err := e.setTargets(st, g.Targets); err != nil {
+	if err := e.setTargets(st, g.Targets); err != nil {
 		return err
 	}
 	return e.gateTerm(gi, g, st)
@@ -474,49 +470,6 @@ func (e *jobEditor) setTargets(st *step, targets []string) error {
 		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+strings.Repeat(" ", e.unit)+"targets: "+yamledit.Scalar(want), ""))
 	}
 	return wrapErr(fail, e.d.SetKey(with, "targets", yamledit.Scalar(want), ""))
-}
-
-// setZosia sets the existing gate's targets and adds the zosia-secret input when the step has
-// none. Both edits can touch the same with: block, so they are queued together.
-func (e *jobEditor) setZosia(st *step, targets []string) error {
-	m := st.m
-	with := e.d.Get(m, "with")
-	if slices.Contains(keys(with), zosiaInput) {
-		return e.setTargets(st, targets)
-	}
-	fail := func(err error) error {
-		return failAt(st.line, "the existing gate cannot get the zosia-secret input (%v)", err)
-	}
-	if !editable(st) {
-		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
-	}
-	pad := strings.Repeat(" ", e.unit)
-	switch {
-	case with == nil && targets != nil:
-		// setTargets adds the with: block after the step's last entry; the line follows it there.
-		if err := e.setTargets(st, targets); err != nil {
-			return err
-		}
-		kc, err := e.d.KeyColumn(m)
-		if err != nil {
-			return fail(err)
-		}
-		ks := keys(m)
-		end, err := e.d.EntryEnd(m, ks[len(ks)-1])
-		if err != nil {
-			return fail(err)
-		}
-		e.zosia = true
-		return wrapErr(fail, e.d.InsertAfter(end, []string{strings.Repeat(" ", kc) + pad + zosiaLine}))
-	case targets == nil && slices.Equal(keys(with), []string{"targets"}):
-		// setTargets would remove the whole with: block; the block stays and its only line changes.
-		e.zosia = true
-		return wrapErr(fail, e.d.SetKey(m, "with", "\n"+pad+zosiaLine, ""))
-	}
-	if err := e.setTargets(st, targets); err != nil {
-		return err
-	}
-	return e.addZosia(st)
 }
 
 // addZosia adds the zosia-secret input to a gate step that has none, leaving its other inputs alone.

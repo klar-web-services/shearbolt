@@ -52,36 +52,105 @@ func TestGitHubZosiaNewGate(t *testing.T) {
 	}
 }
 
-func TestGitHubZosiaExistingGates(t *testing.T) {
+// The zosia answer is about the gates setup adds. A gate that is there already keeps what it has:
+// setup only corrects its targets, and a yes points to `shearbolt zosia enable` for it.
+func TestGitHubZosiaLeavesExistingGates(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
-		before, want []string
+		before, want []string // want nil = the workflow does not change
 	}{
-		{"no inputs",
-			[]string{"      - uses: klar-web-services/shearbolt@v1"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", zosiaWith}},
+		{"no inputs", []string{"      - uses: klar-web-services/shearbolt@v1"}, nil},
 		{"other inputs",
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence  # keep", "        if: always()"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence  # keep", zosiaWith, "        if: always()"}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence  # keep", "        if: always()"}, nil},
 		{"only stale targets",
 			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: web"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", zosiaWith}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1"}},
 		{"stale targets last",
 			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence", "          targets: web"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence", zosiaWith}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, got := zosiaResult(t, npmRepo("web", publish+lines(tc.before...)+"      - run: npm publish\n", nil), "yes")
-			wantWorkflow(t, got, publish+lines(tc.want...)+"      - run: npm publish\n")
-			if got := zosiaNotes(p); !slices.Equal(got, []string{"ZOSIA_SECRET"}) {
+			want := ""
+			if tc.want != nil {
+				want = publish + lines(tc.want...) + "      - run: npm publish\n"
+			}
+			wantWorkflow(t, got, want)
+			if got := zosiaNotes(p); !slices.Equal(got, []string{"ZOSIA_NOT_ADDED"}) {
 				t.Errorf("notes = %v", got)
+			}
+			if i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_NOT_ADDED" }); i >= 0 && !strings.Contains(p.Notes[i].Message, "shearbolt zosia enable") {
+				t.Errorf("the note does not name the command that adds the secret: %+v", p.Notes[i])
+			}
+		})
+	}
+}
+
+// A new job beside one that is gated already: setup gates only the new one, and the zosia answer
+// decides only about the new gate.
+func TestGitHubZosiaNewGateBesideExisting(t *testing.T) {
+	workflow := func(input ...string) string {
+		gate := append([]string{"      - uses: klar-web-services/shearbolt@v1"}, input...)
+		return publish + lines(gate...) + lines(
+			"      - run: npm publish",
+			"  nightly:",
+			"    runs-on: ubuntu-latest",
+			"    steps:",
+			"      - run: npm run build",
+			"      - run: npm publish",
+		)
+	}
+	added := func(input ...string) string {
+		gate := append([]string{"      - name: shearbolt", "        uses: klar-web-services/shearbolt@v1"}, input...)
+		return "      - run: npm run build\n" + lines(gate...) + "      - run: npm publish\n"
+	}
+	sends := []string{"        with:", zosiaWith}
+	for _, tc := range []struct {
+		name            string
+		existing        []string
+		answer          string
+		newGate         []string
+		notes           []string
+		prompt, secrets string
+	}{
+		{"zosia is set up, defaults", sends, "", sends, []string{"ZOSIA_SECRET"}, "already send", "already"},
+		{"zosia is set up, yes", sends, "yes", sends, []string{"ZOSIA_SECRET"}, "already send", "already"},
+		{"zosia is set up, no", sends, "no", nil, nil, "already send", ""},
+		{"zosia is not set up, defaults", nil, "", nil, nil, "Send reports to Zosia", ""},
+		{"zosia is not set up, yes", nil, "yes", sends, []string{"ZOSIA_NOT_ADDED", "ZOSIA_SECRET"}, "Send reports to Zosia", "Add the repository secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := workflow(tc.existing...)
+			p, got := zosiaResult(t, npmRepo("web", before, nil), tc.answer)
+			old, _, _ := strings.Cut(before, "  nightly:\n")
+			if !strings.HasPrefix(got, old+"  nightly:\n") {
+				t.Errorf("the job that was gated already changed:\n%s", got)
+			}
+			if !strings.HasSuffix(got, added(tc.newGate...)) {
+				t.Errorf("the new job's gate:\n%s\nwant it to end with:\n%s", got, added(tc.newGate...))
+			}
+			notes := zosiaNotes(p)
+			slices.Sort(notes)
+			if !slices.Equal(notes, tc.notes) {
+				t.Errorf("notes = %v, want %v", notes, tc.notes)
+			}
+			q := p.Questions[len(p.Questions)-1]
+			wantDefault := "no"
+			if tc.existing != nil {
+				wantDefault = "yes"
+			}
+			if q.ID != "zosia" || q.Default != wantDefault || !strings.Contains(q.Prompt, tc.prompt) {
+				t.Errorf("question = %+v", q)
+			}
+			if i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_SECRET" }); i >= 0 && !strings.Contains(p.Notes[i].Message, tc.secrets) {
+				t.Errorf("the secret note = %q, want it to say %q", p.Notes[i].Message, tc.secrets)
 			}
 		})
 	}
 }
 
 // The publish job's gate gets targets (the image job's gate scans the image), with or without
-// a with: block of its own.
+// a with: block of its own, and nothing else.
 func TestGitHubZosiaWithNewTargets(t *testing.T) {
 	image := lines(
 		"on: push",
@@ -111,19 +180,20 @@ func TestGitHubZosiaWithNewTargets(t *testing.T) {
 	}{
 		{"no inputs",
 			[]string{"      - uses: klar-web-services/shearbolt@v1"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: source", zosiaWith}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: source"}},
 		{"other targets",
 			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: web"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: source", zosiaWith}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          targets: source"}},
 		{"other inputs",
 			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence"},
-			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence", "          targets: source", zosiaWith}},
+			[]string{"      - uses: klar-web-services/shearbolt@v1", "        with:", "          artifact-name: evidence", "          targets: source"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// No answer: the image job's gate already sends, so the default is yes.
+			// No answer: the image job's gate already sends, so the default is yes. It is about new
+			// gates only, and this one is there already.
 			p, got := zosiaResult(t, npmRepo("web", image+lines(tc.before...)+"      - run: npm publish\n", nil), "")
 			wantWorkflow(t, got, image+lines(tc.want...)+"      - run: npm publish\n")
-			if got := zosiaNotes(p); !slices.Equal(got, []string{"ZOSIA_SECRET"}) {
+			if got := zosiaNotes(p); len(got) != 0 {
 				t.Errorf("notes = %v", got)
 			}
 		})
@@ -133,7 +203,7 @@ func TestGitHubZosiaWithNewTargets(t *testing.T) {
 func TestGitHubZosiaNoNeverRemoves(t *testing.T) {
 	src := publish + lines("      - uses: klar-web-services/shearbolt@v1", "        with:", zosiaWith, "      - run: npm publish")
 	p, got := zosiaResult(t, npmRepo("web", src, nil), "no")
-	if got != "" || !slices.Equal(zosiaNotes(p), []string{"ZOSIA_KEPT"}) {
+	if got != "" || len(zosiaNotes(p)) != 0 {
 		t.Errorf("notes = %v, workflow:\n%s", zosiaNotes(p), got)
 	}
 	p, got = zosiaResult(t, npmRepo("web", src, nil), "")
@@ -149,24 +219,16 @@ func TestGitHubZosiaRunStepGate(t *testing.T) {
 		`          "$HOME/.local/bin/shearbolt" scan --ci`,
 	}
 	p, got := zosiaResult(t, npmRepo("web", publish+lines(scan...)+"      - run: npm publish\n", nil), "yes")
-	if got != "" || !slices.Equal(zosiaNotes(p), []string{"ZOSIA_RUN_GATE"}) {
+	if got != "" || !slices.Equal(zosiaNotes(p), []string{"ZOSIA_NOT_ADDED"}) {
 		t.Errorf("notes = %v, workflow:\n%s", zosiaNotes(p), got)
 	}
-	if i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_RUN_GATE" }); i < 0 || !strings.Contains(p.Notes[i].Message, "shearbolt zosia enable") {
+	if i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_NOT_ADDED" }); i < 0 || !strings.Contains(p.Notes[i].Message, "shearbolt zosia enable") {
 		t.Errorf("the note does not name the command that adds the secret: %+v", p.Notes)
 	}
 	env := append(slices.Clone(scan), "        env:", "          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}")
 	p, got = zosiaResult(t, npmRepo("web", publish+lines(env...)+"      - run: npm publish\n", nil), "yes")
 	if got != "" || len(zosiaNotes(p)) != 0 {
 		t.Errorf("a step that already sends: notes = %v, workflow:\n%s", zosiaNotes(p), got)
-	}
-}
-
-func TestGitHubZosiaFlowStyleStepIsRefused(t *testing.T) {
-	src := publish + "      - {uses: klar-web-services/shearbolt@v1}\n      - run: npm publish\n"
-	p, got := zosiaResult(t, npmRepo("web", src, nil), "yes")
-	if got != "" || !hasNote(p, "UNSUPPORTED_EDIT") || len(zosiaNotes(p)) != 0 {
-		t.Errorf("notes = %v, workflow:\n%s", noteCodes(p), got)
 	}
 }
 

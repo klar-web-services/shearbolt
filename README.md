@@ -54,11 +54,12 @@ Run setup from your repository root: it treats the current directory as the root
 
 - In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
 - If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
-- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it writes or updates get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. Setup never removes the line; answering no later leaves it in place and says so.
+- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it adds get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. The answer is about the gates setup adds in that run: a gate that is there already keeps what it has, and [`shearbolt zosia enable` and `disable`](#zosia-optional) change those.
 - What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (its image cannot be scanned, so the gate checks only the rest of the project, such as its lockfiles or compose images), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
 - A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
 - Running setup again is safe. It never overwrites an existing `shearbolt.yaml` (it only adds missing targets), and a second run changes nothing.
+- When you add a workflow, job or build later (a scheduled build, say), run setup again: it gates the new part and leaves the gates that are there as they are. One thing can change in an old step: when the new build adds a target, a gate that scanned every target gets a `targets:` line, so that it keeps scanning what its own job builds. If gates already send to Zosia, setup asks whether the new gates should too.
 - A gate you wrote by hand counts. When a workflow or pipeline already runs `shearbolt scan` with a config of your own whose `source` target covers the project, setup adds nothing to that workflow and says so in a note. When that leaves nothing to gate, it reports that Shearbolt is already set up. On Bitbucket this holds per step.
 - Without a terminal, use `shearbolt setup --yes` to accept the defaults, or `--plan --json` and `--apply --answer` (see [CLI](#cli)).
 
@@ -194,7 +195,7 @@ Run it in the repository root, in a repository `shearbolt setup` has already gat
 
 Sending came with Shearbolt 1.4.0. When a gate pins an older release (a versioned download URL in its `run:` step, or the action at a full tag such as `@v1.3.0`), `enable` says so in a note and again in its last line: nothing is sent from that gate until you move it to a newer release.
 
-Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same for the `shearbolt` steps while it adds the gate. Setup does not change a gate that runs `shearbolt scan` in a GitHub `run:` step: it says so, and `shearbolt zosia enable` adds the secret to that step.
+Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same for the gates setup adds in that run. Setup leaves gates that are there already as they are: with a yes it names the ones that do not send, and `shearbolt zosia enable` adds the secret to them.
 
 To disconnect, run `shearbolt zosia disable`, which removes those lines again, and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
 

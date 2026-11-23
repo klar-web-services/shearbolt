@@ -233,6 +233,7 @@ func (m *gateModel) questions() []plan.Question {
 		}
 		qs = append(qs, q)
 	}
+	// The answer is about the gates setup adds; a gate that is there already keeps what it has.
 	z := plan.Question{
 		ID:      "zosia",
 		Prompt:  "Send reports to Zosia (zosiasec.com)? Needs a ZOSIA_SECRET repository secret or CI variable.",
@@ -241,6 +242,7 @@ func (m *gateModel) questions() []plan.Question {
 		Default: "no",
 	}
 	if m.sendsToZosia() {
+		z.Prompt = "Gates in this repository already send reports to Zosia (zosiasec.com). Send them from the gates setup adds now, too? The existing gates stay as they are."
 		z.Default = "yes"
 	}
 	qs = append(qs, z)
@@ -575,7 +577,7 @@ func (m *gateModel) placeAtStart(p plan.Project, j int, version string) (*gatePl
 	var notes []plan.Note
 	switch e, late := existingGate(job, p.Dir, first); {
 	case e != nil:
-		g.Existing, g.At, g.Before = e, e.Pos, false
+		g.Existing, g.At, g.Before, g.Zosia = e, e.Pos, false, false
 	case late != nil:
 		notes = append(notes, lateGateNote(p, late, false))
 	}
@@ -637,7 +639,7 @@ func (m *gateModel) placeIn(p plan.Project, j int, g []located, version string) 
 		notes = append(notes, lateGateNote(p, late, drop))
 	}
 	if e != nil {
-		gate.Existing, gate.At, gate.Before = e, e.Pos, false
+		gate.Existing, gate.At, gate.Before, gate.Zosia = e, e.Pos, false, false
 		ePos := at{e.Pos.Step, e.Pos.Command}
 		kept := bset[:0:0]
 		for _, b := range bset {
@@ -1043,39 +1045,29 @@ func (pp *projectPlan) finish(merged []config.Target, names, vars map[string]str
 	return out
 }
 
-// zosiaNotes are the notes an explicit zosia answer adds (the GitHub plugin itself notes the
-// lines it adds). A run with the defaults adds none, so running setup again stays quiet.
+// zosiaNotes are the notes an explicit yes adds (the GitHub plugin itself notes the lines it
+// adds). A run with the defaults adds none, so running setup again stays quiet.
 func zosiaNotes(answer string, files []*ciSource, gates []plan.Gate) []plan.Note {
 	var notes []plan.Note
+	if answer != "yes" {
+		return nil
+	}
 	for _, f := range files {
-		switch answer {
-		case "no":
-			for _, j := range f.jobs {
-				for _, st := range j.Steps {
-					for _, g := range st.Gates {
-						if !g.Zosia {
-							continue
-						}
-						notes = append(notes, zosiaKeptNote(g))
-					}
-				}
+		var gated []plan.Gate
+		for _, g := range gates {
+			if strings.HasPrefix(g.Job, f.path+"#") {
+				gated = append(gated, g)
 			}
-		case "yes":
-			var gated []plan.Gate
-			for _, g := range gates {
-				if strings.HasPrefix(g.Job, f.path+"#") {
-					gated = append(gated, g)
-				}
-			}
-			switch name := f.ci.Name(); {
-			case len(gated) == 0:
-			case name != "github":
-				notes = append(notes, plan.ZosiaSecretNote(name, f.path))
-			default:
-				for _, g := range gated {
-					if ex := g.Existing; ex != nil && ex.Pos.Command >= 0 && !ex.Zosia {
-						notes = append(notes, zosiaRunGateNote(*ex))
-					}
+		}
+		switch name := f.ci.Name(); {
+		case len(gated) == 0:
+		case name != "github":
+			notes = append(notes, plan.ZosiaSecretNote(name, f.path))
+		default:
+			for _, g := range gated {
+				if ex := g.Existing; ex != nil && !ex.Zosia {
+					notes = append(notes, plan.Note{Code: "ZOSIA_NOT_ADDED", File: ex.Pos.File, Line: ex.Pos.Line,
+						Message: "this gate was here already and does not send to Zosia; setup leaves existing gates as they are. Run `shearbolt zosia enable` to make it send its reports too."})
 				}
 			}
 		}
@@ -1089,9 +1081,4 @@ func zosiaKeptNote(g plan.GateCmd) plan.Note {
 		msg = "this step still sends to Zosia; remove ZOSIA_SECRET from its env to stop."
 	}
 	return plan.Note{Code: "ZOSIA_KEPT", Message: msg, File: g.Pos.File, Line: g.Pos.Line}
-}
-
-func zosiaRunGateNote(g plan.GateCmd) plan.Note {
-	return plan.Note{Code: "ZOSIA_RUN_GATE", File: g.Pos.File, Line: g.Pos.Line,
-		Message: "this gate runs shearbolt in a run: step, which setup does not change; run `shearbolt zosia enable` to add ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step's env, so that it sends its reports."}
 }

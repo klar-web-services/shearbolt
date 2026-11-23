@@ -306,6 +306,13 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 	}
 	notes = append(notes, zosiaNotes(o.Answers["zosia"], files, gates)...)
+	if m.sendsToZosia() {
+		for i := range notes {
+			if notes[i].Code == "ZOSIA_SECRET" {
+				notes[i].Message = "the gates setup added here read the same ZOSIA_SECRET as the gates that already send to Zosia, so there is nothing to add unless that secret is missing."
+			}
+		}
+	}
 	vc, vn := viaChanges(r, via, failed)
 	changes = append(changes, vc...)
 	notes = append(notes, vn...)
