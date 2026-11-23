@@ -67,11 +67,12 @@ type CI interface {
 	Snippet(r Repo, file string, g Gate) string
 }
 
-// ZosiaEditor is a CI whose gates send to Zosia through an input in the file (GitHub's
-// zosia-secret); the others read the CI variable ZOSIA_SECRET and need no edit.
+// ZosiaEditor is a CI whose gates send to Zosia only when the file hands them the secret (on
+// GitHub the zosia-secret input of an action step, or ZOSIA_SECRET in the env of a run step); the
+// others read the CI variable ZOSIA_SECRET and need no edit.
 type ZosiaEditor interface {
-	// SetZosia adds (on) or removes the input of the action gate steps at gates. A gate that
-	// cannot be edited is left as it is and listed in failed by its index.
+	// SetZosia hands the secret to the gate steps at gates (on) or takes it away again. A gate
+	// that cannot be edited is left as it is and listed in failed by its index.
 	SetZosia(file string, src []byte, gates []GateCmd, on bool) (edited []byte, failed map[int]error, err error)
 }
 
@@ -183,6 +184,7 @@ type GateCmd struct {
 	Config  string // repo-relative path of the config it reads; "" when that is not certain
 	Install bool   // the install command (Bitbucket/GitLab)
 	Zosia   bool   // the step already sends to Zosia (with.zosia-secret, or ZOSIA_SECRET in a run step's env)
+	Version string // the Shearbolt release (X.Y.Z) the step runs, when the file pins one; "" otherwise
 	Pos     Pos
 }
 

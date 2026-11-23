@@ -1089,5 +1089,5 @@ func zosiaKeptNote(g plan.GateCmd) plan.Note {
 
 func zosiaRunGateNote(g plan.GateCmd) plan.Note {
 	return plan.Note{Code: "ZOSIA_RUN_GATE", File: g.Pos.File, Line: g.Pos.Line,
-		Message: "this gate runs shearbolt in a run: step, which setup does not change; add env: ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step to send its reports."}
+		Message: "this gate runs shearbolt in a run: step, which setup does not change; run `shearbolt zosia enable` to add ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }} to that step's env, so that it sends its reports."}
 }

@@ -81,8 +81,9 @@ The questions come in this order:
    writes or updates gets `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under `with:`; on
    Bitbucket and GitLab no file changes. With `no`, setup adds nothing and removes
    nothing. It always applies: it has no `project` and no `unlessChosen`. Later,
-   `shearbolt zosia enable` and `shearbolt zosia disable` change only this input in a
-   repository that is already gated (they write directly and have no JSON mode).
+   `shearbolt zosia enable` and `shearbolt zosia disable` change only this input, and
+   `ZOSIA_SECRET` in the env of a `run:` step that runs the gate, in a repository that is
+   already gated (they write directly and have no JSON mode).
 
 ## Which questions apply
 
@@ -378,8 +379,9 @@ again.
   never removes that; the user deletes the step's `zosia-secret` line (or the
   `ZOSIA_SECRET` in a `run:` gate's env) to stop.
 - `ZOSIA_RUN_GATE` *(GitHub)*: `zosia` was answered `yes`, but this gate runs
-  `shearbolt scan` in a `run:` step, which takes no input. The user adds
-  `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to that step's `env:` to send its reports.
+  `shearbolt scan` in a `run:` step, which setup does not change. The user runs
+  `shearbolt zosia enable`, which adds `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to
+  that step's `env:`, to send its reports.
 
 - `TAG_ADDED`: setup adds a local tag `<repository>:shearbolt-<commit>` to each gated image
   build, and the gate scans that tag. It is never pushed. This makes the gate scan exactly

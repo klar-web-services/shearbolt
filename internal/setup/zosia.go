@@ -10,11 +10,15 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-const zosiaInputLine = "zosia-secret: ${{ secrets.ZOSIA_SECRET }}"
+const (
+	zosiaInputLine = "zosia-secret: ${{ secrets.ZOSIA_SECRET }}"
+	zosiaEnvLine   = "ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}"
+)
 
-// Zosia computes what `shearbolt zosia enable` (on) and `disable` change: the zosia-secret input
-// of the Shearbolt gates the CI files already have, and nothing else. Like Compute it never
-// writes; Write applies the result.
+// Zosia computes what `shearbolt zosia enable` (on) and `disable` change: whether the Shearbolt
+// gates the CI files already have are handed the secret (the zosia-secret input of an action
+// step, ZOSIA_SECRET in the env of a run step), and nothing else. Like Compute it never writes;
+// Write applies the result.
 func Zosia(root string, on bool) *plan.Plan {
 	p := &plan.Plan{SchemaVersion: plan.SchemaVersion}
 	fail := func(code, msg, file string) *plan.Plan {
@@ -39,16 +43,7 @@ func Zosia(root string, on bool) *plan.Plan {
 			if err != nil {
 				return fail("PARSE", fmt.Sprintf("%s is not valid YAML: %v", f, err), f)
 			}
-			var gates []plan.GateCmd
-			for _, j := range jobs {
-				for _, st := range j.Steps {
-					for _, g := range st.Gates {
-						if !g.Install {
-							gates = append(gates, g)
-						}
-					}
-				}
-			}
+			gates := allScanGates(jobs)
 			if len(gates) == 0 {
 				continue
 			}
@@ -65,7 +60,7 @@ func Zosia(root string, on bool) *plan.Plan {
 			}
 			var edit []plan.GateCmd
 			for _, g := range gates {
-				if g.Pos.Command < 0 && g.Zosia != on {
+				if g.Zosia != on {
 					edit = append(edit, g)
 				}
 			}
@@ -73,14 +68,21 @@ func Zosia(root string, on bool) *plan.Plan {
 			if err != nil {
 				return fail("PARSE", fmt.Sprintf("%s cannot be edited: %v", f, err), f)
 			}
+			// The notes name the gates where they are once the change is written.
+			written := gates
 			if !bytes.Equal(out, src) {
 				c := plan.FileChange{Path: f, Action: "modify", Content: string(out), Base: src}
 				if err := describeChange(abs, &c); err != nil {
 					return fail("READ", err.Error(), f)
 				}
 				p.Changes = append(p.Changes, c)
+				if jobs, _, err := ci.Jobs(r, f, out, classify); err == nil {
+					if now := allScanGates(jobs); len(now) == len(gates) {
+						written = now
+					}
+				}
 			}
-			p.Notes = append(p.Notes, zosiaGateNotes(gates, edit, failed, on)...)
+			p.Notes = append(p.Notes, zosiaGateNotes(gates, written, edit, failed, on)...)
 			if on {
 				n := plan.ZosiaSecretNote(ci.Name(), f)
 				n.Message += " With the GitHub CLI, run `gh secret set ZOSIA_SECRET` in the repository and paste the secret when it asks."
@@ -104,32 +106,62 @@ func Zosia(root string, on bool) *plan.Plan {
 	return p
 }
 
-// zosiaGateNotes says, per gate of a file whose gates take the input, what enable or disable did.
-func zosiaGateNotes(gates, edit []plan.GateCmd, failed map[int]error, on bool) []plan.Note {
+func allScanGates(jobs []plan.Job) []plan.GateCmd {
+	var out []plan.GateCmd
+	for _, j := range jobs {
+		out = append(out, scanGates(j)...)
+	}
+	return out
+}
+
+// zosiaGateNotes says, per gate of a file whose gates are handed the secret in the file, what
+// enable or disable did. written holds the same gates at their positions after the edit.
+func zosiaGateNotes(gates, written, edit []plan.GateCmd, failed map[int]error, on bool) []plan.Note {
 	var notes []plan.Note
 	note := func(g plan.GateCmd, code, msg string) {
 		notes = append(notes, plan.Note{Code: code, Message: msg, File: g.Pos.File, Line: g.Pos.Line})
 	}
-	for _, g := range gates {
+	for k, g := range gates {
 		i := slices.IndexFunc(edit, func(e plan.GateCmd) bool { return e.Pos == g.Pos })
+		run := g.Pos.Command >= 0
+		g = written[k]
 		switch {
+		case i >= 0 && failed[i] != nil && on && run:
+			note(g, "UNSUPPORTED_EDIT", fmt.Sprintf("this shearbolt step cannot be edited: %s. Add `%s` under its env: by hand.", cause(failed[i]), zosiaEnvLine))
 		case i >= 0 && failed[i] != nil && on:
 			note(g, "UNSUPPORTED_EDIT", fmt.Sprintf("this shearbolt step cannot be edited: %s. Add `%s` under its with: by hand.", cause(failed[i]), zosiaInputLine))
+		case i >= 0 && failed[i] != nil && run:
+			notes = append(notes, zosiaKeptNote(g))
 		case i >= 0 && failed[i] != nil:
 			note(g, "UNSUPPORTED_EDIT", fmt.Sprintf("this shearbolt step cannot be edited: %s. Remove its zosia-secret line by hand.", cause(failed[i])))
+		case i >= 0 && on && run:
+			note(g, "ZOSIA_ADDED", "added `"+zosiaEnvLine+"` to the env of this step, which runs shearbolt.")
 		case i >= 0 && on:
 			note(g, "ZOSIA_ADDED", "added `"+zosiaInputLine+"` to this shearbolt step.")
+		case i >= 0 && run:
+			note(g, "ZOSIA_REMOVED", "removed ZOSIA_SECRET from the env of this step.")
 		case i >= 0:
 			note(g, "ZOSIA_REMOVED", "removed the zosia-secret input from this shearbolt step.")
-		case on && g.Zosia:
-			note(g, "ZOSIA_ALREADY", "this shearbolt step already sends to Zosia.")
 		case on:
-			notes = append(notes, zosiaRunGateNote(g))
-		case g.Zosia:
-			notes = append(notes, zosiaKeptNote(g))
+			note(g, "ZOSIA_ALREADY", "this shearbolt step already sends to Zosia.")
+		}
+		if on && !sendsToZosia(g.Version) {
+			note(g, "ZOSIA_GATE_TOO_OLD", fmt.Sprintf("this step runs Shearbolt %s, which cannot send reports to Zosia: that came with %s. Nothing is sent until the step runs a newer release; move its version (and its checksum, if it pins one).", g.Version, zosiaSince))
 		}
 	}
 	return notes
+}
+
+const zosiaSince = "1.4.0"
+
+// sendsToZosia reports whether Shearbolt release v (X.Y.Z) sends reports; "" is a release that
+// is not known, which is taken to send.
+func sendsToZosia(v string) bool {
+	var major, minor int
+	if _, err := fmt.Sscanf(v, "%d.%d.", &major, &minor); err != nil {
+		return true
+	}
+	return major > 1 || major == 1 && minor >= 4
 }
 
 // cause drops the "line N: " an edit error starts with; the note carries the line.

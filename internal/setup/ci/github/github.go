@@ -3,6 +3,7 @@ package github
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -445,6 +446,7 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 						g := *cl.Gate
 						g.Pos = pos
 						g.Zosia = !g.Install && env["ZOSIA_SECRET"]
+						g.Version = downloadedVersion(wf, j, st)
 						ps.Gates = append(ps.Gates, g)
 					}
 				}
@@ -463,7 +465,7 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 				case actionIs(st.uses, gateAction):
 					project, config := gateProject(wf.doc, st)
 					ps.Gates = append(ps.Gates, plan.GateCmd{Project: project, Config: config, Pos: pos,
-						Zosia: slices.Contains(keys(wf.doc.Get(st.m, "with")), zosiaInput)})
+						Zosia: slices.Contains(keys(wf.doc.Get(st.m, "with")), zosiaInput), Version: actionVersion(st.uses)})
 				case actionIs(st.uses, buildPushAction):
 					// Its own push is derived from Image.Push and OutputPush, never Step.Push.
 					b := buildPushBuild(wf.doc, st, j.steps)
@@ -487,6 +489,46 @@ func (p Plugin) Jobs(r plan.Repo, file string, src []byte, classify plan.Classif
 		})
 	}
 	return jobs, notes, nil
+}
+
+var (
+	releaseURL  = regexp.MustCompile(`tools\.klar\.ws/shearbolt/v(\d+\.\d+\.\d+|\$\w+|\$\{\w+\})/`)
+	releaseName = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+)
+
+// downloadedVersion is the Shearbolt release a run step downloads by its versioned URL, when the
+// version is written there or in the env of the step, job or workflow; "" when it is not certain.
+func downloadedVersion(wf *workflow, j *job, st *step) string {
+	m := releaseURL.FindStringSubmatch(st.script)
+	if m == nil {
+		return ""
+	}
+	v := m[1]
+	if name := strings.Trim(v, "${}"); name != v {
+		if strings.Contains(st.script, name+"=") {
+			return ""
+		}
+		v = ""
+		for _, n := range []*yaml.Node{st.m, j.node, wf.doc.Root()} {
+			if e := wf.doc.Get(n, "env", name); e != nil {
+				v = value(e)
+				break
+			}
+		}
+	}
+	if !releaseName.MatchString(v) {
+		return ""
+	}
+	return v
+}
+
+// actionVersion is the release an action reference pins by its full tag; "" for v1, a branch or a commit.
+func actionVersion(uses string) string {
+	_, ref, _ := strings.Cut(uses, "@")
+	if v := strings.TrimPrefix(ref, "v"); v != ref && releaseName.MatchString(v) {
+		return v
+	}
+	return ""
 }
 
 func actionIs(uses, action string) bool {

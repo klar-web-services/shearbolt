@@ -555,6 +555,45 @@ func (e *jobEditor) removeZosia(st *step) error {
 	return wrapErr(fail, e.d.DeleteEntry(with, zosiaInput))
 }
 
+const (
+	zosiaEnv      = "ZOSIA_SECRET"
+	zosiaEnvValue = "${{ secrets.ZOSIA_SECRET }}"
+)
+
+// addZosiaEnv hands the secret to a run step that runs the gate, through the step's env.
+func (e *jobEditor) addZosiaEnv(st *step) error {
+	env := e.d.Get(st.m, "env")
+	fail := func(err error) error {
+		return failAt(st.line, "the step cannot get ZOSIA_SECRET in its env (%v)", err)
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	if env == nil {
+		return wrapErr(fail, e.d.SetKey(st.m, "env", "\n"+strings.Repeat(" ", e.unit)+zosiaEnv+": "+zosiaEnvValue, ""))
+	}
+	return wrapErr(fail, e.d.SetKey(env, zosiaEnv, zosiaEnvValue, ""))
+}
+
+// removeZosiaEnv fails when the step's own env does not hold the secret: the job, the workflow or
+// the command sets it then, and that stays.
+func (e *jobEditor) removeZosiaEnv(st *step) error {
+	env := e.d.Get(st.m, "env")
+	fail := func(err error) error {
+		return failAt(st.line, "ZOSIA_SECRET cannot be removed from the step's env (%v)", err)
+	}
+	if !slices.Contains(keys(env), zosiaEnv) {
+		return fail(fmt.Errorf("it is set elsewhere"))
+	}
+	if !editable(st) {
+		return fail(fmt.Errorf("the step uses YAML anchors, aliases or flow style"))
+	}
+	if len(keys(env)) == 1 {
+		return wrapErr(fail, e.d.DeleteEntry(st.m, "env"))
+	}
+	return wrapErr(fail, e.d.DeleteEntry(env, zosiaEnv))
+}
+
 // SetZosia implements plan.ZosiaEditor.
 func (p Plugin) SetZosia(file string, src []byte, gates []plan.GateCmd, on bool) ([]byte, map[int]error, error) {
 	wf, err := parseWorkflow(file, src)
@@ -563,15 +602,26 @@ func (p Plugin) SetZosia(file string, src []byte, gates []plan.GateCmd, on bool)
 	}
 	d := wf.doc
 	failed := map[int]error{}
+	// Two scans of one run step share its env: the step is edited once.
+	done := map[*step]bool{}
 	for i, g := range gates {
 		cp := d.Checkpoint()
 		err := fmt.Errorf("the step is not in the workflow")
+		var st *step
 		if j := wf.job(g.Pos.Job); j != nil && g.Pos.Step < len(j.steps) && j.steps[g.Pos.Step].m != nil {
+			st = j.steps[g.Pos.Step]
 			e := &jobEditor{d: d, wf: wf, j: j, unit: yamledit.IndentUnit(d)}
-			if on {
-				err = e.addZosia(j.steps[g.Pos.Step])
-			} else {
-				err = e.removeZosia(j.steps[g.Pos.Step])
+			switch run := g.Pos.Command >= 0; {
+			case done[st]:
+				err = nil
+			case run && on:
+				err = e.addZosiaEnv(st)
+			case run:
+				err = e.removeZosiaEnv(st)
+			case on:
+				err = e.addZosia(st)
+			default:
+				err = e.removeZosia(st)
 			}
 		}
 		if err == nil {
@@ -582,7 +632,9 @@ func (p Plugin) SetZosia(file string, src []byte, gates []plan.GateCmd, on bool)
 		if err != nil {
 			d.Rollback(cp)
 			failed[i] = err
+			continue
 		}
+		done[st] = true
 	}
 	res, err := d.Result()
 	return res, failed, err

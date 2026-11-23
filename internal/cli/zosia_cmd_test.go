@@ -174,7 +174,7 @@ func TestZosiaEnableFallsBackToTheNote(t *testing.T) {
 		tty   bool
 		calls int
 	}{
-		"no terminal":       {&fakeGH{repo: ghRepo, secrets: "[]"}, false, 0},
+		"no terminal":       {&fakeGH{repo: ghRepo, secrets: "[]"}, false, 2},
 		"gh fails":          {&fakeGH{viewErr: errors.New("exit status 4")}, true, 1},
 		"read access only":  {&fakeGH{repo: `{"nameWithOwner":"acme/web","viewerPermission":"READ"}`, secrets: "[]"}, true, 1},
 		"gh prints no JSON": {&fakeGH{repo: "", secrets: "[]"}, true, 1},
@@ -204,6 +204,22 @@ func TestZosiaEnableFallsBackToTheNote(t *testing.T) {
 	}
 }
 
+// Without a terminal nothing can be pasted, but gh still tells whether the secret is there: then
+// the output says so instead of telling the user to add it.
+func TestZosiaEnableSaysThatTheSecretExists(t *testing.T) {
+	gatedRepo(t)
+	gh := &fakeGH{repo: ghRepo, secrets: `[{"name":"OTHER"},{"name":"ZOSIA_SECRET"}]`}
+	code, out, errb := zosiaEnable(t, gh, false, "")
+	if code != 0 || errb != "" || gh.set() != nil || strings.Contains(out, manualNote) || strings.Contains(out, "Replace it?") {
+		t.Fatalf("exit = %d, gh calls = %q\nstdout: %s\nstderr: %s", code, gh.calls, out, errb)
+	}
+	for _, s := range []string{"ZOSIA_SECRET is already set for acme/web", "gh secret set ZOSIA_SECRET", "zosia-secret: ${{ secrets.ZOSIA_SECRET }}"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("stdout lacks %q:\n%s", s, out)
+		}
+	}
+}
+
 func TestZosiaDisableNeverRunsGH(t *testing.T) {
 	gatedRepo(t)
 	gh := &fakeGH{repo: ghRepo, secrets: "[]"}
@@ -212,5 +228,44 @@ func TestZosiaDisableNeverRunsGH(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"zosia", "disable"}, &out, &errb, d); code != 0 || len(gh.calls) != 0 {
 		t.Errorf("exit = %d, gh calls = %q\nstdout: %s", code, gh.calls, out.String())
+	}
+}
+
+// A gate written by hand runs shearbolt in a run: step. Enable hands that step the secret, and
+// its last line says when the release the step pins still cannot send.
+func TestZosiaEnableGateWrittenByHand(t *testing.T) {
+	dir := fixtureRepo(t, "go-hand-gated")
+	workflow := filepath.Join(dir, ".github/workflows/release.yml")
+	const (
+		env     = "          CANDIDATE_DIR: ${{ runner.temp }}/candidate\n          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}\n        run: |\n"
+		notSent = "No reports are sent yet from .github/workflows/release.yml:51: see the notes above.\n"
+	)
+	gh := &fakeGH{repo: ghRepo, secrets: "[]"}
+	code, out, errb := zosiaEnable(t, gh, true, "")
+	after, _ := os.ReadFile(workflow)
+	if code != 0 || errb != "" || gh.set() == nil || !strings.Contains(string(after), env) {
+		t.Fatalf("exit = %d, gh calls = %q\nstdout: %s\nstderr: %s\nworkflow:\n%s", code, gh.calls, out, errb, after)
+	}
+	if !strings.Contains(out, "Shearbolt 1.2.3") || !strings.HasSuffix(out, "ZOSIA_SECRET is set for acme/web.\n\n"+notSent) {
+		t.Errorf("stdout does not end by saying that the pinned release cannot send:\n%s", out)
+	}
+
+	// Without a terminal the same line ends the output.
+	if _, out, _ = zosiaEnable(t, &fakeGH{}, false, ""); !strings.HasSuffix(out, notSent) || !strings.Contains(out, "already sends to Zosia") {
+		t.Errorf("without a terminal:\n%s", out)
+	}
+
+	if err := os.WriteFile(workflow, bytes.Replace(after, []byte("/v1.2.3/"), []byte("/v1.7.0/"), 1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = zosiaEnable(t, &fakeGH{repo: ghRepo, secrets: `[{"name":"ZOSIA_SECRET"}]`}, true, "\n")
+	if code != 0 || !strings.Contains(out, "already sends to Zosia") || strings.Contains(out, "No reports are sent") || strings.Contains(out, "1.7.0") {
+		t.Errorf("with a release that sends: exit = %d\nstdout: %s", code, out)
+	}
+
+	code, out, errb = zosiaCmd(t, "disable")
+	off, _ := os.ReadFile(workflow)
+	if code != 0 || errb != "" || strings.Contains(string(off), "ZOSIA_SECRET") || !strings.Contains(out, "-          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}") {
+		t.Errorf("disable: exit = %d\nstdout: %s\nstderr: %s\nworkflow:\n%s", code, out, errb, off)
 	}
 }

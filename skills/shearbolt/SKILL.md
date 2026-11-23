@@ -197,7 +197,10 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
 - When the user answered `zosia` with `yes`, tell them where to add the `ZOSIA_SECRET`
   secret, from the `ZOSIA_SECRET` note. Reports are sent only once it exists; the gate's
   result never depends on it. A user who decides later runs `shearbolt zosia enable`
-  (or `disable`) in the repository root; it changes only that input.
+  (or `disable`) in the repository root; it changes only that input, or `ZOSIA_SECRET`
+  in the env of a `run:` step that runs the gate. When its last line says that no
+  reports are sent yet from a gate, pass that on: the gate pins a Shearbolt release from
+  before 1.4.0, or its step could not be edited.
 - An `EARLY_STOP` note whose gate still runs on early stops and fails when the image or
   its artifact was not built means those runs fail, although nothing ships.
   - When it asks to remove targets that do not ship, ask the user whether each target it

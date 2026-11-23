@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -42,6 +43,9 @@ func setupDeps(tty bool, stdin string) deps {
 	d.version = "1.2.3"
 	d.ensureGrype = func(context.Context, string) (string, error) {
 		return "", errors.New("setup tests must not install Grype")
+	}
+	d.gh = func(string, io.Reader, io.Writer, io.Writer, ...string) error {
+		return errors.New("setup tests must not run the GitHub CLI")
 	}
 	return d
 }

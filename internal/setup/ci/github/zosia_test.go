@@ -9,7 +9,10 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-const zosiaWith = "          zosia-secret: ${{ secrets.ZOSIA_SECRET }}"
+const (
+	zosiaWith = "          zosia-secret: ${{ secrets.ZOSIA_SECRET }}"
+	zosiaEnv  = "          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}"
+)
 
 // zosiaResult runs setup with the zosia answer ("" = the default) and returns the plan and the
 // workflow afterwards ("" when it is unchanged).
@@ -149,6 +152,9 @@ func TestGitHubZosiaRunStepGate(t *testing.T) {
 	if got != "" || !slices.Equal(zosiaNotes(p), []string{"ZOSIA_RUN_GATE"}) {
 		t.Errorf("notes = %v, workflow:\n%s", zosiaNotes(p), got)
 	}
+	if i := slices.IndexFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_RUN_GATE" }); i < 0 || !strings.Contains(p.Notes[i].Message, "shearbolt zosia enable") {
+		t.Errorf("the note does not name the command that adds the secret: %+v", p.Notes)
+	}
 	env := append(slices.Clone(scan), "        env:", "          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}")
 	p, got = zosiaResult(t, npmRepo("web", publish+lines(env...)+"      - run: npm publish\n", nil), "yes")
 	if got != "" || len(zosiaNotes(p)) != 0 {
@@ -197,8 +203,21 @@ func TestZosiaEnable(t *testing.T) {
 		{"already enabled", []string{gateStep, "        with:", zosiaWith}, nil, []string{"ZOSIA_ALREADY", "ZOSIA_SECRET"}},
 		{"run step",
 			[]string{"      - run: |", "          curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh", `          "$HOME/.local/bin/shearbolt" scan --ci`},
-			nil, []string{"ZOSIA_RUN_GATE", "ZOSIA_SECRET"}},
+			[]string{"      - run: |", "          curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh", `          "$HOME/.local/bin/shearbolt" scan --ci`, "        env:", zosiaEnv},
+			[]string{"ZOSIA_ADDED", "ZOSIA_SECRET"}},
+		{"run step with an env",
+			[]string{"      - name: gate", "        env:", "          CACHE: /tmp/c  # keep", "        run: shearbolt scan --ci"},
+			[]string{"      - name: gate", "        env:", "          CACHE: /tmp/c  # keep", zosiaEnv, "        run: shearbolt scan --ci"},
+			[]string{"ZOSIA_ADDED", "ZOSIA_SECRET"}},
+		{"run step with two scans",
+			[]string{"      - run: |", "          shearbolt scan --ci", "          shearbolt scan --ci --targets web"},
+			[]string{"      - run: |", "          shearbolt scan --ci", "          shearbolt scan --ci --targets web", "        env:", zosiaEnv},
+			[]string{"ZOSIA_ADDED", "ZOSIA_ADDED", "ZOSIA_SECRET"}},
+		{"run step that sends already",
+			[]string{"      - run: shearbolt scan --ci", "        env:", zosiaEnv},
+			nil, []string{"ZOSIA_ALREADY", "ZOSIA_SECRET"}},
 		{"flow style", []string{"      - {uses: klar-web-services/shearbolt@v1}"}, nil, []string{"UNSUPPORTED_EDIT", "ZOSIA_SECRET"}},
+		{"run step in flow style", []string{"      - {run: shearbolt scan --ci}"}, nil, []string{"UNSUPPORTED_EDIT", "ZOSIA_SECRET"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, got := zosiaCmd(t, npmRepo("web", publish+lines(tc.before...)+"      - run: npm publish\n", nil), true)
@@ -238,7 +257,15 @@ func TestZosiaDisable(t *testing.T) {
 			[]string{"ZOSIA_REMOVED", "ZOSIA_SECRET_STAYS"}},
 		{"not enabled", []string{gateStep}, nil, []string{"ZOSIA_OFF", "ZOSIA_SECRET_STAYS"}},
 		{"run step with the secret",
-			[]string{"      - run: shearbolt scan --ci", "        env:", "          ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}"},
+			[]string{"      - run: shearbolt scan --ci", "        env:", zosiaEnv},
+			[]string{"      - run: shearbolt scan --ci"},
+			[]string{"ZOSIA_REMOVED", "ZOSIA_SECRET_STAYS"}},
+		{"run step, other env stays",
+			[]string{"      - env:", "          CACHE: /tmp/c", zosiaEnv, "        run: shearbolt scan --ci"},
+			[]string{"      - env:", "          CACHE: /tmp/c", "        run: shearbolt scan --ci"},
+			[]string{"ZOSIA_REMOVED", "ZOSIA_SECRET_STAYS"}},
+		{"run step, the secret is not in the step's env",
+			[]string{"      - run: ZOSIA_SECRET=${{ secrets.ZOSIA_SECRET }} shearbolt scan --ci"},
 			nil, []string{"ZOSIA_KEPT", "ZOSIA_SECRET_STAYS"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,5 +304,90 @@ func TestZosiaEnableAgreesWithSetup(t *testing.T) {
 	off := setup.Zosia(root, false)
 	if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != first.Changes[slices.IndexFunc(first.Changes, func(c plan.FileChange) bool { return c.Path == wf })].Content {
 		t.Errorf("disable does not restore the workflow setup wrote: %+v", off.Changes)
+	}
+}
+
+// A gate that runs a Shearbolt release from before 1.4.0 cannot send, whatever its step is given.
+func TestZosiaEnableOldGate(t *testing.T) {
+	download := func(version string) []string {
+		return []string{
+			"      - run: |",
+			`          curl -fsSL "https://tools.klar.ws/shearbolt/v` + version + `/shearbolt.tar.gz" | tar -xz`,
+			"          ./shearbolt scan --ci",
+		}
+	}
+	workflowEnv := strings.Replace(publish, "jobs:\n", "env:\n  GATE_VERSION: '1.3.0'\njobs:\n", 1)
+	jobEnv := strings.Replace(publish, "    steps:\n", "    env:\n      GATE_VERSION: 1.3.0\n    steps:\n", 1)
+	for _, tc := range []struct {
+		name, head string
+		step       []string
+		old        string
+	}{
+		{"version in the URL", publish, download("1.3.0"), "1.3.0"},
+		{"version in the workflow env", workflowEnv, download("$GATE_VERSION"), "1.3.0"},
+		{"version in the job env", jobEnv, download("${GATE_VERSION}"), "1.3.0"},
+		{"first release that sends", publish, download("1.4.0"), ""},
+		{"later release", publish, download("2.0.1"), ""},
+		{"version not known", publish, download("$GATE_VERSION"), ""},
+		{"version computed in the workflow", strings.Replace(workflowEnv, "'1.3.0'", "${{ vars.GATE }}", 1), download("$GATE_VERSION"), ""},
+		{"old action", publish, []string{"      - uses: klar-web-services/shearbolt@v1.3.0"}, "1.3.0"},
+		{"action by its major tag", publish, []string{gateStep}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, got := zosiaCmd(t, npmRepo("web", tc.head+lines(tc.step...)+"      - run: npm publish\n", nil), true)
+			if !strings.Contains(got, "ZOSIA_SECRET") {
+				t.Errorf("the step did not get the secret:\n%s", got)
+			}
+			var notes []plan.Note
+			for _, n := range p.Notes {
+				if n.Code == "ZOSIA_GATE_TOO_OLD" {
+					notes = append(notes, n)
+				}
+			}
+			switch {
+			case tc.old == "" && len(notes) != 0:
+				t.Errorf("notes = %+v, want no ZOSIA_GATE_TOO_OLD", notes)
+			case tc.old != "" && (len(notes) != 1 || notes[0].Line == 0 || !strings.Contains(notes[0].Message, "Shearbolt "+tc.old) || !strings.Contains(notes[0].Message, "1.4.0")):
+				t.Errorf("notes = %+v, want one ZOSIA_GATE_TOO_OLD naming %s and 1.4.0", p.Notes, tc.old)
+			}
+		})
+	}
+	// Disable has nothing to say about the version.
+	p, _ := zosiaCmd(t, npmRepo("web", publish+lines(download("1.3.0")...), nil), false)
+	if hasNote(p, "ZOSIA_GATE_TOO_OLD") {
+		t.Errorf("disable: notes = %v", noteCodes(p))
+	}
+}
+
+func TestZosiaDisableKeepsAJobLevelSecret(t *testing.T) {
+	head := strings.Replace(publish, "    steps:\n", "    env:\n      ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}\n    steps:\n", 1)
+	p, got := zosiaCmd(t, npmRepo("web", head+"      - run: shearbolt scan --ci\n      - run: npm publish\n", nil), false)
+	if got != "" || !slices.Equal(noteCodes(p), []string{"ZOSIA_KEPT", "ZOSIA_SECRET_STAYS"}) {
+		t.Errorf("notes = %v, workflow:\n%s", noteCodes(p), got)
+	}
+}
+
+// What enable adds to a run step, disable takes out again.
+func TestZosiaRunStepRoundTrip(t *testing.T) {
+	for _, step := range [][]string{
+		{"      - run: shearbolt scan --ci"},
+		{"      - name: gate", "        env:", "          CACHE: /tmp/c", "        run: |", "          shearbolt scan --ci", ""},
+	} {
+		before := publish + lines(step...) + "      - run: npm publish\n"
+		root := tree(t, npmRepo("web", before, nil))
+		on := setup.Zosia(root, true)
+		if on.Error != nil || len(on.Changes) != 1 {
+			t.Fatalf("enable: %+v, %d changes", on.Error, len(on.Changes))
+		}
+		if err := setup.Write(root, on); err != nil {
+			t.Fatal(err)
+		}
+		if again := setup.Zosia(root, true); again.Error != nil || len(again.Changes) != 0 || !hasNote(again, "ZOSIA_ALREADY") {
+			t.Errorf("second enable: %+v, %d changes, notes %v", again.Error, len(again.Changes), noteCodes(again))
+		}
+		off := setup.Zosia(root, false)
+		if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != before {
+			t.Errorf("disable does not restore the workflow: %+v", off.Changes)
+		}
 	}
 }

@@ -21,11 +21,14 @@ Run it in the repository root, after "shearbolt setup" has added the gate.
 
   enable   Makes the Shearbolt gates in this repository's CI send their reports to Zosia
            (https://zosiasec.com), then says where to put the secret. On GitHub Actions it adds
-           the zosia-secret input to the shearbolt steps; GitLab CI and Bitbucket Pipelines
-           need no change, only the CI variable ZOSIA_SECRET. On a terminal, in a repository
-           with only GitHub workflows whose secrets the GitHub CLI (gh) can set, it then asks
-           for the secret and stores it as the repository secret ZOSIA_SECRET through gh.
-  disable  Removes the zosia-secret input again. The secret itself stays until you delete it.
+           the zosia-secret input to the shearbolt steps, and ZOSIA_SECRET to the env of run:
+           steps that run shearbolt; GitLab CI and Bitbucket Pipelines need no change, only the
+           CI variable ZOSIA_SECRET. On a terminal, in a repository with only GitHub workflows
+           whose secrets the GitHub CLI (gh) can set, it then asks for the secret and stores it
+           as the repository secret ZOSIA_SECRET through gh. Without a terminal it still says
+           when gh shows that the secret is there already. Its last line names the gates that
+           still cannot send, such as one that pins a Shearbolt release from before 1.4.0.
+  disable  Removes what enable added again. The secret itself stays until you delete it.
 
 Both write the CI files directly and show the change as a diff. They never commit.
 
@@ -61,7 +64,12 @@ func runZosia(args []string, stdout, stderr io.Writer, d deps) int {
 	repo, has, offer := "", false, false
 	var byHand []plan.Note
 	if args[0] == "enable" {
-		if repo, has, offer = s.secretRepo(root, p); offer {
+		known := false
+		repo, has, known = s.secretRepo(root, p)
+		offer = known && s.canPaste()
+		// The note that says where to add the secret by hand goes when gh stores it, or shows
+		// that it is there already.
+		if offer || has {
 			byHand = slices.DeleteFunc(slices.Clone(p.Notes), func(n plan.Note) bool { return n.Code != "ZOSIA_SECRET" })
 			p.Notes = slices.DeleteFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_SECRET" })
 		}
@@ -71,10 +79,25 @@ func runZosia(args []string, stdout, stderr io.Writer, d deps) int {
 	if len(p.Changes) > 0 {
 		fmt.Fprintf(stdout, "\n%s\n", zosiaReview)
 	}
-	if offer && !s.storeSecret(root, repo, has) {
-		for _, n := range byHand {
-			fmt.Fprintln(stdout, noteLine(n))
+	switch {
+	case offer:
+		if !s.storeSecret(root, repo, has) {
+			for _, n := range byHand {
+				fmt.Fprintln(stdout, noteLine(n))
+			}
 		}
+	case has:
+		fmt.Fprintf(stdout, "\nZOSIA_SECRET is already set for %s, so there is no secret to add. Shearbolt cannot read it or check that Zosia still knows it: the scan log of the next CI run says whether the report was sent. `gh secret set ZOSIA_SECRET` replaces it.\n", termSafe(repo, false))
+	}
+	// The secret prompt ends on a success line, so what still blocks a gate is said after it.
+	var blocked []string
+	for _, n := range p.Notes {
+		if args[0] == "enable" && (n.Code == "UNSUPPORTED_EDIT" || n.Code == "ZOSIA_GATE_TOO_OLD") {
+			blocked = append(blocked, fmt.Sprintf("%s:%d", n.File, n.Line))
+		}
+	}
+	if blocked = slices.Compact(blocked); len(blocked) > 0 {
+		fmt.Fprintf(stdout, "\nNo reports are sent yet from %s: see the notes above.\n", termSafe(strings.Join(blocked, ", "), false))
 	}
 	return 0
 }
@@ -87,17 +110,22 @@ func runGH(dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string
 	return cmd.Run()
 }
 
-// secretRepo reports whether enable can store ZOSIA_SECRET itself: on a terminal, when every CI
-// file is a GitHub workflow and the GitHub CLI is logged in to an account that may set the
-// repository's secrets (collaborator access, GitHub's rule for the secrets API). It returns the
-// repository as OWNER/NAME and whether the secret exists already. Any failure means no offer: the
-// note that says where to add the secret by hand stays.
-func (s setupRun) secretRepo(root string, p *plan.Plan) (repo string, has, ok bool) {
-	if !s.d.stdinTTY() || slices.ContainsFunc(p.CI, func(c plan.CIFile) bool { return c.System != "github" }) {
-		return "", false, false
-	}
-	// gh hides the pasted secret only when its output is a terminal too.
+// canPaste reports whether the user can paste a secret here: gh hides it only when its output is
+// a terminal too.
+func (s setupRun) canPaste() bool {
 	if f, isFile := s.stdout.(*os.File); isFile && !isTerminal(f) {
+		return false
+	}
+	return s.d.stdinTTY()
+}
+
+// secretRepo asks the GitHub CLI about the repository's ZOSIA_SECRET: ok when every CI file is a
+// GitHub workflow and gh is logged in to an account that may set the repository's secrets
+// (collaborator access, GitHub's rule for the secrets API). It returns the repository as
+// OWNER/NAME and whether the secret exists already. Any failure means ok is false: the note that
+// says where to add the secret by hand stays.
+func (s setupRun) secretRepo(root string, p *plan.Plan) (repo string, has, ok bool) {
+	if slices.ContainsFunc(p.CI, func(c plan.CIFile) bool { return c.System != "github" }) {
 		return "", false, false
 	}
 	var out bytes.Buffer
