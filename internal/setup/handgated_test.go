@@ -62,6 +62,29 @@ func TestSetupGoProject(t *testing.T) {
 	}
 }
 
+// Two builds of one binary for different platforms: the second target is named after its folder.
+func TestSetupGoCrossBuilds(t *testing.T) {
+	root := writeTree(t, goTree(map[string]string{
+		fakeCIFile: "build: GOARCH=amd64 go build -o build/x86_64-unknown-linux-gnu/tool ./cmd/tool; GOARCH=arm64 go build -o build/aarch64-unknown-linux-gnu/tool ./cmd/tool\n",
+	}))
+	p := computeWith(t, root, &fakeCI{files: []string{fakeCIFile}}, nil)
+	if p.Error != nil {
+		t.Fatalf("error = %+v", p.Error)
+	}
+	cfg := change(p, "shearbolt.yaml")
+	if cfg == nil {
+		t.Fatalf("no shearbolt.yaml in %v", changePaths(p))
+	}
+	for _, want := range []string{
+		"- name: tool\n    file: build/x86_64-unknown-linux-gnu/tool\n",
+		"- name: tool-aarch64-unknown-linux-gnu\n    file: build/aarch64-unknown-linux-gnu/tool\n",
+	} {
+		if !strings.Contains(cfg.Content, want) {
+			t.Errorf("shearbolt.yaml lacks %q:\n%s", want, cfg.Content)
+		}
+	}
+}
+
 func TestSetupHandGated(t *testing.T) {
 	root := writeTree(t, goTree(map[string]string{
 		fakeCIFile: "build: go build -o bin/tool ./cmd/tool\n" + handGateLine + "publish: gh release create v1 bin/tool\n",

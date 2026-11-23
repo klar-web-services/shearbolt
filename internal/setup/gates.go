@@ -903,9 +903,13 @@ func (pp *projectPlan) plan() {
 					}
 					name := bin
 					if byBin[bin] || taken[bin] {
+						// The platform folder: target/<triple>/release/<bin> (Cargo), build/<triple>/<bin>.
 						parts := strings.Split(f, "/")
-						if t := len(parts) - 3; t >= 1 && strings.Contains(parts[t], "-") && !taken[bin+"-"+sanitizeName(parts[t])] {
-							name = bin + "-" + sanitizeName(parts[t])
+						for _, t := range []int{len(parts) - 3, len(parts) - 2} {
+							if t >= 1 && strings.Contains(parts[t], "-") && !taken[bin+"-"+sanitizeName(parts[t])] {
+								name = bin + "-" + sanitizeName(parts[t])
+								break
+							}
 						}
 					}
 					byBin[bin] = true
