@@ -15,13 +15,10 @@ concurrency:
 defaults:
   run:
     shell: bash # bash -eo pipefail
-env:
-  GATE_VERSION: '1.7.0'
-  GATE_SHA256: '6b9a3b1b90302fa1467d208e2159fbbcbab83808e48a285eb6c4ff8e56d388c3'
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -67,14 +64,16 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" -o build/x86_64-unknown-linux-gnu/shearbolt ./cmd/shearbolt
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" -o build/aarch64-unknown-linux-gnu/shearbolt ./cmd/shearbolt
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" -o build/x86_64-apple-darwin/shearbolt ./cmd/shearbolt
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" -o build/aarch64-apple-darwin/shearbolt ./cmd/shearbolt
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+      - name: Package
+        run: |
           mkdir -p dist
-          for t in linux/amd64/x86_64-unknown-linux-gnu linux/arm64/aarch64-unknown-linux-gnu \
-                   darwin/amd64/x86_64-apple-darwin darwin/arm64/aarch64-apple-darwin; do
-            goos=${t%%/*}; rest=${t#*/}; goarch=${rest%%/*}; triple=${rest#*/}
-            mkdir -p "build/$triple"
-            CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath \
-              -ldflags "-s -w -X github.com/klar-web-services/shearbolt/internal/buildinfo.Version=$VERSION" \
-              -o "build/$triple/shearbolt" ./cmd/shearbolt
+          for triple in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
             tar -czf "dist/shearbolt-$triple.tar.gz" -C "build/$triple" shearbolt
           done
           (cd dist && sha256sum -- *.tar.gz > checksums.txt && cat checksums.txt)
@@ -83,74 +82,6 @@ jobs:
           name: candidate
           path: dist/
           if-no-files-found: error
-
-  gate:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: candidate
-          path: ${{ runner.temp }}/dist
-      - name: Unpack the candidates
-        run: |
-          (cd "$RUNNER_TEMP/dist" && sha256sum -c checksums.txt)
-          for triple in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
-            mkdir -p "$RUNNER_TEMP/candidate/$triple"
-            tar -xzf "$RUNNER_TEMP/dist/shearbolt-$triple.tar.gz" -C "$RUNNER_TEMP/candidate/$triple" shearbolt
-          done
-          n="$(find "$RUNNER_TEMP/candidate" -type f | wc -l | tr -d ' ')"
-          if [ "$n" != 4 ]; then
-            echo "::error::expected exactly 4 candidate binaries, found $n"
-            exit 1
-          fi
-      # The workflow pin, not the host, is the trust anchor for the previous release.
-      - name: Gate with the previous release
-        if: env.GATE_VERSION != ''
-        env:
-          CANDIDATE_DIR: ${{ runner.temp }}/candidate
-          SHEARBOLT_CACHE_DIR: ${{ runner.temp }}/shearbolt-cache
-        run: |
-          [ -n "$GATE_SHA256" ] || { echo "::error::GATE_VERSION is set but GATE_SHA256 is empty"; exit 1; }
-          a=shearbolt-x86_64-unknown-linux-gnu.tar.gz
-          curl -fsSL "https://tools.klar.ws/shearbolt/v$GATE_VERSION/$a" -o "$RUNNER_TEMP/$a"
-          echo "$GATE_SHA256  $RUNNER_TEMP/$a" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/gate"
-          tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/gate" shearbolt
-          "$RUNNER_TEMP/gate/shearbolt" scan --ci --config .github/release-gate.yaml --output-dir "$RUNNER_TEMP/gate-evidence"
-      - name: Gate with the pinned Grype (bootstrap)
-        if: env.GATE_VERSION == ''
-        run: |
-          v=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/grype/pins.go)
-          sum=$(awk '/^var Checksums/{f=1} f && /"linux_amd64"/{gsub(/[",]/, "", $2); print $2; exit}' internal/grype/pins.go)
-          if ! printf '%s\n' "$v" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || ! printf '%s\n' "$sum" | grep -Eqx '[0-9a-f]{64}'; then
-            echo "::error::could not read the pinned Grype version and linux_amd64 checksum from internal/grype/pins.go"
-            exit 1
-          fi
-          a="grype_${v}_linux_amd64.tar.gz"
-          curl -fsSL "https://github.com/anchore/grype/releases/download/v$v/$a" -o "$RUNNER_TEMP/$a"
-          echo "$sum  $RUNNER_TEMP/$a" | sha256sum -c -
-          mkdir -p "$RUNNER_TEMP/grype" "$RUNNER_TEMP/gate-evidence" && tar -xzf "$RUNNER_TEMP/$a" -C "$RUNNER_TEMP/grype" grype
-          cfg="$RUNNER_TEMP/grype.yaml"; printf 'check-for-app-update: false\ndb:\n  cache-dir: %s\n' "$RUNNER_TEMP/grype-db" > "$cfg"
-          ws="$GITHUB_WORKSPACE"; cd "$RUNNER_TEMP"; export XDG_CONFIG_HOME="$RUNNER_TEMP/xdg" # no project .grype.yaml applies
-          g() { out=$1; shift; "$RUNNER_TEMP/grype/grype" "$@" -c "$cfg" --only-fixed --fail-on low -o table -o "json=$RUNNER_TEMP/gate-evidence/$out.json"; }
-          rc=0
-          g repo "dir:$ws" --exclude './testdata/**' --exclude './.git/**' || rc=1
-          for b in "$RUNNER_TEMP"/candidate/*/shearbolt; do t=${b%/shearbolt}; g "${t##*/}" "file:$b" || rc=1; done
-          if [ "$rc" != 0 ]; then
-            echo "::error::the bootstrap gate found fixed vulnerabilities (or could not scan); see the tables above and the gate-evidence artifact"
-          fi
-          exit "$rc"
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: gate-evidence
-          path: ${{ runner.temp }}/gate-evidence
-          if-no-files-found: warn
 
   behaviour:
     needs: build
@@ -252,7 +183,7 @@ jobs:
             sh -c 'SHEARBOLT_BASE_URL=http://127.0.0.1:8000 sh /install.sh && test "$("$HOME/.local/bin/shearbolt" version | head -n1)" = "$WANT"'
 
   publish:
-    needs: [build, gate, behaviour, install]
+    needs: [build, behaviour, install]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -334,20 +265,6 @@ jobs:
           bucket: ${{ secrets.TOOLS_S3_BUCKET }}
           access-key-id: ${{ secrets.TOOLS_S3_ACCESS_KEY }}
           secret-access-key: ${{ secrets.TOOLS_S3_SECRET_KEY }}
-      - name: Next gate pin
-        if: "!contains(needs.build.outputs.version, '-')"
-        run: |
-          sum="$(awk '$2 == "shearbolt-x86_64-unknown-linux-gnu.tar.gz" {print $1}' dist/checksums.txt)"
-          {
-            echo "### Next release gate"
-            echo
-            echo "Set these in \`env:\` of \`.github/workflows/release.yml\` and commit:"
-            echo
-            echo '```yaml'
-            echo "  GATE_VERSION: '$VERSION'"
-            echo "  GATE_SHA256: '$sum'"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
   verify:
     needs: [build, publish]

@@ -1,0 +1,15 @@
+# Shearbolt deployment gate: https://github.com/klar-web-services/shearbolt#readme
+version: 1
+project: shearbolt
+targets:
+  - name: shearbolt
+    file: build/x86_64-unknown-linux-gnu/shearbolt
+  - name: shearbolt-aarch64-unknown-linux-gnu
+    file: build/aarch64-unknown-linux-gnu/shearbolt
+  - name: shearbolt-x86_64-apple-darwin
+    file: build/x86_64-apple-darwin/shearbolt
+  - name: shearbolt-aarch64-apple-darwin
+    file: build/aarch64-apple-darwin/shearbolt
+  - name: source
+    source: .
+    exclude: [testdata/]
