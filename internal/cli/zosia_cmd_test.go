@@ -51,14 +51,50 @@ func TestZosiaEnableAndDisable(t *testing.T) {
 	}
 }
 
+func TestZosiaPolicyFlag(t *testing.T) {
+	dir := fixtureRepo(t, "nextjs-docker")
+	if code, out, errb := setupCmd(t, setupDeps(false, ""), "--yes"); code != 0 {
+		t.Fatalf("setup: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	read := func(rel string) string {
+		data, err := os.ReadFile(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	const secret, block = "zosia-secret: ${{ secrets.ZOSIA_SECRET }}", "zosia:\n  policy: true\n"
+	before := read("shearbolt.yaml")
+
+	code, out, errb := zosiaCmd(t, "enable", "--policy")
+	if code != 0 || errb != "" || read("shearbolt.yaml") != before+block || strings.Count(read(".github/workflows/release.yml"), secret) != 1 ||
+		!strings.Contains(out, "+zosia:\n+  policy: true") || !strings.Contains(out, "keep one there that you can live with") {
+		t.Fatalf("enable --policy: exit = %d\nstdout: %s\nstderr: %s\nshearbolt.yaml:\n%s", code, out, errb, read("shearbolt.yaml"))
+	}
+	// The policy goes, the reports stay.
+	code, out, errb = zosiaCmd(t, "disable", "--policy")
+	if code != 0 || errb != "" || read("shearbolt.yaml") != before || strings.Count(read(".github/workflows/release.yml"), secret) != 1 ||
+		!strings.Contains(out, "-zosia:\n-  policy: true") || strings.Contains(out, "The secret itself stays") {
+		t.Fatalf("disable --policy: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	// Plain disable takes both away.
+	if code, _, _ := zosiaCmd(t, "enable", "--policy"); code != 0 {
+		t.Fatal("enable --policy again")
+	}
+	code, out, errb = zosiaCmd(t, "disable")
+	if code != 0 || read("shearbolt.yaml") != before || strings.Contains(read(".github/workflows/release.yml"), secret) || !strings.Contains(out, "The secret itself stays") {
+		t.Fatalf("disable: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+}
+
 func TestZosiaUsage(t *testing.T) {
 	fixtureRepo(t, "nextjs-docker")
-	for _, args := range [][]string{nil, {"connect"}, {"enable", "extra"}} {
+	for _, args := range [][]string{nil, {"connect"}, {"enable", "extra"}, {"--policy"}, {"enable", "--polic"}, {"enable", "--policy", "extra"}, {"enable", "--policy=false"}} {
 		if code, out, errb := zosiaCmd(t, args...); code != 2 || out != "" || !strings.Contains(errb, "shearbolt zosia enable") {
 			t.Errorf("%q: exit = %d\nstdout: %s\nstderr: %s", args, code, out, errb)
 		}
 	}
-	if code, out, _ := zosiaCmd(t, "-h"); code != 0 || !strings.Contains(out, "shearbolt zosia enable|disable") {
+	if code, out, _ := zosiaCmd(t, "-h"); code != 0 || !strings.Contains(out, "shearbolt zosia enable|disable [--policy]") || !strings.Contains(out, "1.11.0") {
 		t.Errorf("-h: exit = %d\nstdout: %s", code, out)
 	}
 	// No gate yet: nothing to enable.

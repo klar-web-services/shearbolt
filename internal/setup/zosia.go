@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
+	"github.com/klar-web-services/shearbolt/internal/setup/yamledit"
+	"go.yaml.in/yaml/v3"
 )
 
 const (
@@ -17,9 +21,13 @@ const (
 
 // Zosia computes what `shearbolt zosia enable` (on) and `disable` change: whether the Shearbolt
 // gates the CI files already have are handed the secret (the zosia-secret input of an action
-// step, ZOSIA_SECRET in the env of a run step), and nothing else. Like Compute it never writes;
-// Write applies the result.
-func Zosia(root string, on bool) *plan.Plan {
+// step, ZOSIA_SECRET in the env of a run step), and whether the shearbolt.yaml files those gates
+// read take their policy from Zosia (the zosia block). Nothing else. Like Compute it never
+// writes; Write applies the result.
+//
+// policy widens enable and narrows disable: enable adds the block only with it, and disable
+// with it removes only the block. Plain disable removes both.
+func Zosia(root string, on, policy bool) *plan.Plan {
 	p := &plan.Plan{SchemaVersion: plan.SchemaVersion}
 	fail := func(code, msg, file string) *plan.Plan {
 		p.Error = &plan.Note{Code: code, Message: msg, File: file}
@@ -32,6 +40,7 @@ func Zosia(root string, on bool) *plan.Plan {
 	r := plan.Repo{Root: abs}
 	classify := newClassifier(r, ecosystems)
 	gated := false
+	var all []plan.GateCmd
 	for _, ci := range cis {
 		for _, f := range ci.Files(r) {
 			p.CI = append(p.CI, plan.CIFile{System: ci.Name(), File: f})
@@ -48,6 +57,21 @@ func Zosia(root string, on bool) *plan.Plan {
 				continue
 			}
 			gated = true
+			if on && policy && actionAtCommit.Match(src) {
+				p.Notes = append(p.Notes, plan.Note{Code: "ZOSIA_POLICY_GATE_UNKNOWN", File: f,
+					Message: "a step here uses the Shearbolt action at a commit, so its release cannot be told. A release before " + zosiaPolicySince + " fails on a shearbolt.yaml with a zosia block: check that the commit is of that release or a newer one."})
+			}
+			// A script that installs Shearbolt pins the release on the install line, not on the scan.
+			pin := installPin(src)
+			for _, g := range gates {
+				if g.Version == "" {
+					g.Version = pin
+				}
+				all = append(all, g)
+			}
+			if !on && policy {
+				continue
+			}
 			ed, ok := ci.(plan.ZosiaEditor)
 			if !ok {
 				if on {
@@ -98,12 +122,188 @@ func Zosia(root string, on bool) *plan.Plan {
 	case !gated:
 		return fail("NO_GATE", "No Shearbolt gate was found in the CI files here, so there is nothing to send reports from. Run `shearbolt setup` first; it asks about Zosia too.", "")
 	}
-	if !on {
+	if policy || !on {
+		changes, notes, err := zosiaPolicy(r, abs, all, on)
+		if err != nil {
+			return fail("READ", err.Error(), "")
+		}
+		p.Changes = append(p.Changes, changes...)
+		for _, n := range notes {
+			// Plain disable says what it removed, and what it found and could not remove. What it could
+			// not look at is said only to who asked about the policy.
+			if policy || n.Code != "ZOSIA_POLICY_BY_HAND" {
+				p.Notes = append(p.Notes, n)
+			}
+		}
+	}
+	if !on && !policy {
 		p.Notes = append(p.Notes, plan.Note{Code: "ZOSIA_SECRET_STAYS",
 			Message: "The secret itself stays where it is. Delete ZOSIA_SECRET from the repository's secrets or CI variables (GitHub: `gh secret delete ZOSIA_SECRET`), or revoke it at https://zosiasec.com/app/secrets, to be sure nothing is sent."})
 	}
 	p.Complete = true
 	return p
+}
+
+const (
+	zosiaPolicyBlock = "zosia:\n  policy: true"
+	zosiaPolicySince = "1.11.0"
+)
+
+// zosiaPolicy adds the zosia block to (on), or removes it from, each shearbolt.yaml that one of
+// the gates reads. A file is left alone, with a note, when it is not certain that a gate reads
+// it, when it cannot be edited safely, or when a gate that reads it pins a Shearbolt release
+// that would fail on the block.
+func zosiaPolicy(r plan.Repo, abs string, gates []plan.GateCmd, on bool) ([]plan.FileChange, []plan.Note, error) {
+	var changes []plan.FileChange
+	var notes []plan.Note
+	byHand := "Add these two lines to the shearbolt.yaml it reads by hand: `zosia:` and, indented below it, `policy: true`."
+	if !on {
+		byHand = "Remove the zosia block from the shearbolt.yaml it reads by hand, if it has one."
+	}
+	var configs []string
+	old := map[string]bool{}
+	for _, g := range gates {
+		if g.Config == "" {
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_BY_HAND", File: g.Pos.File, Line: g.Pos.Line,
+				Message: "it is not certain which shearbolt.yaml this step reads, so no file was changed for it. " + byHand})
+			continue
+		}
+		if !slices.Contains(configs, g.Config) {
+			configs = append(configs, g.Config)
+		}
+		if on && !old[g.Config] && !knowsZosiaPolicy(g.Version) {
+			old[g.Config] = true
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_GATE_TOO_OLD", File: g.Pos.File, Line: g.Pos.Line,
+				Message: fmt.Sprintf("this step runs Shearbolt %s, which fails on a shearbolt.yaml with a zosia block: that came with %s. %s was left as it is. Move the step's version (and its checksum, if it pins one), then run this again.", g.Version, zosiaPolicySince, g.Config)})
+		}
+	}
+	slices.Sort(configs)
+	added := false
+	for _, f := range configs {
+		if old[f] {
+			continue
+		}
+		if !r.Exists(f) {
+			if on {
+				notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_BY_HAND", File: f, Message: "a gate reads this file, but it is not there, so nothing was changed."})
+			}
+			continue
+		}
+		src, err := r.Read(f)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s cannot be read: %v", f, err)
+		}
+		out, state, err := setZosiaPolicy(src, on)
+		switch {
+		case err != nil && !on && !bytes.Contains(src, []byte("zosia")):
+			// Nothing in it names Zosia, so there is no block to tell about.
+			continue
+		case err != nil && !on:
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_KEPT", File: f, Message: fmt.Sprintf("this file has a zosia block that cannot be removed for you: %s. Until you remove it by hand, CI scans of this project go on asking Zosia for the policy.", cause(err))})
+			continue
+		case err != nil:
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_BY_HAND", File: f, Message: fmt.Sprintf("this file cannot be edited: %s. %s", cause(err), byHand)})
+			continue
+		case state == "already":
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_ALREADY", File: f, Message: "this project already takes its policy from Zosia."})
+		case state == "added":
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_ADDED", File: f, Message: "added the zosia block: CI scans of this project now ask Zosia for the policy."})
+		case state == "removed":
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_REMOVED", File: f, Message: "removed the zosia block: this project uses the policy in this file again."})
+		}
+		added = added || (on && err == nil)
+		if !bytes.Equal(out, src) {
+			c := plan.FileChange{Path: f, Action: "modify", Content: string(out), Base: src}
+			if err := describeChange(abs, &c); err != nil {
+				return nil, nil, err
+			}
+			changes = append(changes, c)
+		}
+	}
+	if added {
+		notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_FILE_COUNTS",
+			Message: "Set the policy in the repository's settings at https://zosiasec.com. The policy block of shearbolt.yaml is not changed and still counts: a scan that gets no policy from Zosia (Zosia cannot be reached, a pull request from a fork, a local scan) uses it, so keep one there that you can live with."})
+	}
+	return changes, notes, nil
+}
+
+// setZosiaPolicy returns src with the zosia block added (on) or removed, and what it did:
+// "added", "removed", "already", or "" when there was nothing to remove.
+func setZosiaPolicy(src []byte, on bool) ([]byte, string, error) {
+	doc, err := yamledit.Parse(src)
+	if err != nil {
+		return nil, "", err
+	}
+	root := doc.Root()
+	block := doc.Get(root, "zosia")
+	state := ""
+	switch {
+	case on && block == nil:
+		key, value, _ := strings.Cut(zosiaPolicyBlock, ":")
+		state, err = "added", doc.SetKey(root, key, value, "")
+	case on:
+		value := doc.Get(block, "policy")
+		switch {
+		case value == nil:
+			return nil, "", fmt.Errorf("its zosia block has no policy line")
+		case value.Value == "true":
+			return src, "already", nil
+		}
+		state, err = "added", doc.ReplaceScalar(value, "true")
+	case block != nil:
+		state, err = "removed", doc.DeleteEntry(root, "zosia")
+	default:
+		return src, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	out, err := doc.Result()
+	if err != nil {
+		return nil, "", err
+	}
+	// The result must be a config that says what was asked, or the file is not touched.
+	var check struct {
+		Zosia struct {
+			Policy bool `yaml:"policy"`
+		} `yaml:"zosia"`
+	}
+	if err := yaml.Unmarshal(out, &check); err != nil || check.Zosia.Policy != on {
+		return nil, "", fmt.Errorf("the edit did not give the file that was meant")
+	}
+	return out, state, nil
+}
+
+// SHEARBOLT_VERSION=1.2.3 on the install line, or SHEARBOLT_VERSION: "1.2.3" among the variables.
+var installPinned = regexp.MustCompile(`SHEARBOLT_VERSION\s*[=:]\s*["']?(\d+)\.(\d+)\.(\d+)`)
+
+// A step that uses the action at a commit: which release that is cannot be told from the file.
+var actionAtCommit = regexp.MustCompile(`klar-web-services/shearbolt@[0-9a-f]{40}\b`)
+
+// installPin is the oldest Shearbolt release that a CI file pins for its install
+// (SHEARBOLT_VERSION=X.Y.Z, or the same as a variable), or "" when it pins none.
+func installPin(src []byte) string {
+	oldest, pin := [3]int{}, ""
+	for _, m := range installPinned.FindAllSubmatch(src, -1) {
+		var v [3]int
+		for i := range v {
+			v[i], _ = strconv.Atoi(string(m[i+1]))
+		}
+		if pin == "" || slices.Compare(v[:], oldest[:]) < 0 {
+			oldest, pin = v, fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
+		}
+	}
+	return pin
+}
+
+// knowsZosiaPolicy reports whether Shearbolt release v (X.Y.Z) reads the zosia block; "" is a
+// release that is not known, which is taken to.
+func knowsZosiaPolicy(v string) bool {
+	var major, minor int
+	if _, err := fmt.Sscanf(v, "%d.%d.", &major, &minor); err != nil {
+		return true
+	}
+	return major > 1 || major == 1 && minor >= 11
 }
 
 func allScanGates(jobs []plan.Job) []plan.GateCmd {

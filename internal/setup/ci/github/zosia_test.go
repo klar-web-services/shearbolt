@@ -236,7 +236,7 @@ func TestGitHubZosiaRunStepGate(t *testing.T) {
 // the workflow afterwards ("" when it is unchanged).
 func zosiaCmd(t *testing.T, files map[string]string, on bool) (*plan.Plan, string) {
 	t.Helper()
-	p := setup.Zosia(tree(t, files), on)
+	p := setup.Zosia(tree(t, files), on, false)
 	if p.Error != nil {
 		t.Fatalf("error: %+v", p.Error)
 	}
@@ -352,7 +352,7 @@ func TestZosiaEnableAgreesWithSetup(t *testing.T) {
 	if err := setup.Write(root, first); err != nil {
 		t.Fatal(err)
 	}
-	on := setup.Zosia(root, true)
+	on := setup.Zosia(root, true, false)
 	if on.Error != nil || len(on.Changes) != 1 {
 		t.Fatalf("enable: %+v, %d changes", on.Error, len(on.Changes))
 	}
@@ -363,7 +363,7 @@ func TestZosiaEnableAgreesWithSetup(t *testing.T) {
 	if again.Error != nil || len(again.Changes) != 0 || len(zosiaNotes(again)) != 0 {
 		t.Errorf("setup after enable: %+v, %d changes, notes %v", again.Error, len(again.Changes), zosiaNotes(again))
 	}
-	off := setup.Zosia(root, false)
+	off := setup.Zosia(root, false, false)
 	if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != first.Changes[slices.IndexFunc(first.Changes, func(c plan.FileChange) bool { return c.Path == wf })].Content {
 		t.Errorf("disable does not restore the workflow setup wrote: %+v", off.Changes)
 	}
@@ -437,17 +437,17 @@ func TestZosiaRunStepRoundTrip(t *testing.T) {
 	} {
 		before := publish + lines(step...) + "      - run: npm publish\n"
 		root := tree(t, npmRepo("web", before, nil))
-		on := setup.Zosia(root, true)
+		on := setup.Zosia(root, true, false)
 		if on.Error != nil || len(on.Changes) != 1 {
 			t.Fatalf("enable: %+v, %d changes", on.Error, len(on.Changes))
 		}
 		if err := setup.Write(root, on); err != nil {
 			t.Fatal(err)
 		}
-		if again := setup.Zosia(root, true); again.Error != nil || len(again.Changes) != 0 || !hasNote(again, "ZOSIA_ALREADY") {
+		if again := setup.Zosia(root, true, false); again.Error != nil || len(again.Changes) != 0 || !hasNote(again, "ZOSIA_ALREADY") {
 			t.Errorf("second enable: %+v, %d changes, notes %v", again.Error, len(again.Changes), noteCodes(again))
 		}
-		off := setup.Zosia(root, false)
+		off := setup.Zosia(root, false, false)
 		if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != before {
 			t.Errorf("disable does not restore the workflow: %+v", off.Changes)
 		}

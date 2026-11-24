@@ -15,7 +15,7 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 )
 
-const zosiaUsage = `Usage: shearbolt zosia enable|disable
+const zosiaUsage = `Usage: shearbolt zosia enable|disable [--policy]
 
 Run it in the repository root, after "shearbolt setup" has added the gate.
 
@@ -30,7 +30,13 @@ Run it in the repository root, after "shearbolt setup" has added the gate.
            still cannot send, such as one that pins a Shearbolt release from before 1.4.0.
   disable  Removes what enable added again. The secret itself stays until you delete it.
 
-Both write the CI files directly and show the change as a diff. They never commit.
+  --policy With enable: the projects also take their policy from Zosia. It adds "zosia:" with
+           "policy: true" below it to each shearbolt.yaml that a gate reads, so that a CI scan
+           asks Zosia for the policy and uses it in place of the file's policy block. The block
+           is not changed, and a scan that gets no policy from Zosia uses it. Needs Shearbolt
+           1.11.0 in the gate. With disable: removes only those lines, and reports go on.
+
+Both write the files directly and show the change as a diff. They never commit.
 
 Exit codes: 0 success, 2 error.
 `
@@ -40,7 +46,8 @@ func runZosia(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprint(stdout, zosiaUsage)
 		return 0
 	}
-	if len(args) != 1 || (args[0] != "enable" && args[0] != "disable") {
+	policy := len(args) == 2 && args[1] == "--policy"
+	if len(args) == 0 || (args[0] != "enable" && args[0] != "disable") || (len(args) > 1 && !policy) {
 		fmt.Fprint(stderr, zosiaUsage)
 		return 2
 	}
@@ -49,7 +56,7 @@ func runZosia(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprintf(stderr, "shearbolt zosia: %v\n", err)
 		return 2
 	}
-	p := setup.Zosia(root, args[0] == "enable")
+	p := setup.Zosia(root, args[0] == "enable", policy)
 	if p.Error != nil {
 		fmt.Fprintf(stderr, "shearbolt zosia: %s\n", noteLine(*p.Error)[2:])
 		return 2
