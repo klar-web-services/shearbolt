@@ -58,6 +58,13 @@ file. The message says what to do; in short:
 Warnings do not block. `NOT_AUDITABLE` means a Rust binary was not built with
 `cargo auditable`, so its crates were checked from `Cargo.lock` instead.
 `EXCEPTION_EXPIRED` means an exception has expired and its finding counts again.
+`EXCEPTION_BEYOND_LIMIT` means the project takes its policy from Zosia, and that policy allows
+exceptions for fewer days than this one runs: it is set aside and its finding counts again.
+Shorten the exception, or ask whoever sets the policy in Zosia.
+`ZOSIA_POLICY_UNREACHABLE`, `ZOSIA_POLICY_REFUSED`, `ZOSIA_POLICY_INVALID`,
+`ZOSIA_POLICY_NO_SECRET` and `ZOSIA_POLICY_NO_CI` mean the project takes its policy from Zosia
+and this scan could not get it, so it used the policy in `shearbolt.yaml`. The message says why.
+`ZOSIA_URL_SET` means the policy came from the address in `ZOSIA_URL`, which is for tests.
 `COMPOSE_BUILD_NOT_SCANNED` means a compose service builds its image, so that image is not
 scanned by the compose target (an `image` target for the CI build covers it).
 `COMPOSE_SERVICE_NO_IMAGE` means some services define no image.

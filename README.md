@@ -105,7 +105,7 @@ KEV and EPSS mark the vulnerabilities that attackers use or are likely to use, s
 
 A blocking finding lists every reason that applies. Separately, a scan that cannot complete exits `2` and is never a pass: for example when Grype fails, a target is missing in CI, or the vulnerability data is older than 48 hours (`maxDatabaseAgeHours`).
 
-To change the policy, add a `policy:` block to `shearbolt.yaml` with just the keys you change. The others keep their defaults.
+To change the policy, add a `policy:` block to `shearbolt.yaml` with just the keys you change. The others keep their defaults. A project can also take its [policy from Zosia](#policy-from-zosia).
 
 ```yaml
 policy:
@@ -137,7 +137,7 @@ exceptions:
 - `package` is an exact `name@version`, with no wildcards or ranges. Scoped npm names keep their `@`, as in `@babel/traverse@7.22.5`. After an upgrade the exception no longer matches.
 - `expires` is at most `maxExceptionDays` (90 by default) after the day of the scan. A later date makes the config invalid, and every scan exits `2`.
 - Every field is required except `target`, which must name a target in the config.
-- Exceptions are reviewed like code: commit them with the change. If exceptions and policy changes should need a security owner's approval, add `shearbolt.yaml` to your CODEOWNERS file.
+- Exceptions are reviewed like code: commit them with the change. If exceptions and policy changes should need a security owner's approval, add `shearbolt.yaml` to your CODEOWNERS file. A project that takes its [policy from Zosia](#policy-from-zosia) has its policy changed there instead; the lines that allow this are in `shearbolt.yaml` and reviewed with it.
 
 In the report, an excepted finding does not block. It is listed under **Accepted by exceptions**, with who approved it, until when, and why. Once the exception expires, it is ignored: the policy judges the finding again, and a warning names the expired exception.
 
@@ -150,7 +150,7 @@ shearbolt scan --target source                   # only this target (repeatable)
 shearbolt scan --build                           # rebuild the <name>:local image first
 ```
 
-A local scan uses the same config and the same pinned Grype as CI, so you can find and fix most blocks before you pay for a pipeline run.
+A local scan uses the same config and the same pinned Grype as CI, so you can find and fix most blocks before you pay for a pipeline run. The one difference: a project that takes its [policy from Zosia](#policy-from-zosia) is scanned locally with the policy in `shearbolt.yaml`.
 
 - Source lockfiles are always scanned.
 - An image, binary or directory you have not built yet is skipped, with a hint on how to build it, and the report lists it. Images are read from your local Docker when they are there, otherwise from the registry. Setup's configs look for `<name>:local` on your machine (`image: ${SHEARBOLT_IMAGE:-<name>:local}`), so `docker build -t <name>:local .` includes the image.
@@ -197,7 +197,34 @@ Sending came with Shearbolt 1.4.0. When a gate pins an older release (a versione
 
 Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same for the gates setup adds in that run. Setup leaves gates that are there already as they are: with a yes it names the ones that do not send, and `shearbolt zosia enable` adds the secret to them.
 
-To disconnect, run `shearbolt zosia disable`, which removes those lines again, and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
+To disconnect, run `shearbolt zosia disable`, which removes those lines again (and the `zosia` block of [Policy from Zosia](#policy-from-zosia), if a project has it), and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
+
+### Policy from Zosia
+
+Since 1.11.0 a project can take its policy from Zosia in place of its `policy:` block, so that you can change what blocks without a commit. The project says so itself, in `shearbolt.yaml`:
+
+```yaml
+zosia:
+  policy: true
+```
+
+`shearbolt zosia enable --policy` adds these lines to each `shearbolt.yaml` that a gate in the repository reads. `shearbolt zosia disable --policy` removes them and leaves the reports on. The gate has to run 1.11.0 or newer, because an older release rejects a file with these lines as invalid: `enable --policy` leaves a file alone when a gate that reads it pins an older release (the action at a full tag, or `SHEARBOLT_VERSION` in a script or among the variables), and says so. It cannot tell the release of an action pinned to a commit: then it adds the lines and a note that asks you to check.
+
+With the lines in place, a CI scan that has `ZOSIA_SECRET` asks Zosia for the policy before it scans:
+
+- **Zosia has a policy for the project.** The scan uses it, all five values, and ignores the `policy:` block. It wins whether it is stricter or looser than the file's.
+- **Zosia has none.** The scan uses the `policy:` block, as without the lines.
+- **Zosia cannot be asked, or does not answer.** That is an outage, a revoked secret, a pull request from a fork (which gets no secret) and every local scan. The scan uses the `policy:` block, and in CI a warning says why. Asking Zosia never fails a scan.
+
+So the `policy:` block still counts: keep one there that you can live with on a day when Zosia does not answer. Nothing Zosia does changes the file, and removing the two lines puts the file back in charge.
+
+You set the policy in the repository's settings in Zosia: one for the repository and, where it has several projects, one for each project that needs its own. The report names the source in a line such as `Policy: from Zosia (repository policy, version 7)`, and `run.json` has it as `policySource`.
+
+- Exceptions stay in `shearbolt.yaml` and have to fit the file's own `maxExceptionDays`. A shorter `maxExceptionDays` in Zosia's policy sets an exception that expires later aside for that run: the finding is judged by the policy again, and a warning names the exception. A longer one in Zosia does not lengthen the file's.
+- Zosia's policy applies with all its values, `maxDatabaseAgeHours` included: with a smaller number there than in the file, a scan fails on vulnerability data that the file would still accept, and the error names Zosia.
+- Zosia knows a repository by its host and path. A renamed repository is a new one there, and its policy has to be set again.
+- The policy is fetched from https://zosiasec.com, and an answer that points elsewhere is not followed. `ZOSIA_URL` changes the address for tests; a scan that used a policy from there says so in a warning.
+- Whoever can log in to your Zosia account can change the policy of a project that has these lines. Zosia mails you every such change.
 
 ## Supported projects and CI
 
@@ -244,6 +271,7 @@ targets:
 | `targets` | yes | What to scan, at least one. Each target has a `name` (letters, digits, `.`, `_` and `-`) and exactly one of the kinds below. |
 | `policy` | no | See [What blocks by default](#what-blocks-by-default). |
 | `exceptions` | no | See [Accepting a risk](#accepting-a-risk). |
+| `zosia` | no | `policy: true` lets Zosia set the policy for CI scans. See [Policy from Zosia](#policy-from-zosia). Needs 1.11.0. |
 
 | Target kind | Scans | When nothing is found |
 |---|---|---|
@@ -298,7 +326,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
 | `shearbolt skill install [--agent claude\|codex\|all] [--project]` | Installs the [agent skill](#agent-skill-claude-code-and-codex) for Claude Code, Codex or both. |
-| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` can also store the secret through the GitHub CLI. |
+| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` can also store the secret through the GitHub CLI. With `--policy`, `enable` also adds the `zosia` block of [Policy from Zosia](#policy-from-zosia) to the `shearbolt.yaml` files the gates read, and `disable` removes only that block. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
 `setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.
@@ -362,7 +390,7 @@ An error never hides findings: everything collected before it is still written. 
 | `working-directory` | `.` | Where to run, relative to the repository root. A job's `defaults.run.working-directory` does not apply to the Action. |
 | `targets` | every target | Space-separated target names, for a job that builds only some of the config's artifacts. Setup sets it only when it is needed. |
 | `artifact-name` | unique per step | Name of the uploaded evidence artifact. |
-| `zosia-secret` | empty | A [Zosia](#zosia-optional) secret, usually `${{ secrets.ZOSIA_SECRET }}`. When set, the scan result is sent to Zosia, encrypted. The job's result never depends on it. A `ZOSIA_SECRET` in the job's `env` works too. |
+| `zosia-secret` | empty | A [Zosia](#zosia-optional) secret, usually `${{ secrets.ZOSIA_SECRET }}`. When set, the scan result is sent to Zosia, encrypted, and a project that takes its [policy from Zosia](#policy-from-zosia) fetches it. Sending never changes the job's result. A `ZOSIA_SECRET` in the job's `env` works too. |
 
 | Output | Meaning |
 |---|---|
@@ -432,7 +460,7 @@ build-image:
 | `CI` | `scan` | Turns on [CI mode](#ci-mode). |
 | `GITHUB_STEP_SUMMARY` | `scan` | When set, as in GitHub Actions, the report is appended to this file (the job summary). |
 | `NO_COLOR` | `scan` | Turns off colors in the terminal report. |
-| `ZOSIA_SECRET` | `scan` | When set in CI, the scan result is sent to [Zosia](#zosia-optional). The exit code never depends on it. |
+| `ZOSIA_SECRET` | `scan` | When set in CI, the scan result is sent to [Zosia](#zosia-optional), and a project that takes its [policy from Zosia](#policy-from-zosia) fetches it. Sending never changes the exit code. |
 | `ZOSIA_URL`, `ZOSIA_KEY` | `scan` | For tests: another Zosia to send to, and its public key (`<key id>:<base64url key>`). |
 | `SHEARBOLT_DB_ARCHIVE` | `scan` | For tests: imports this Grype database archive instead of updating the database. `maxDatabaseAgeHours` still applies to it, and `run.json` and `summary.md` record its use. |
 | `SHEARBOLT_VERSION`, `SHEARBOLT_INSTALL_DIR`, `SHEARBOLT_BASE_URL` | `install.sh` | See [Install options](#install-options). |

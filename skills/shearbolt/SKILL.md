@@ -326,7 +326,11 @@ Suggest the shortest date that fits, at most `policy.maxExceptionDays` days from
 (UTC). Never fill in any of these yourself. Show the drafted entry and add it only when
 the user tells you to; it is reviewed like code.
 
-Never add an exception, change `policy`, or remove a target on your own.
+Never add an exception, change `policy`, or remove a target on your own. Never add or
+remove the `zosia` block of `shearbolt.yaml` either: with `zosia: {policy: true}` the project
+takes its policy for CI scans from Zosia, and the scan report's `Policy:` line says which
+policy a run used. A local scan of such a project uses the file's policy, so its result can
+differ from CI's.
 
 ## 5. Exit codes and rules
 
