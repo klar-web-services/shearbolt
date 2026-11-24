@@ -22,7 +22,15 @@ type Config struct {
 	Targets    []Target    `yaml:"targets"`
 	Policy     Policy      `yaml:"policy"`
 	Exceptions []Exception `yaml:"exceptions"`
+	Zosia      Zosia       `yaml:"zosia"`
 	Dir        string      `yaml:"-"`
+}
+
+// Zosia is what the project lets Zosia (https://zosiasec.com) decide. With Policy, a CI scan asks
+// Zosia for the policy and uses it in place of the policy block; the block stays for every scan
+// that gets no policy from there.
+type Zosia struct {
+	Policy bool `yaml:"policy"`
 }
 
 type Target struct {
@@ -42,6 +50,31 @@ type Policy struct {
 	BlockFixable        string  `yaml:"blockFixable" json:"blockFixable"`
 	MaxDatabaseAgeHours int     `yaml:"maxDatabaseAgeHours" json:"maxDatabaseAgeHours"`
 	MaxExceptionDays    int     `yaml:"maxExceptionDays" json:"maxExceptionDays"`
+}
+
+// Problems says what is wrong with the policy's values, each named as in shearbolt.yaml.
+func (pol Policy) Problems() []string {
+	var p []string
+	if !(pol.BlockEpssAtLeast > 0 && pol.BlockEpssAtLeast <= 1) {
+		p = append(p, "policy.blockEpssAtLeast must be greater than 0 and at most 1")
+	}
+	if !slices.Contains(FixableLevels, pol.BlockFixable) {
+		p = append(p, "policy.blockFixable must be one of "+strings.Join(FixableLevels, ", "))
+	}
+	if pol.MaxDatabaseAgeHours <= 0 {
+		p = append(p, "policy.maxDatabaseAgeHours must be a positive number of hours")
+	}
+	if pol.MaxExceptionDays <= 0 {
+		p = append(p, "policy.maxExceptionDays must be a positive number of days")
+	}
+	return p
+}
+
+// Outlasts reports whether an exception that expires on day lies further ahead than
+// maxExceptionDays allows, counted from today (UTC).
+func (pol Policy) Outlasts(day, now time.Time) bool {
+	today := now.UTC().Truncate(24 * time.Hour)
+	return day.Sub(today) > time.Duration(pol.MaxExceptionDays)*24*time.Hour
 }
 
 type Exception struct {
@@ -456,19 +489,7 @@ func (c *Config) finish(env Env, now time.Time) error {
 		}
 	}
 	pol := c.Policy
-	if !(pol.BlockEpssAtLeast > 0 && pol.BlockEpssAtLeast <= 1) {
-		p = append(p, "policy.blockEpssAtLeast must be greater than 0 and at most 1")
-	}
-	if !slices.Contains(FixableLevels, pol.BlockFixable) {
-		p = append(p, "policy.blockFixable must be one of "+strings.Join(FixableLevels, ", "))
-	}
-	if pol.MaxDatabaseAgeHours <= 0 {
-		p = append(p, "policy.maxDatabaseAgeHours must be a positive number of hours")
-	}
-	if pol.MaxExceptionDays <= 0 {
-		p = append(p, "policy.maxExceptionDays must be a positive number of days")
-	}
-	today := now.UTC().Truncate(24 * time.Hour)
+	p = append(p, pol.Problems()...)
 	for i, e := range c.Exceptions {
 		label := fmt.Sprintf("exceptions[%d]", i)
 		if e.ID != "" {
@@ -494,7 +515,7 @@ func (c *Config) finish(env Env, now time.Time) error {
 			switch {
 			case err != nil:
 				p = append(p, label+": expires must be a date like 2026-12-01")
-			case pol.MaxExceptionDays > 0 && day.Sub(today) > time.Duration(pol.MaxExceptionDays)*24*time.Hour:
+			case pol.MaxExceptionDays > 0 && pol.Outlasts(day, now):
 				p = append(p, fmt.Sprintf("%s: expires %s is more than policy.maxExceptionDays (%d) days away", label, e.Expires, pol.MaxExceptionDays))
 			}
 		}

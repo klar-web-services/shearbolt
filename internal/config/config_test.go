@@ -131,6 +131,51 @@ exceptions:
 	}
 }
 
+func TestZosiaPolicyIsOffUnlessTheFileSaysSo(t *testing.T) {
+	const base = "version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\n"
+	for content, want := range map[string]bool{
+		base:                               false,
+		base + "zosia:\n  policy: false\n": false,
+		base + "zosia:\n  policy: true\n":  true,
+		base + "zosia: {}\n":               false,
+	} {
+		cfg, err := Load(write(t, content), env(nil), now)
+		if err != nil {
+			t.Fatalf("%q: %v", content, err)
+		}
+		if cfg.Zosia.Policy != want {
+			t.Errorf("%q: Zosia.Policy = %v, want %v", content, cfg.Zosia.Policy, want)
+		}
+		// The block never changes the policy the file itself has.
+		if cfg.Policy != DefaultPolicy() {
+			t.Errorf("%q: policy %+v", content, cfg.Policy)
+		}
+	}
+	for content, want := range map[string]string{
+		base + "zosia:\n  policy: yes please\n": "line 7: expected true or false",
+		base + "zosia:\n  secret: x\n":          `unknown field "secret"`,
+		base + "zosia: true\n":                  "line 6: expected a mapping",
+	} {
+		_, err := Load(write(t, content), env(nil), now)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error %v, want one that says %q", content, err, want)
+		}
+	}
+}
+
+func TestPolicyProblemsNameEachBadValue(t *testing.T) {
+	if p := DefaultPolicy().Problems(); len(p) != 0 {
+		t.Fatalf("the defaults have problems: %v", p)
+	}
+	bad := Policy{BlockEpssAtLeast: 2, BlockFixable: "severe"}
+	got := strings.Join(bad.Problems(), "\n")
+	for _, want := range []string{"policy.blockEpssAtLeast", "policy.blockFixable", "policy.maxDatabaseAgeHours", "policy.maxExceptionDays"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("problems do not name %s:\n%s", want, got)
+		}
+	}
+}
+
 func TestExceptionExpiryLimit(t *testing.T) {
 	base := "version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\nexceptions:\n  - {id: CVE-1, package: a@1.0.0, reason: r, approvedBy: b, expires: %s}\n"
 	if _, err := Load(write(t, strings.Replace(base, "%s", "2027-02-06", 1)), env(nil), now); err != nil {
