@@ -20,8 +20,14 @@ func Evaluate(findings []model.Finding, p config.Policy, exceptions []config.Exc
 		statuses[i] = model.ExceptionStatus{ID: e.ID, Package: e.Package, Target: e.Target, Expires: e.Expires, Status: "unused"}
 		end, err := e.ExpiresAt()
 		active[i] = err == nil && now.Before(end)
-		if !active[i] {
+		switch {
+		case !active[i]:
 			statuses[i].Status = "expired"
+		case p.Outlasts(end.Add(-24*time.Hour), now):
+			// The file's own limit is checked when the file is read, so only a policy from Zosia
+			// with a shorter one gets here. The exception is set aside for this run.
+			active[i] = false
+			statuses[i].Status = "over-limit"
 		}
 	}
 	var warnings []model.Diagnostic
@@ -42,11 +48,16 @@ func Evaluate(findings []model.Finding, p config.Policy, exceptions []config.Exc
 			}
 			if !warned[i] {
 				warned[i] = true
-				warnings = append(warnings, model.Diagnostic{
+				w := model.Diagnostic{
 					Code:    "EXCEPTION_EXPIRED",
 					Target:  exceptions[i].Target,
 					Message: fmt.Sprintf("the exception for %s on %s expired on %s, so the finding is evaluated normally", exceptions[i].ID, exceptions[i].Package, exceptions[i].Expires),
-				})
+				}
+				if statuses[i].Status == "over-limit" {
+					w.Code = "EXCEPTION_BEYOND_LIMIT"
+					w.Message = fmt.Sprintf("the exception for %s on %s expires on %s, which is later than maxExceptionDays (%d) in the policy from Zosia allows, so the finding is evaluated normally", exceptions[i].ID, exceptions[i].Package, exceptions[i].Expires, p.MaxExceptionDays)
+				}
+				warnings = append(warnings, w)
 			}
 		}
 		var reasons []string

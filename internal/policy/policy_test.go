@@ -133,6 +133,40 @@ func TestExceptionValidThroughExpiryDay(t *testing.T) {
 	}
 }
 
+func TestExceptionBeyondAShorterLimitIsSetAside(t *testing.T) {
+	// The file allowed this exception (90 days); the policy that applies allows 30.
+	ex := config.Exception{ID: "CVE-2026-1", Package: "lib@1.0.0", Reason: "r", ApprovedBy: "a", Expires: "2026-12-31"}
+	short := config.DefaultPolicy()
+	short.MaxExceptionDays = 30
+	f := finding(func(f *model.Finding) { f.FixState = "fixed"; f.FixVersions = []string{"1.0.1"} })
+	d, statuses, warnings := decide(t, f, short, ex)
+	if d.Action != model.Block || statuses[0].Status != "over-limit" {
+		t.Fatalf("decision %+v, status %q; want a block and over-limit", d, statuses[0].Status)
+	}
+	if len(warnings) != 1 || warnings[0].Code != "EXCEPTION_BEYOND_LIMIT" {
+		t.Fatalf("warnings %+v", warnings)
+	}
+	for _, want := range []string{"CVE-2026-1", "lib@1.0.0", "2026-12-31", "maxExceptionDays (30)", "Zosia"} {
+		if !strings.Contains(warnings[0].Message, want) {
+			t.Errorf("the warning does not name %s: %s", want, warnings[0].Message)
+		}
+	}
+	// On the last day the limit allows, the exception still applies: the same day count as the file's check.
+	short.MaxExceptionDays = 53
+	if d, statuses, warnings := decide(t, f, short, ex); d.Action != model.Excepted || statuses[0].Status != "applied" || len(warnings) != 0 {
+		t.Fatalf("at the limit: decision %+v, status %q, warnings %+v", d, statuses[0].Status, warnings)
+	}
+	short.MaxExceptionDays = 52
+	if d, _, _ := decide(t, f, short, ex); d.Action != model.Block {
+		t.Fatalf("one day beyond the limit: decision %+v", d)
+	}
+	// An exception that matches nothing is marked and not warned about, like an expired one.
+	_, statuses, warnings = decide(t, finding(func(f *model.Finding) { f.Package = "other" }), short, ex)
+	if statuses[0].Status != "over-limit" || len(warnings) != 0 {
+		t.Fatalf("unmatched: status %q, warnings %+v", statuses[0].Status, warnings)
+	}
+}
+
 func TestVerdict(t *testing.T) {
 	block := []model.Finding{{Decision: model.Decision{Action: model.Block}}}
 	warn := []model.Finding{{Decision: model.Decision{Action: model.Warn}}}

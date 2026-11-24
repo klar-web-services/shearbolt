@@ -91,7 +91,27 @@ type ExceptionStatus struct {
 	Package string `json:"package"`
 	Target  string `json:"target,omitempty"`
 	Expires string `json:"expires"`
-	Status  string `json:"status"` // applied | unused | expired
+	Status  string `json:"status"` // applied | unused | expired | over-limit
+}
+
+// PolicySource says where a run's policy came from. Zosia is empty unless the project's
+// shearbolt.yaml takes its policy from Zosia; then it says what became of that:
+//
+//	used         Zosia's policy applied (From is "zosia"; Version and Scope are Zosia's)
+//	none         Zosia has no policy for this project (Version is Zosia's)
+//	unreachable  Zosia did not answer
+//	refused      Zosia refused the secret
+//	invalid      Zosia's answer could not be used
+//	no-secret    CI mode without ZOSIA_SECRET, as in a pull request from a fork
+//	no-ci        a CI whose repository Shearbolt cannot name
+//	local        not a CI scan
+//
+// In every case but "used" the policy is the file's.
+type PolicySource struct {
+	From    string `json:"from"` // zosia | file | default (ad-hoc flags)
+	Zosia   string `json:"zosia,omitempty"`
+	Version *int   `json:"version,omitempty"`
+	Scope   string `json:"scope,omitempty"` // repository | project
 }
 
 type Diagnostic struct {
@@ -112,6 +132,7 @@ type Run struct {
 	Database      *Database         `json:"database"`
 	DBArchive     string            `json:"dbArchive,omitempty"`
 	Policy        config.Policy     `json:"policy"`
+	PolicySource  PolicySource      `json:"policySource"`
 	Targets       []TargetResult    `json:"targets"`
 	Findings      []Finding         `json:"findings"`
 	Exceptions    []ExceptionStatus `json:"exceptions"`
