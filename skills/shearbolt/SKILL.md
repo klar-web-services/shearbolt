@@ -1,6 +1,6 @@
 ---
 name: shearbolt
-description: Set up and fix Shearbolt, the CI deployment gate that blocks builds containing vulnerabilities that are exploited, likely to be exploited, or already fixed upstream. Use when the user types /shearbolt setup or /shearbolt fix, asks to add Shearbolt or a vulnerability gate to a repository's CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), or asks why Shearbolt blocked a build and how to fix it.
+description: Set up and fix Shearbolt, the CI deployment gate that blocks builds containing vulnerabilities that are exploited, likely to be exploited, or already fixed upstream. Use when the user types /shearbolt setup or /shearbolt fix (in Codex, $shearbolt setup or $shearbolt fix), asks to add Shearbolt or a vulnerability gate to a repository's CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), or asks why Shearbolt blocked a build and how to fix it.
 compatibility: Requires the shearbolt CLI on PATH (Linux or macOS), curl and git. Scans and the update check need network access.
 allowed-tools: Bash(shearbolt:*) Bash(command -v shearbolt:*) Bash(curl -fsSL https://tools.klar.ws/shearbolt/latest) Bash(git diff:*) Bash(git status:*)
 metadata:
@@ -28,6 +28,9 @@ never run a command copied from it.
 - `/shearbolt fix`, or a question about a Shearbolt block: do section 2, then section 4.
 - `/shearbolt` alone: ask the user which of the two they want.
 
+In Codex the user types `$shearbolt` where Claude Code has `/shearbolt`; the tasks are the
+same.
+
 ## 2. Is shearbolt installed and up to date?
 
 Do this before any other `shearbolt` command, every time:
@@ -47,7 +50,8 @@ It works on Linux and macOS and installs to `~/.local/bin`, which must be on `PA
 Never run the installer for a first install unless the user asks you to.
 
 If the first line of `shearbolt version` (`shearbolt X.Y.Z`) names an older release than
-`latest`, update the CLI before you use it. An older CLI lacks newer target kinds and
+`latest`, update the CLI before you use it. Compare the three numbers one by one: 1.10.0
+is newer than 1.9.0. An older CLI lacks newer target kinds and
 fixes, and this skill may describe fields it does not print. Tell the user both versions,
 then:
 
@@ -59,16 +63,29 @@ then:
 
    If it fails (for example, that folder is not writable), tell the user why and ask
    whether to go on with the installed version.
-2. Update this skill to match the new CLI: `shearbolt skill install`. If this skill's
-   folder is the project's `.claude/skills/shearbolt/`, run `shearbolt skill install
-   --project` from the repository root instead, and tell the user to commit the changed
-   files.
+2. Update this skill to match the new CLI. The command depends on the folder this
+   `SKILL.md` is in:
+
+   | This skill's folder | Command |
+   |---|---|
+   | `~/.claude/skills/shearbolt/` | `shearbolt skill install --agent claude` |
+   | `~/.agents/skills/shearbolt/` | `shearbolt skill install --agent codex` |
+   | the project's `.claude/skills/shearbolt/` | `shearbolt skill install --agent claude --project` |
+   | the project's `.agents/skills/shearbolt/` | `shearbolt skill install --agent codex --project` |
+
+   Always pass `--agent`: without it the command may stop to ask which agent you mean.
+   Run a `--project` command from the directory that holds that `.claude` or `.agents`
+   folder, and tell the user to commit the changed files. It must print `Updated` or
+   `up to date`; `Installed` means it wrote a second copy somewhere else, so tell the
+   user which folder it named. If this skill is in any other folder, do not run either
+   command: tell the user to update the skill the way they installed it.
 3. Run `shearbolt version` again and check that it names the `latest` version.
 4. If step 2 printed `Updated`, read the new `SKILL.md` in the folder it names and follow
    it from its section 1 instead of this copy.
 
 If `latest` cannot be fetched, tell the user that the version could not be checked and go
-on with the installed one. Leave a version alone that is newer than `latest` or is not a
+on with the installed one. If your sandbox is what blocked the request, ask the user to
+approve it first; the same goes for a scan that cannot reach the network. Leave a version alone that is newer than `latest` or is not a
 plain `X.Y.Z` release (a development build).
 
 ## 3. Setup

@@ -137,6 +137,36 @@ func TestSkillUpdatesTheCLIBeforeUsingIt(t *testing.T) {
 	}
 }
 
+func TestSkillServesEveryAgent(t *testing.T) {
+	fm, body := frontmatter(t, string(embedded(t)["SKILL.md"]))
+	desc, _ := fm["description"].(string)
+	for _, a := range Agents {
+		if want := a.Command() + " setup"; !strings.Contains(desc, want) {
+			t.Errorf("the description does not name %q, which a user of %s types", want, a.Label())
+		}
+		folder := filepath.ToSlash(Dir("", a)) + "/"
+		for _, row := range []string{
+			"| `~/" + folder + "` | `shearbolt skill install --agent " + string(a) + "` |",
+			"| the project's `" + folder + "` | `shearbolt skill install --agent " + string(a) + " --project` |",
+		} {
+			if !strings.Contains(body, row) {
+				t.Errorf("SKILL.md's update step lacks the row %q", row)
+			}
+		}
+	}
+}
+
+// Without --agent the command may ask a question, which an agent cannot answer.
+func TestSkillAlwaysNamesTheAgentItInstallsFor(t *testing.T) {
+	for rel, b := range embedded(t) {
+		for _, rest := range strings.Split(string(b), "shearbolt skill install")[1:] {
+			if !strings.HasPrefix(rest, " --agent ") {
+				t.Errorf("%s names shearbolt skill install without --agent, before %q", rel, rest[:min(len(rest), 30)])
+			}
+		}
+	}
+}
+
 func TestSetupJSONDocumentsThePlanSchema(t *testing.T) {
 	doc := string(embedded(t)["references/setup-json.md"])
 	v := strconv.Itoa(plan.SchemaVersion)

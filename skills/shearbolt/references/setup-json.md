@@ -24,7 +24,7 @@ writes it only with `--apply`. This is the contract the skill drives, at `schema
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | `2`. Any other value means the contract changed: stop, and tell the user to update the skill with `shearbolt skill install`, or `shearbolt skill install --project` when it is installed in the project's `.claude/skills`. |
+| `schemaVersion` | `2`. Any other value means the contract changed: stop, and tell the user to update the skill with the command for its folder in `SKILL.md`, section 2, step 2. |
 | `shearboltVersion` | The version that computed the plan; `dev` for a development build. |
 | `projects[]` | Detected projects: `ecosystem` (`npm`, `rust`, `go` or `docker`), `dir` (`.` is the root; also the project's ID in answers), `name`, `lockfiles` (relative to `dir`), optional `compose` (the compose files setup gates, relative to `dir`), optional `framework` (`nextjs`). A `docker` project is the root project (`dir` `.`, named after the repository's folder) and has no lockfiles. It holds the compose files that no npm, Rust or Go project contains. When the repository has no npm, Rust or Go project, it also owns the image builds setup finds in CI (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`) and gets an image target for each. It never has a `source` target. |
 | `ci[]` | CI files found: `system` (`github`, `bitbucket` or `gitlab`) and `file`. |
