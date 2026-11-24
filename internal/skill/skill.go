@@ -32,7 +32,37 @@ var ErrForeign = errors.New("a different skill named shearbolt is already instal
 
 var ErrOutside = errors.New("the skill folder leads outside the project through a symlink")
 
-func Dir(base string) string { return filepath.Join(base, ".claude", "skills", Name) }
+type Agent string
+
+const (
+	Claude Agent = "claude"
+	Codex  Agent = "codex"
+)
+
+var Agents = []Agent{Claude, Codex}
+
+func (a Agent) Label() string {
+	if a == Codex {
+		return "Codex"
+	}
+	return "Claude Code"
+}
+
+// Command is what a user types in that agent to start the skill.
+func (a Agent) Command() string {
+	if a == Codex {
+		return "$" + Name
+	}
+	return "/" + Name
+}
+
+// Dir is where that agent looks for the skill below base, a home directory or a repository.
+func Dir(base string, a Agent) string {
+	if a == Codex {
+		return filepath.Join(base, ".agents", "skills", Name)
+	}
+	return filepath.Join(base, ".claude", "skills", Name)
+}
 
 // Install follows symlinks anywhere, so a global install works with dotfiles layouts
 // (~/.claude -> ~/dotfiles/claude).

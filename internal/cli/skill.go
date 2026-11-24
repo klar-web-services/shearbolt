@@ -72,7 +72,7 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 		case !filepath.IsAbs(base):
 			return fail(fmt.Sprintf("HOME (%q) is not an absolute path, so the user skill folder is unknown", base))
 		}
-		shown, again = skill.Dir(base), "shearbolt skill install"
+		shown, again = skill.Dir(base, skill.Claude), "shearbolt skill install"
 	} else {
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -84,9 +84,9 @@ func runSkill(args []string, stdout, stderr io.Writer, d deps) int {
 	var outcome skill.Outcome
 	var err error
 	if !*project {
-		outcome, err = skill.Install(skill.Dir(base))
+		outcome, err = skill.Install(skill.Dir(base, skill.Claude))
 	} else {
-		outcome, err = skill.InstallInside(skill.Dir(base), base)
+		outcome, err = skill.InstallInside(skill.Dir(base, skill.Claude), base)
 	}
 	switch {
 	case errors.Is(err, skill.ErrForeign):

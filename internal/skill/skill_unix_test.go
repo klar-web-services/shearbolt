@@ -10,7 +10,7 @@ import (
 func TestInstallModesIgnoreUmask(t *testing.T) {
 	old := syscall.Umask(0o077)
 	t.Cleanup(func() { syscall.Umask(old) })
-	dir := Dir(t.TempDir())
+	dir := Dir(t.TempDir(), Claude)
 	if _, err := Install(dir); err != nil {
 		t.Fatal(err)
 	}

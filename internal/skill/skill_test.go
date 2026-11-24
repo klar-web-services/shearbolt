@@ -170,8 +170,23 @@ func TestSkillReferenceLinksExist(t *testing.T) {
 }
 
 func TestDir(t *testing.T) {
-	if got, want := Dir("/base"), filepath.Join("/base", ".claude", "skills", "shearbolt"); got != want {
+	if got, want := Dir("/base", Claude), filepath.Join("/base", ".claude", "skills", "shearbolt"); got != want {
 		t.Errorf("Dir = %q, want %q", got, want)
+	}
+	if got, want := Dir("/base", Codex), filepath.Join("/base", ".agents", "skills", "shearbolt"); got != want {
+		t.Errorf("Dir for Codex = %q, want %q", got, want)
+	}
+}
+
+func TestAgents(t *testing.T) {
+	if len(Agents) != 2 || Agents[0] != Claude || Agents[1] != Codex {
+		t.Fatalf("Agents = %v, want claude then codex", Agents)
+	}
+	if Claude.Label() != "Claude Code" || Claude.Command() != "/shearbolt" {
+		t.Errorf("claude: %q, %q", Claude.Label(), Claude.Command())
+	}
+	if Codex.Label() != "Codex" || Codex.Command() != "$shearbolt" {
+		t.Errorf("codex: %q, %q", Codex.Label(), Codex.Command())
 	}
 }
 
@@ -194,7 +209,7 @@ func installed(t *testing.T, dir string) map[string][]byte {
 }
 
 func TestInstallUpdateUnchanged(t *testing.T) {
-	dir := Dir(t.TempDir())
+	dir := Dir(t.TempDir(), Claude)
 	emb := embedded(t)
 
 	out, err := Install(dir)
@@ -236,7 +251,7 @@ func TestInstallUpdateUnchanged(t *testing.T) {
 }
 
 func TestInstallRecreatesMissingSkillFile(t *testing.T) {
-	dir := Dir(t.TempDir())
+	dir := Dir(t.TempDir(), Claude)
 	if _, err := Install(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +289,7 @@ func TestInstallRefusesForeignSkill(t *testing.T) {
 	}
 	for name, prepare := range cases {
 		t.Run(name, func(t *testing.T) {
-			dir := Dir(t.TempDir())
+			dir := Dir(t.TempDir(), Claude)
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -309,7 +324,7 @@ func TestInstallReportsWriteErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(base, 0o755) })
-	if _, err := Install(Dir(base)); err == nil || errors.Is(err, ErrForeign) {
+	if _, err := Install(Dir(base, Claude)); err == nil || errors.Is(err, ErrForeign) {
 		t.Fatalf("err = %v, want a write error", err)
 	}
 }
@@ -348,7 +363,7 @@ func TestInstallRefusesLookalikeSkills(t *testing.T) {
 		"frontmatter that is no YAML": "---\nmetadata: [source: shearbolt\n---\nbody\n",
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := Dir(t.TempDir())
+			dir := Dir(t.TempDir(), Claude)
 			skillMD := filepath.Join(dir, "SKILL.md")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
@@ -367,7 +382,7 @@ func TestInstallRefusesLookalikeSkills(t *testing.T) {
 }
 
 func TestInstallUpdatesItsOwnSkillWithOtherContent(t *testing.T) {
-	dir := Dir(t.TempDir())
+	dir := Dir(t.TempDir(), Claude)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +400,7 @@ func TestInstallUpdatesItsOwnSkillWithOtherContent(t *testing.T) {
 }
 
 func TestInstallWritesSkillFileLast(t *testing.T) {
-	dir := Dir(t.TempDir())
+	dir := Dir(t.TempDir(), Claude)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -428,21 +443,21 @@ func symlink(t *testing.T, target, link string) {
 
 func TestInstallInsideRefusesSymlinksOutside(t *testing.T) {
 	cases := map[string]func(root, outside string){
-		"skill folder":     func(root, outside string) { symlink(t, outside, Dir(root)) },
-		"relative symlink": func(root, outside string) { symlink(t, "../../../outside", Dir(root)) },
+		"skill folder":     func(root, outside string) { symlink(t, outside, Dir(root, Claude)) },
+		"relative symlink": func(root, outside string) { symlink(t, "../../../outside", Dir(root, Claude)) },
 		".claude":          func(root, outside string) { symlink(t, filepath.Dir(outside), filepath.Join(root, ".claude")) },
 		"references folder": func(root, outside string) {
-			symlink(t, filepath.Join(outside, "references"), filepath.Join(Dir(root), "references"))
+			symlink(t, filepath.Join(outside, "references"), filepath.Join(Dir(root, Claude), "references"))
 		},
 		"reference file": func(root, outside string) {
-			symlink(t, filepath.Join(outside, "references", "fixing.md"), filepath.Join(Dir(root), "references", "fixing.md"))
+			symlink(t, filepath.Join(outside, "references", "fixing.md"), filepath.Join(Dir(root, Claude), "references", "fixing.md"))
 		},
 	}
 	for name, prepare := range cases {
 		t.Run(name, func(t *testing.T) {
 			root, outside := outsideSetup(t)
 			prepare(root, outside)
-			_, err := InstallInside(Dir(root), root)
+			_, err := InstallInside(Dir(root, Claude), root)
 			if !errors.Is(err, ErrOutside) {
 				t.Fatalf("err = %v, want ErrOutside", err)
 			}
@@ -466,7 +481,7 @@ func TestInstallInsideFollowsSymlinksWithin(t *testing.T) {
 	// The root itself may be reached through a symlink.
 	alias := filepath.Join(t.TempDir(), "alias")
 	symlink(t, root, alias)
-	if out, err := InstallInside(Dir(alias), alias); err != nil || out != Installed {
+	if out, err := InstallInside(Dir(alias, Claude), alias); err != nil || out != Installed {
 		t.Fatalf("install: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(shared, "skills", "shearbolt", "SKILL.md")); err != nil {
@@ -477,7 +492,7 @@ func TestInstallInsideFollowsSymlinksWithin(t *testing.T) {
 func TestInstallFollowsSymlinksAnywhere(t *testing.T) {
 	home, outside := outsideSetup(t)
 	symlink(t, outside, filepath.Join(home, ".claude"))
-	if out, err := Install(Dir(home)); err != nil || out != Installed {
+	if out, err := Install(Dir(home, Claude)); err != nil || out != Installed {
 		t.Fatalf("install: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "skills", "shearbolt", "SKILL.md")); err != nil {
