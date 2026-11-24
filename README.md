@@ -13,7 +13,7 @@ cd your-project && shearbolt setup
 
 Setup finds your npm, Rust or Go project, your Docker Compose files and the images your CI builds from a Dockerfile, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
 
-With Claude Code: `shearbolt skill install`, then type `/shearbolt setup`.
+With Claude Code or Codex: `shearbolt skill install`, then type `/shearbolt setup` in Claude Code or `$shearbolt setup` in Codex.
 
 Shearbolt runs on Linux and macOS (amd64 and arm64). Windows is not supported yet.
 
@@ -297,7 +297,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 |---|---|
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
-| `shearbolt skill install [--project]` | Installs the [agent skill](#agent-skill-claude-code) for Claude Code. |
+| `shearbolt skill install [--agent claude\|codex\|all] [--project]` | Installs the [agent skill](#agent-skill-claude-code-and-codex) for Claude Code, Codex or both. |
 | `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` can also store the secret through the GitHub CLI. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
@@ -437,16 +437,23 @@ build-image:
 | `SHEARBOLT_DB_ARCHIVE` | `scan` | For tests: imports this Grype database archive instead of updating the database. `maxDatabaseAgeHours` still applies to it, and `run.json` and `summary.md` record its use. |
 | `SHEARBOLT_VERSION`, `SHEARBOLT_INSTALL_DIR`, `SHEARBOLT_BASE_URL` | `install.sh` | See [Install options](#install-options). |
 
-### Agent skill (Claude Code)
+### Agent skill (Claude Code and Codex)
 
-`shearbolt skill install` writes the skill to `~/.claude/skills/shearbolt/`, for all your projects. `shearbolt skill install --project` writes it to `.claude/skills/shearbolt/` in the current directory instead; commit that folder to share it with your team. Running the command again updates a skill that shearbolt installed, and leaves a different skill named `shearbolt` alone. (`--global` from 1.0.0 still works and means the default.)
+`shearbolt skill install` asks which agent to install for: Claude Code, Codex or all (Enter means all). `--agent claude`, `--agent codex` or `--agent all` answers that up front; use it in scripts. Without `--agent`, and with its input or output not a terminal, the command installs for Claude Code, as every version before 1.10.0 did.
 
-| In Claude Code | What the agent does |
-|---|---|
-| `/shearbolt setup` | Runs `shearbolt setup --plan --json`, asks you only the open questions, asks before applying, shows the diff and tells you what to commit. It never commits. |
-| `/shearbolt fix` | Runs `shearbolt scan --json`, explains each block, proposes the upgrade (a dependency bump, a lockfile update or override, a newer base image), applies it only when you agree, and scans again to confirm. It never adds an exception or changes the policy on its own. |
+| Agent | For all your projects | With `--project` |
+|---|---|---|
+| Claude Code | `~/.claude/skills/shearbolt/` | `.claude/skills/shearbolt/` |
+| Codex | `~/.agents/skills/shearbolt/` | `.agents/skills/shearbolt/` |
 
-The skill needs `shearbolt` on your `PATH`. Before either command, it compares `shearbolt version` with the latest release. If yours is older, the skill updates the CLI where it is installed, runs `shearbolt skill install` (with `--project` for a project install), and goes on with the updated skill. Claude Code asks you before the installer runs, unless your permission settings already allow it. A missing CLI is never installed for you: the skill shows the install command.
+`--project` writes into the current directory; commit that folder to share it with your team. Running the command again updates a skill that shearbolt installed, and leaves a different skill named `shearbolt` alone. (`--global` from 1.0.0 still works and means the default.)
+
+| In Claude Code | In Codex | What the agent does |
+|---|---|---|
+| `/shearbolt setup` | `$shearbolt setup` | Runs `shearbolt setup --plan --json`, asks you only the open questions, asks before applying, shows the diff and tells you what to commit. It never commits. |
+| `/shearbolt fix` | `$shearbolt fix` | Runs `shearbolt scan --json`, explains each block, proposes the upgrade (a dependency bump, a lockfile update or override, a newer base image), applies it only when you agree, and scans again to confirm. It never adds an exception or changes the policy on its own. |
+
+The skill needs `shearbolt` on your `PATH`. Before either command, it compares `shearbolt version` with the latest release. If yours is older, the skill updates the CLI where it is installed, runs `shearbolt skill install` for its own agent and folder, and goes on with the updated skill. The agent asks you before the installer runs, unless your permission settings already allow it. A missing CLI is never installed for you: the skill shows the install command.
 
 ### How Shearbolt is released
 
@@ -465,7 +472,7 @@ rm ~/.local/bin/shearbolt
 rm -rf ~/.cache/shearbolt
 ```
 
-If you set `SHEARBOLT_INSTALL_DIR` or `SHEARBOLT_CACHE_DIR`, remove those paths instead; with `XDG_CACHE_HOME` set, the cache is `$XDG_CACHE_HOME/shearbolt`. Also delete `.claude/skills/shearbolt/` or `~/.claude/skills/shearbolt/` if you installed the skill, and the `.shearbolt/` folder in each project. To remove the gate from a project, delete its `shearbolt.yaml` and the steps setup added.
+If you set `SHEARBOLT_INSTALL_DIR` or `SHEARBOLT_CACHE_DIR`, remove those paths instead; with `XDG_CACHE_HOME` set, the cache is `$XDG_CACHE_HOME/shearbolt`. Also delete `.claude/skills/shearbolt/` or `~/.claude/skills/shearbolt/` (Codex: `.agents/skills/shearbolt/` or `~/.agents/skills/shearbolt/`) if you installed the skill, and the `.shearbolt/` folder in each project. To remove the gate from a project, delete its `shearbolt.yaml` and the steps setup added.
 
 ## License
 
