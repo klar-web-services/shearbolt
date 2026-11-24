@@ -26,7 +26,7 @@ func skillCmd(t *testing.T, args ...string) (int, string, string) {
 	return code, out.String(), errb.String()
 }
 
-const skillUsageLine = "shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)"
+const skillUsageLine = "shearbolt skill install [flags]      Install the coding-agent skill for Claude Code or Codex"
 
 func TestUsageListsSkillInstall(t *testing.T) {
 	var out, errb bytes.Buffer
@@ -81,6 +81,9 @@ func TestSkillInstallGlobal(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(cwd, ".claude")); err == nil {
 		t.Error("the user install also wrote into the current directory")
 	}
+	if _, err := os.Stat(filepath.Join(home, ".agents")); err == nil {
+		t.Error("without --agent and without a terminal, the skill was also installed for Codex")
+	}
 	if want := "Installed the Shearbolt skill in " + installed + ". In Claude Code, type /shearbolt setup.\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
 	}
@@ -94,6 +97,9 @@ func TestSkillInstallGlobalWithoutHome(t *testing.T) {
 	t.Chdir(t.TempDir())
 	if code, _, errb := skillCmd(t, "install"); code != 2 || !strings.Contains(errb, "HOME") {
 		t.Errorf("exit = %d, stderr = %q", code, errb)
+	}
+	if code, _, errb := skillCmd(t, "install", "--agent", "codex"); code != 2 || !strings.Contains(errb, "Run shearbolt skill install --project --agent codex to") {
+		t.Errorf("--agent codex: exit = %d, stderr = %q", code, errb)
 	}
 }
 
@@ -155,14 +161,17 @@ func TestSkillInstallGlobalFollowsDotfilesSymlink(t *testing.T) {
 func TestSkillUsageErrors(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
-	for _, args := range [][]string{{}, {"nope"}, {"install", "extra"}, {"install", "--nope"}, {"install", "--project", "--global"}} {
+	for _, args := range [][]string{{}, {"nope"}, {"install", "extra"}, {"install", "--nope"}, {"install", "--project", "--global"},
+		{"install", "--agent", "cursor"}, {"install", "--agent", "Claude"}, {"install", "--agent", ""}} {
 		code, out, errb := skillCmd(t, args...)
-		if code != 2 || out != "" || !strings.Contains(errb, "Usage: shearbolt skill install [--project]") {
+		if code != 2 || out != "" || !strings.Contains(errb, "Usage: shearbolt skill install [--agent claude|codex|all] [--project]") {
 			t.Errorf("skill %v: exit = %d, stdout = %q, stderr = %q", args, code, out, errb)
 		}
 	}
-	if _, err := os.Stat(".claude"); err == nil {
-		t.Error("a usage error wrote the skill")
+	for _, d := range []string{".claude", ".agents"} {
+		if _, err := os.Stat(d); err == nil {
+			t.Errorf("a usage error wrote %s", d)
+		}
 	}
 	if code, out, _ := skillCmd(t, "install", "-h"); code != 0 || out != "" {
 		t.Errorf("install -h: exit = %d, stdout = %q", code, out)
@@ -181,6 +190,229 @@ func TestSkillInstallRefusesForeignSkill(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(foreign); string(b) != "---\nname: shearbolt\n---\nsomeone else's\n" {
 		t.Errorf("the foreign SKILL.md changed: %q", b)
+	}
+}
+
+func skillCmdTTY(t *testing.T, stdin string, args ...string) (int, string, string) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code := run(append([]string{"skill"}, args...), &out, &errb, setupDeps(true, stdin))
+	return code, out.String(), errb.String()
+}
+
+func TestSkillInstallForCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	t.Chdir(dir)
+	installed := filepath.Join(home, ".agents", "skills", "shearbolt")
+	code, out, errb := skillCmd(t, "install", "--agent", "codex")
+	if want := "Installed the Shearbolt skill in " + installed + ". In Codex, type $shearbolt setup.\n"; code != 0 || errb != "" || out != want {
+		t.Fatalf("exit = %d, stdout = %q, want %q, stderr = %s", code, out, want, errb)
+	}
+	if _, err := os.Stat(filepath.Join(installed, "references", "fixing.md")); err != nil {
+		t.Error(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude")); err == nil {
+		t.Error("--agent codex also installed for Claude Code")
+	}
+	code, out, errb = skillCmd(t, "install", "--agent", "codex", "--project")
+	want := "Installed the Shearbolt skill in .agents/skills/shearbolt. In Codex, type $shearbolt setup.\n" +
+		"Commit .agents/skills/shearbolt to share it with your team.\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("--project: exit = %d, stdout = %q, want %q, stderr = %s", code, out, want, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".agents", "skills", "shearbolt", "SKILL.md")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestSkillInstallForAll(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	claude, codex := filepath.Join(home, ".claude", "skills", "shearbolt"), filepath.Join(home, ".agents", "skills", "shearbolt")
+	code, out, errb := skillCmd(t, "install", "--agent", "all")
+	want := "Installed the Shearbolt skill in " + claude + ". In Claude Code, type /shearbolt setup.\n" +
+		"Installed the Shearbolt skill in " + codex + ". In Codex, type $shearbolt setup.\n"
+	if code != 0 || errb != "" || out != want {
+		t.Fatalf("exit = %d, stdout = %q, want %q, stderr = %s", code, out, want, errb)
+	}
+	a, err := os.ReadFile(filepath.Join(claude, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(codex, "SKILL.md")); err != nil || !bytes.Equal(a, b) {
+		t.Errorf("the two agents got different skills (%v)", err)
+	}
+	code, out, _ = skillCmd(t, "install", "--agent", "all")
+	if want := "The Shearbolt skill in " + claude + " is up to date.\nThe Shearbolt skill in " + codex + " is up to date.\n"; code != 0 || out != want {
+		t.Errorf("second run: exit = %d, stdout = %q, want %q", code, out, want)
+	}
+}
+
+func TestSkillInstallAsksOnATerminal(t *testing.T) {
+	const question = "Install the Shearbolt skill for:\n  1) Claude Code\n  2) Codex\n  3) all\nChoose one [3]: "
+	for stdin, want := range map[string][]string{
+		"1\n":       {".claude"},
+		"2\n":       {".agents"},
+		"3\n":       {".claude", ".agents"},
+		"\n":        {".claude", ".agents"},
+		"codex\n":   {".agents"},
+		"ALL\r\n":   {".claude", ".agents"},
+		"9\n\n":     {".claude", ".agents"},
+		"01\n2\n":   {".agents"},
+		"x\ny\n1\n": {".claude"},
+	} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Chdir(t.TempDir())
+		code, out, errb := skillCmdTTY(t, stdin, "install")
+		if code != 0 || errb != "" || !strings.HasPrefix(out, question) {
+			t.Fatalf("stdin %q: exit = %d, stdout = %q, stderr = %s", stdin, code, out, errb)
+		}
+		for _, d := range []string{".claude", ".agents"} {
+			_, err := os.Stat(filepath.Join(home, d, "skills", "shearbolt", "SKILL.md"))
+			if got := err == nil; got != slices.Contains(want, d) {
+				t.Errorf("stdin %q: %s installed = %v, want %v", stdin, d, got, !got)
+			}
+		}
+	}
+}
+
+func TestSkillInstallAsksInAProject(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	t.Chdir(dir)
+	code, out, errb := skillCmdTTY(t, "2\n", "install", "--project")
+	want := "Installed the Shearbolt skill in .agents/skills/shearbolt. In Codex, type $shearbolt setup.\n" +
+		"Commit .agents/skills/shearbolt to share it with your team.\n"
+	if code != 0 || errb != "" || !strings.HasSuffix(out, "Choose one [3]: "+want) {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %s", code, out, errb)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude")); err == nil {
+		t.Error("answer 2 also installed for Claude Code")
+	}
+}
+
+func TestSkillInstallAsksAgainAfterAnAnswerItCannotUse(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	// The long line counts as two wrong answers: its first 4 KiB, then its rest.
+	code, out, errb := skillCmdTTY(t, strings.Repeat("x", 5000)+"\n1\n", "install")
+	if code != 0 || errb != "" || strings.Count(out, "  Answer with a number from 1 to 3.\n") != 2 {
+		t.Fatalf("exit = %d, stdout = %q, stderr = %s", code, out, errb)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "shearbolt", "SKILL.md")); err != nil {
+		t.Error(err)
+	}
+}
+
+// A person who sends the output to a file would not see the question.
+func TestSkillInstallAsksNothingWhenOutputIsAFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	log, err := os.Create(filepath.Join(t.TempDir(), "log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	var errb bytes.Buffer
+	if code := run([]string{"skill", "install"}, log, &errb, setupDeps(true, "2\n")); code != 0 || errb.Len() != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errb.String())
+	}
+	out, _ := os.ReadFile(log.Name())
+	if want := "Installed the Shearbolt skill in " + filepath.Join(home, ".claude", "skills", "shearbolt") + ". In Claude Code, type /shearbolt setup.\n"; string(out) != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".agents")); err == nil {
+		t.Error("the skill was installed for Codex")
+	}
+}
+
+func TestSkillInstallNamesTheAnswerInItsAdvice(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
+	writeFiles(t, home, map[string]string{".agents/skills/shearbolt/SKILL.md": "---\nname: shearbolt\n---\nsomeone else's\n"})
+	code, _, errb := skillCmdTTY(t, "2\n", "install")
+	if code != 2 || !strings.Contains(errb, "then run shearbolt skill install --agent codex again.") {
+		t.Errorf("exit = %d, stderr = %q", code, errb)
+	}
+}
+
+func TestSkillInstallForCodexInProjectStaysInside(t *testing.T) {
+	for _, agent := range []string{"codex", "all"} {
+		base := t.TempDir()
+		project, outside := filepath.Join(base, "project"), filepath.Join(base, "outside")
+		writeFiles(t, outside, map[string]string{"references/fixing.md": "keep\n"})
+		if err := os.MkdirAll(filepath.Join(project, ".agents", "skills"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(project, ".agents", "skills", "shearbolt")); err != nil {
+			t.Skip(err)
+		}
+		t.Chdir(project)
+		code, out, errb := skillCmd(t, "install", "--project", "--agent", agent)
+		if code != 2 || strings.Contains(out, ".agents") || !strings.Contains(errb, "outside the project") || !strings.Contains(errb, "Nothing was written there.") {
+			t.Errorf("--agent %s: exit = %d, stdout = %q, stderr = %q", agent, code, out, errb)
+		}
+		if b, _ := os.ReadFile(filepath.Join(outside, "references", "fixing.md")); string(b) != "keep\n" {
+			t.Errorf("--agent %s: a file outside the project changed (now %d bytes)", agent, len(b))
+		}
+		if _, err := os.Lstat(filepath.Join(outside, "SKILL.md")); err == nil {
+			t.Errorf("--agent %s: SKILL.md was written outside the project", agent)
+		}
+		_, err := os.Stat(filepath.Join(project, ".claude", "skills", "shearbolt", "SKILL.md"))
+		if got, want := err == nil, agent == "all"; got != want {
+			t.Errorf("--agent %s: installed for Claude Code = %v, want %v", agent, got, want)
+		}
+	}
+}
+
+func TestSkillInstallAsksNothingWithAgentFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	code, out, errb := skillCmdTTY(t, "", "install", "--agent", "claude")
+	if code != 0 || errb != "" || strings.Contains(out, "Choose one") {
+		t.Errorf("exit = %d, stdout = %q, stderr = %s", code, out, errb)
+	}
+}
+
+func TestSkillInstallWithoutAnAnswerWritesNothing(t *testing.T) {
+	for stdin, want := range map[string]string{
+		"":             "stdin was closed",
+		"x\ny\nz\n1\n": "after 3 tries",
+	} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Chdir(t.TempDir())
+		code, _, errb := skillCmdTTY(t, stdin, "install")
+		if code != 2 || !strings.Contains(errb, want) || !strings.Contains(errb, "Nothing was written.") {
+			t.Errorf("stdin %q: exit = %d, stderr = %q, want %q", stdin, code, errb, want)
+		}
+		for _, d := range []string{".claude", ".agents"} {
+			if _, err := os.Stat(filepath.Join(home, d)); err == nil {
+				t.Errorf("stdin %q: %s was written", stdin, d)
+			}
+		}
+	}
+}
+
+func TestSkillInstallForAllNamesTheFolderItRefuses(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeFiles(t, dir, map[string]string{".agents/skills/shearbolt/SKILL.md": "---\nname: shearbolt\n---\nsomeone else's\n"})
+	code, out, errb := skillCmd(t, "install", "--project", "--agent", "all")
+	want := ".agents/skills/shearbolt already holds a SKILL.md that shearbolt did not write; remove or rename that folder, then run shearbolt skill install --project --agent all again."
+	if code != 2 || !strings.Contains(errb, want) {
+		t.Errorf("exit = %d, stderr = %q", code, errb)
+	}
+	if !strings.HasPrefix(out, "Installed the Shearbolt skill in .claude/skills/shearbolt.") || strings.Contains(out, ".agents") {
+		t.Errorf("stdout = %q, want only Claude Code's install", out)
 	}
 }
 

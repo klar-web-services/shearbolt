@@ -19,7 +19,7 @@ a vulnerability that is exploited, likely to be exploited, or already fixed upst
 Usage:
   shearbolt setup [flags]              Add the Shearbolt gate to this repository's CI
   shearbolt scan [flags]               Scan the targets in shearbolt.yaml, or ad-hoc targets
-  shearbolt skill install [--project]  Install the coding-agent skill (/shearbolt setup, /shearbolt fix)
+  shearbolt skill install [flags]      Install the coding-agent skill for Claude Code or Codex
   shearbolt zosia enable|disable       Send this repository's CI reports to Zosia (zosiasec.com), or stop
   shearbolt update                     Update shearbolt to the latest release
   shearbolt version                    Print version information
