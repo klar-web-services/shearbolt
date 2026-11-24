@@ -466,3 +466,7 @@ rm -rf ~/.cache/shearbolt
 ```
 
 If you set `SHEARBOLT_INSTALL_DIR` or `SHEARBOLT_CACHE_DIR`, remove those paths instead; with `XDG_CACHE_HOME` set, the cache is `$XDG_CACHE_HOME/shearbolt`. Also delete `.claude/skills/shearbolt/` or `~/.claude/skills/shearbolt/` if you installed the skill, and the `.shearbolt/` folder in each project. To remove the gate from a project, delete its `shearbolt.yaml` and the steps setup added.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
