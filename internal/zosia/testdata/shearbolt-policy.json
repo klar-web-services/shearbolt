@@ -1,0 +1,28 @@
+{
+  "about": "Shearbolt's policy: its defaults, and which values count as a policy. The same file is in Shearbolt (internal/zosia/testdata) and in Zosia (tests/fixtures); a test on each side reads it, so the two cannot drift apart unnoticed.",
+  "defaults": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 },
+  "valid": [
+    { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 },
+    { "blockKnownExploited": false, "blockEpssAtLeast": 1, "blockFixable": "never", "maxDatabaseAgeHours": 1, "maxExceptionDays": 1 },
+    { "blockKnownExploited": true, "blockEpssAtLeast": 0.001, "blockFixable": "critical", "maxDatabaseAgeHours": 720, "maxExceptionDays": 365 },
+    { "blockKnownExploited": true, "blockEpssAtLeast": 0.5, "blockFixable": "low", "maxDatabaseAgeHours": 24, "maxExceptionDays": 30 },
+    { "blockKnownExploited": true, "blockEpssAtLeast": 0.5, "blockFixable": "medium", "maxDatabaseAgeHours": 24, "maxExceptionDays": 30 },
+    { "blockKnownExploited": true, "blockEpssAtLeast": 0.5, "blockFixable": "high", "maxDatabaseAgeHours": 24, "maxExceptionDays": 30, "somethingNewer": 1 }
+  ],
+  "invalid": [
+    { "why": "not an object", "policy": [] },
+    { "why": "null", "policy": null },
+    { "why": "a key is missing", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48 } },
+    { "why": "blockKnownExploited is no boolean", "policy": { "blockKnownExploited": "yes", "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 } },
+    { "why": "blockEpssAtLeast is 0", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 } },
+    { "why": "blockEpssAtLeast is above 1", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 1.5, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 } },
+    { "why": "blockEpssAtLeast is text", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": "0.1", "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 } },
+    { "why": "blockFixable is no level", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "severe", "maxDatabaseAgeHours": 48, "maxExceptionDays": 90 } },
+    { "why": "maxDatabaseAgeHours is 0", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 0, "maxExceptionDays": 90 } },
+    { "why": "maxDatabaseAgeHours is no whole number", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 47.5, "maxExceptionDays": 90 } },
+    { "why": "maxDatabaseAgeHours is text", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": "48", "maxExceptionDays": 90 } },
+    { "why": "maxExceptionDays is negative", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": -1 } },
+    { "why": "the names are written in another case", "policy": { "BlockKnownExploited": true, "blockepssatleast": 0.1, "BLOCKFIXABLE": "any", "MaxDatabaseAgeHours": 48, "maxexceptiondays": 90 } },
+    { "why": "maxExceptionDays is null", "policy": { "blockKnownExploited": true, "blockEpssAtLeast": 0.1, "blockFixable": "any", "maxDatabaseAgeHours": 48, "maxExceptionDays": null } }
+  ]
+}
