@@ -46,6 +46,9 @@ func Markdown(r *model.Run) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "### %s\n\n", Headline(r))
 	fmt.Fprintf(&b, "Project `%s` · %s · %s\n\n", code(r.Project), plural(len(r.Targets), "target", "targets"), databaseLine(r))
+	if line := PolicyLine(r); line != "" {
+		fmt.Fprintf(&b, "%s\n\n", line)
+	}
 	if len(blocked) > 0 {
 		b.WriteString("#### Must fix before deploying\n\n")
 		ups, repins := Upgrades(blocked), Repins(r, blocked)
@@ -136,6 +139,9 @@ func Text(r *model.Run, color bool) string {
 		head = "1;33"
 	}
 	b.WriteString(paint(head, Headline(r)) + "\n")
+	if line := PolicyLine(r); line != "" {
+		b.WriteString(line + "\n")
+	}
 	if len(blocked) > 0 {
 		b.WriteString("\nMust fix before deploying:\n")
 		for _, f := range blocked {
@@ -211,6 +217,27 @@ func fixedText(f model.Finding) string {
 		return strings.Join(f.FixVersions, " or ")
 	}
 	return "no fix"
+}
+
+// PolicyLine names where the run's policy came from, for a project that takes its policy from
+// Zosia. Every other report stays as it was: the line is empty.
+func PolicyLine(r *model.Run) string {
+	src := r.PolicySource
+	switch src.Zosia {
+	case "":
+		return ""
+	case "used":
+		version := 0
+		if src.Version != nil {
+			version = *src.Version
+		}
+		return fmt.Sprintf("Policy: from Zosia (%s policy, version %d)", clean(src.Scope), version)
+	case "none":
+		return "Policy: shearbolt.yaml (Zosia has no policy for this project)"
+	case "local":
+		return "Policy: shearbolt.yaml (in CI this project takes its policy from Zosia)"
+	}
+	return "Policy: shearbolt.yaml (Zosia's policy could not be fetched, see the warnings)"
 }
 
 func databaseLine(r *model.Run) string {

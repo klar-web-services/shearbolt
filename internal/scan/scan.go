@@ -37,6 +37,10 @@ type Options struct {
 	Env        config.Env
 	DBArchive  string
 	Now        func() time.Time
+	// PolicySource says where Config.Policy came from; empty means the file. Warnings are what the
+	// caller learned before the scan, such as a policy that could not be fetched.
+	PolicySource model.PolicySource
+	Warnings     []model.Diagnostic
 }
 
 type scanned struct {
@@ -70,6 +74,10 @@ func Run(ctx context.Context, o Options) *model.Run {
 		SchemaVersion: "1", RunID: newRunID(start), Project: cfg.Project, StartedAt: start, CIMode: o.CIMode,
 		Shearbolt: buildinfo.Version, Grype: grype.Version, Policy: cfg.Policy, DBArchive: o.DBArchive,
 	}
+	if r.PolicySource = o.PolicySource; r.PolicySource.From == "" {
+		r.PolicySource.From = "file"
+	}
+	r.Warnings = append(r.Warnings, o.Warnings...)
 	r.EvidenceDir = o.OutputDir
 	if r.EvidenceDir == "" {
 		r.EvidenceDir = filepath.Join(o.BaseDir, ".shearbolt", "runs", r.RunID)
@@ -319,7 +327,11 @@ func (s *state) recordDatabase(res *grype.Result) {
 	limit := s.opts.Config.Policy.MaxDatabaseAgeHours
 	if age := s.start.Sub(res.DBBuilt); age > time.Duration(limit)*time.Hour && !s.staleReported {
 		s.staleReported = true
-		s.fail("STALE_DATABASE", "", fmt.Sprintf("the vulnerability data was built %s ago, which is older than policy.maxDatabaseAgeHours (%d). Check that this machine can reach grype.anchore.io, then scan again.", fmt.Sprintf("%.0f hours", age.Hours()), limit))
+		name := "policy.maxDatabaseAgeHours"
+		if s.opts.PolicySource.From == "zosia" {
+			name = "maxDatabaseAgeHours in the policy from Zosia"
+		}
+		s.fail("STALE_DATABASE", "", fmt.Sprintf("the vulnerability data was built %s ago, which is older than %s (%d). Check that this machine can reach grype.anchore.io, then scan again.", fmt.Sprintf("%.0f hours", age.Hours()), name, limit))
 	}
 }
 

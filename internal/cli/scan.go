@@ -16,6 +16,7 @@ import (
 
 	"github.com/klar-web-services/shearbolt/internal/config"
 	"github.com/klar-web-services/shearbolt/internal/grype"
+	"github.com/klar-web-services/shearbolt/internal/model"
 	"github.com/klar-web-services/shearbolt/internal/report"
 	"github.com/klar-web-services/shearbolt/internal/scan"
 	"github.com/klar-web-services/shearbolt/internal/scanlock"
@@ -162,6 +163,11 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 	opts := scan.Options{
 		Config: cfg, BaseDir: cwd, OutputDir: out, CIMode: ciMode, Env: env,
 		DBArchive: d.getenv("SHEARBOLT_DB_ARCHIVE"), Now: d.now,
+		PolicySource: model.PolicySource{From: "default"},
+	}
+	if !adHoc {
+		// May replace cfg.Policy with Zosia's, so it comes before anything reads the policy.
+		opts.PolicySource, opts.Warnings = policyFromZosia(ctx, d, cfg, cfgPath, ciMode)
 	}
 	if opts.DBArchive != "" {
 		// Grype runs in a private folder, so a relative archive path must be made absolute here.

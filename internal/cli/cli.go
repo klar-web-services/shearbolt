@@ -40,6 +40,7 @@ type deps struct {
 	stdinTTY    func() bool
 	version     string
 	sendZosia   func(ctx context.Context, r zosia.Request) (zosia.Result, error)
+	fetchPolicy func(ctx context.Context, r zosia.PolicyRequest) (zosia.PolicyAnswer, error)
 	update      func(version string, stdout, stderr io.Writer) error
 	gh          func(dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error
 }
@@ -62,6 +63,9 @@ func defaultDeps() deps {
 		version:  buildinfo.Version,
 		sendZosia: func(ctx context.Context, r zosia.Request) (zosia.Result, error) {
 			return zosia.Send(ctx, &http.Client{}, zosiaPolicy, r)
+		},
+		fetchPolicy: func(ctx context.Context, r zosia.PolicyRequest) (zosia.PolicyAnswer, error) {
+			return zosia.FetchPolicy(ctx, &http.Client{CheckRedirect: zosia.NoRedirect}, zosiaFetch, r)
 		},
 		update: updateSelf,
 		gh:     runGH,
