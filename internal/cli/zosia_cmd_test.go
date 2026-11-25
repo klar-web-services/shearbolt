@@ -398,6 +398,51 @@ func TestZosiaEnableConnectFlagWithoutATerminal(t *testing.T) {
 	}
 }
 
+// On a terminal too --connect asks nothing and prints no secret: an agent's commands may run in one.
+func TestZosiaEnableConnectFlagOnATerminal(t *testing.T) {
+	gatedRepo(t)
+	gh, z := &fakeGH{repo: ghRepo, secrets: `[{"name":"ZOSIA_SECRET"}]`}, &fakeZosia{}
+	code, out, errb := enableRun{gh: gh, z: z, tty: true, args: []string{"--connect"}}.run(t)
+	if code != 0 || errb != "" || stdinOf(t, gh) != testSecret || strings.Contains(out, "Replace it?") || strings.Contains(out, "Name of the secret") || strings.Contains(out, testSecret) {
+		t.Fatalf("exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
+	}
+	z = &fakeZosia{}
+	code, out, errb = enableRun{gh: &fakeGH{viewErr: errors.New("exit status 4")}, z: z, tty: true, args: []string{"--connect"}}.run(t)
+	if code != 2 || len(z.asks) != 0 || strings.Contains(out, "Make a secret") || !strings.Contains(errb, "GitHub CLI") {
+		t.Errorf("no gh: exit = %d, asked %+v\nstdout: %s\nstderr: %s", code, z.asks, out, errb)
+	}
+}
+
+// With its output in a file or a pipe, enable is not on a terminal, whatever its input is: it makes
+// no secret, since it could not show one.
+func TestZosiaEnableWithItsOutputInAFileMakesNoSecret(t *testing.T) {
+	gatedRepo(t)
+	f, err := os.Create(filepath.Join(t.TempDir(), "out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	z := &fakeZosia{}
+	d := setupDeps(true, "y\n\n")
+	d.gh, d.connectZosia, d.zosiaPlan = (&fakeGH{viewErr: errors.New("exit status 4")}).run, z.connect, z.room
+	d.getenv = func(string) string { return "" }
+	var errb bytes.Buffer
+	code := run([]string{"zosia", "enable"}, f, &errb, d)
+	out, _ := os.ReadFile(f.Name())
+	if code != 0 || len(z.asks) != 0 || strings.Contains(string(out), "Make a secret") || !strings.Contains(string(out), manualNote) {
+		t.Errorf("exit = %d, asked %+v\nstdout: %s\nstderr: %s", code, z.asks, out, errb.String())
+	}
+}
+
+func TestZosiaEnableAsksAgainForANameThatIsTooLong(t *testing.T) {
+	gatedRepo(t)
+	z := &fakeZosia{}
+	_, out, _ := enableRun{gh: &fakeGH{repo: ghRepo, secrets: "[]"}, z: z, tty: true, stdin: strings.Repeat("n", 65) + "\nweb\n"}.run(t)
+	if len(z.asks) != 1 || z.asks[0].SecretName != "web" || !strings.Contains(out, "At most 64 characters.") {
+		t.Errorf("asked %+v\n%s", z.asks, out)
+	}
+}
+
 func TestZosiaEnableWithTheSecretOfTheEnvironment(t *testing.T) {
 	gatedRepo(t)
 	for _, tty := range []bool{true, false} {
@@ -406,6 +451,27 @@ func TestZosiaEnableWithTheSecretOfTheEnvironment(t *testing.T) {
 		if code != 0 || gh.set() != nil || len(z.asks) != 0 || len(z.plans) != 1 || z.plans[0].Secret != "zosia_env" || strings.Contains(out, "zosia_env") || !strings.Contains(out, manualNote) {
 			t.Errorf("terminal %v: exit = %d, asked %+v, plans %+v\nstdout: %s", tty, code, z.asks, z.plans, out)
 		}
+	}
+}
+
+// The secret of the environment goes to the address in ZOSIA_URL as well: that is said, and an
+// address that is not https is not asked at all, unless it is this machine.
+func TestZosiaEnableWithASecretAndAnotherAddress(t *testing.T) {
+	gatedRepo(t)
+	z := &fakeZosia{}
+	_, out, _ := enableRun{z: z, env: map[string]string{"ZOSIA_SECRET": "zosia_env", "ZOSIA_URL": "https://staging.example"}}.run(t)
+	if len(z.plans) != 1 || !strings.Contains(out, "ZOSIA_URL is set: this asks staging.example, not https://zosiasec.com.") {
+		t.Errorf("https: plans %+v\n%s", z.plans, out)
+	}
+	z = &fakeZosia{}
+	_, out, _ = enableRun{z: z, env: map[string]string{"ZOSIA_SECRET": "zosia_env", "ZOSIA_URL": "http://staging.example"}}.run(t)
+	if len(z.plans) != 0 || !strings.Contains(out, "was not checked: ZOSIA_URL is not an https address") {
+		t.Errorf("http: plans %+v\n%s", z.plans, out)
+	}
+	z = &fakeZosia{}
+	code, out, _ := enableRun{gh: &fakeGH{repo: ghRepo, secrets: "[]"}, z: z, tty: true, stdin: "\n", env: map[string]string{"ZOSIA_URL": "http://staging.example"}}.run(t)
+	if code != 0 || len(z.asks) != 0 || !strings.Contains(out, "No secret was made: ZOSIA_URL is not an https address") || !strings.Contains(out, manualNote) {
+		t.Errorf("connect over http: exit = %d, asked %+v\n%s", code, z.asks, out)
 	}
 }
 
@@ -429,12 +495,17 @@ func TestRemoteNameIsHostAndPathOnly(t *testing.T) {
 		"https://gitlab.example.org/group/sub/app.git?x=1":  {"gitlab.example.org", "group/sub/app"},
 		"git@github.com:acme/shop.git":                      {"github.com", "acme/shop"},
 		"ssh://git@bitbucket.org:22/acme/shop.git":          {"bitbucket.org", "acme/shop"},
-		"":                 {"", ""},
-		"../elsewhere":     {"", ""},
-		"/srv/git/shop":    {"", ""},
-		"https://host/":    {"", ""},
-		"git@host:a b.git": {"", ""},
-		"file:///srv/shop": {"", ""},
+		// Without a scheme everything after the first colon would be the path: what is no path is refused.
+		"user:tok@host/org/repo":       {"", ""},
+		"git@host:a/b?token=x":         {"", ""},
+		"https://h/a/b%1b[31m":         {"", ""},
+		"git@host:org/re\x1b[2Jpo.git": {"", ""},
+		"":                             {"", ""},
+		"../elsewhere":                 {"", ""},
+		"/srv/git/shop":                {"", ""},
+		"https://host/":                {"", ""},
+		"git@host:a b.git":             {"", ""},
+		"file:///srv/shop":             {"", ""},
 	} {
 		if host, path := remoteName(url); host != want[0] || path != want[1] {
 			t.Errorf("%q: %q %q, want %q", url, host, path, want)
@@ -574,6 +645,67 @@ func TestZosiaEnableProjectsFlags(t *testing.T) {
 	}
 }
 
+// Nothing the user could answer would fit: there is no selection, on a terminal or without one.
+func TestZosiaEnableAsksForNoSelectionThatCannotFit(t *testing.T) {
+	dir := monoRepo(t)
+	const none = "Your Free plan in Zosia allows 3 projects, and all of them are in use, none by this repository. Its projects' reports are refused until you remove a project in Zosia or change your plan."
+	for _, tty := range []bool{true, false} {
+		code, out, errb := enableRun{z: &fakeZosia{plan: free(3, false)}, tty: tty, env: envSecret, stdin: "1\n"}.run(t)
+		if code != 0 || errb != "" || len(off(t, dir)) != 0 || strings.Contains(out, "Select the projects") || !strings.Contains(out, none) {
+			t.Errorf("terminal %v: exit = %d, off %v\nstdout: %s\nstderr: %s", tty, code, off(t, dir), out, errb)
+		}
+	}
+}
+
+// A project whose shearbolt.yaml the editor refuses cannot be switched off: it is marked, it sends
+// whatever is chosen, and --projects has to name it.
+func TestZosiaEnableWithAProjectThatCannotBeSwitchedOff(t *testing.T) {
+	dir := monoRepo(t)
+	api := filepath.Join(dir, "apps/api/shearbolt.yaml")
+	src, err := os.ReadFile(api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A block in flow style, which is not edited.
+	if err := os.WriteFile(api, append(src, "zosia: {policy: false}\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Room for two: the fixed one and one more.
+	z := &fakeZosia{plan: free(1, false)}
+	code, out, errb := enableRun{z: z, tty: true, env: envSecret, stdin: "2,3\n3\n"}.run(t)
+	if code != 0 || errb != "" || !slices.Equal(off(t, dir), []string{"apps/web/shearbolt.yaml"}) {
+		t.Fatalf("exit = %d, off %v\nstdout: %s\nstderr: %s", code, off(t, dir), out, errb)
+	}
+	for _, s := range []string{"  1. api  apps/api/shearbolt.yaml  (always sends: ", "That is 3 projects, of which 3 need a place, and the plan has room for 2."} {
+		if !strings.Contains(out, s) {
+			t.Errorf("stdout lacks %q:\n%s", s, out)
+		}
+	}
+	code, _, errb = enableRun{z: z, env: envSecret, args: []string{"--projects", "apps/web/shearbolt.yaml"}}.run(t)
+	if code != 2 || !strings.Contains(errb, "apps/api/shearbolt.yaml cannot be switched off") || !strings.Contains(errb, "so it has to be among --projects") {
+		t.Errorf("--projects without it: exit = %d\nstderr: %s", code, errb)
+	}
+	// No room even for it: nothing to select.
+	for _, tty := range []bool{true, false} {
+		code, out, _ = enableRun{z: &fakeZosia{plan: free(3, false)}, tty: tty, env: envSecret}.run(t)
+		if code != 0 || strings.Contains(out, "Select the projects") || !strings.Contains(out, "all of them are in use") {
+			t.Errorf("no room, terminal %v: exit = %d\n%s", tty, code, out)
+		}
+	}
+	// Two that cannot be switched off and room for one of them.
+	web := filepath.Join(dir, "apps/web/shearbolt.yaml")
+	if src, err = os.ReadFile(web); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(web, append(bytes.ReplaceAll(src, []byte("zosia:\n  send: false\n"), nil), "zosia: {policy: false}\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = enableRun{z: &fakeZosia{plan: free(2, false)}, env: envSecret}.run(t)
+	if code != 0 || strings.Contains(out, "Select the projects") || !strings.Contains(out, "that cannot be switched off need more than the 1 left") {
+		t.Errorf("two fixed, room for one: exit = %d\n%s", code, out)
+	}
+}
+
 func TestZosiaEnableOneProjectWithoutRoom(t *testing.T) {
 	gatedRepo(t)
 	if code, _, _ := zosiaCmd(t, "enable"); code != 0 {
@@ -581,7 +713,7 @@ func TestZosiaEnableOneProjectWithoutRoom(t *testing.T) {
 	}
 	code, out, _ := enableRun{z: &fakeZosia{plan: free(3, false)}, tty: true, env: envSecret}.run(t)
 	if code != 0 || strings.Contains(out, "Select the projects") ||
-		!strings.Contains(out, "Your Free plan in Zosia allows 3 projects, and all of them are in use. This project's reports are refused until you remove a project in Zosia or change your plan.") {
+		!strings.Contains(out, "Your Free plan in Zosia allows 3 projects, and all of them are in use, none by this project. Its reports are refused until you remove a project in Zosia or change your plan.") {
 		t.Errorf("exit = %d\nstdout: %s", code, out)
 	}
 }

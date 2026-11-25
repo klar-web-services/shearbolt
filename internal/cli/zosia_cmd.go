@@ -57,9 +57,9 @@ Run it in the repository root, after "shearbolt setup" has added the gate.
   --all-projects
            Every project sends: removes each "send: false".
   --connect
-           Makes the secret without a terminal: prints the link and the code and waits. It asks
-           nothing, replaces a secret that is there, and needs gh to store the secret, which it
-           never prints.
+           Makes the secret without asking anything, with or without a terminal: prints the link
+           and the code and waits. It replaces a secret that is there, and needs gh to store the
+           new one, which it never prints.
   --secret-name <name>
            The name of the secret in Zosia, in place of the question. At most 64 characters.
 

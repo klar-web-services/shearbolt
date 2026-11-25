@@ -65,7 +65,9 @@ type zosiaCI struct {
 }
 
 func (s setupRun) zosiaCI(root string, p *plan.Plan, o zosiaOpts) zosiaCI {
-	c := zosiaCI{terminal: s.canPaste(), secret: strings.TrimSpace(s.d.getenv("ZOSIA_SECRET"))}
+	// With --connect it behaves as without a terminal wherever it runs: it asks nothing and shows no
+	// secret. An agent's commands may well run in a terminal.
+	c := zosiaCI{terminal: s.canPaste() && !o.connect, secret: strings.TrimSpace(s.d.getenv("ZOSIA_SECRET"))}
 	c.repo, c.has, c.known = s.secretRepo(root, p)
 	c.connect = c.secret == "" && (c.terminal || o.connect)
 	return c
@@ -87,7 +89,7 @@ func (s setupRun) zosiaConnect(root string, p *plan.Plan, o zosiaOpts, c zosiaCI
 		fmt.Fprintf(s.stdout, "\nZOSIA_SECRET is already set for %s, so there is no secret to add. Shearbolt cannot read it or check that Zosia still knows it: the scan log of the next CI run says whether the report was sent. `gh secret set ZOSIA_SECRET` replaces it.\n", termSafe(c.repo, false))
 	}
 	if code == 0 {
-		code = s.zosiaProjects(root, o, secret, c.terminal, in)
+		code = s.zosiaProjects(root, o, secret, c.connect, c.terminal, in)
 	}
 	return code
 }
@@ -107,12 +109,20 @@ func (s setupRun) zosiaAfterSetup(root string, in *bufio.Reader) int {
 	return s.zosiaConnect(root, p, o, c, in, nil)
 }
 
-// zosiaTarget is where connect and the plan request go: where reports go.
-func (s setupRun) zosiaTarget() string {
-	if url := s.d.getenv("ZOSIA_URL"); url != "" {
-		return url
+// zosiaTarget is where connect and the plan request go: where reports go. problem says why
+// nothing may be sent there: a secret travels in these requests, so the address is https, or this
+// machine.
+func (s setupRun) zosiaTarget() (url, problem string) {
+	url = s.d.getenv("ZOSIA_URL")
+	if url == "" {
+		return zosia.DefaultURL, ""
 	}
-	return zosia.DefaultURL
+	u, err := neturl.Parse(url)
+	local := err == nil && (u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" || u.Hostname() == "::1")
+	if err != nil || u.Host == "" || u.Scheme != "https" && !(u.Scheme == "http" && local) {
+		return url, "ZOSIA_URL is not an https address"
+	}
+	return url, ""
 }
 
 // zosiaSaid is a failed request in words: Zosia's code and message, or the error.
@@ -160,16 +170,29 @@ func (s setupRun) zosiaSecret(root string, p *plan.Plan, repo string, has, known
 		if r := []rune(ask.SecretName); len(r) > maxSecretName {
 			ask.SecretName = string(r[:maxSecretName])
 		}
-		if terminal {
+		for terminal {
 			fmt.Fprintf(out, "\nName of the secret in Zosia [%s]: ", termSafe(ask.SecretName, false))
-			if line, _ := readLine(in); line != "" {
+			line, _ := readLine(in)
+			if len([]rune(line)) > maxSecretName {
+				fmt.Fprintf(out, "At most %d characters.\n", maxSecretName)
+				continue
+			}
+			if line != "" {
 				ask.SecretName = line
 			}
+			break
 		}
 	}
-	url := s.zosiaTarget()
+	url, problem := s.zosiaTarget()
+	if problem != "" {
+		fmt.Fprintln(out, "\nNo secret was made: "+problem+".")
+		if !terminal {
+			return "", false, 2
+		}
+		return "", false, 0
+	}
 	if url != zosia.DefaultURL {
-		fmt.Fprintf(out, "\nZOSIA_URL is set: this connects to %s, not %s.\n", hostOf(url), zosia.DefaultURL)
+		fmt.Fprintf(out, "\nZOSIA_URL is set: this connects to %s, not %s.\n", termSafe(hostOf(url), false), zosia.DefaultURL)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
@@ -234,7 +257,9 @@ func cmp(values ...string) string {
 var (
 	scpRemote  = regexp.MustCompile(`^(?:[^@/\s]+@)?([^:/\s]+):([^\s]+)$`)
 	remoteHost = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*$`)
-	remotePath = regexp.MustCompile(`^[^\s/]+(?:/[^\s/]+)+$`)
+	// Two or more segments of the characters a repository's path is made of. What a remote without a
+	// scheme may carry after its first colon (a password and a host, a query) holds others.
+	remotePath = regexp.MustCompile(`^[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)+$`)
 )
 
 // remoteName is the host name and the path of a git remote's URL, as a CI names the repository
@@ -274,13 +299,13 @@ func countOf(n int, one string) string {
 // zosiaProjects decides which of the repository's projects send to Zosia: as the flags say, or,
 // when the plan has no room for all that send, as the user selects. Without a secret there is no
 // plan to ask, and only the flags count.
-func (s setupRun) zosiaProjects(root string, o zosiaOpts, secret string, terminal bool, in *bufio.Reader) int {
+func (s setupRun) zosiaProjects(root string, o zosiaOpts, secret string, connected, terminal bool, in *bufio.Reader) int {
 	if secret == "" && o.projects == nil && !o.all {
 		return 0
 	}
 	out := s.stdout
 	fail := func(msg string) int {
-		fmt.Fprintln(s.stderr, "shearbolt zosia: "+msg)
+		fmt.Fprintln(s.stderr, "shearbolt zosia: "+termSafe(msg, false))
 		return 2
 	}
 	projects, _, err := setup.ZosiaProjects(root)
@@ -289,8 +314,14 @@ func (s setupRun) zosiaProjects(root string, o zosiaOpts, secret string, termina
 	}
 	host, path := remoteName(s.d.gitRemote(root))
 	var answer *zosia.PlanAnswer
-	if secret != "" {
-		r := zosia.PlanRequest{URL: s.zosiaTarget(), Secret: secret, Client: "shearbolt", Version: s.d.version}
+	if url, problem := s.zosiaTarget(); secret != "" && problem != "" {
+		fmt.Fprintf(out, "\nYour plan's room for projects in Zosia was not checked: %s.\n", problem)
+	} else if secret != "" {
+		// When this run connected, that was said there.
+		if url != zosia.DefaultURL && !connected {
+			fmt.Fprintf(out, "\nZOSIA_URL is set: this asks %s, not %s.\n", termSafe(hostOf(url), false), zosia.DefaultURL)
+		}
+		r := zosia.PlanRequest{URL: url, Secret: secret, Client: "shearbolt", Version: s.d.version}
 		if host != "" {
 			r.Server, r.Repository = "https://"+host, path
 		}
@@ -369,20 +400,31 @@ func (s setupRun) zosiaProjects(root string, o zosiaOpts, secret string, termina
 	if _, need := places(func(pr setup.ZosiaProject) bool { return pr.Sends }); room < 0 || need <= room {
 		return 0
 	}
-	if len(projects) == 1 {
-		fmt.Fprintf(out, "\nYour %s plan in Zosia allows %s, and all of them are in use. This project's reports are refused until you remove a project in Zosia or change your plan.\n",
-			termSafe(answer.Plan, false), countOf(*answer.MaxProjects, "project"))
-		return 0
-	}
 	var list []setup.ZosiaProject
-	sends := 0
+	sends, known := 0, false
 	for _, pr := range projects {
 		if pr.Sends || pr.Off {
 			list = append(list, pr)
+			known = known || slices.Contains(answer.Here, pr.Config)
 		}
 		if pr.Sends {
 			sends++
 		}
+	}
+	// No answer could fit when the plan is full and holds none of these projects, and none when the
+	// projects that cannot be switched off need more than there is: then there is nothing to select.
+	if _, need := places(fixed); room == 0 && !known || need > room {
+		whose := "none by this repository. Its projects' reports are"
+		if len(list) == 1 {
+			whose = "none by this project. Its reports are"
+		}
+		full := "and all of them are in use, " + whose
+		if room > 0 {
+			full = fmt.Sprintf("and the projects of this repository that cannot be switched off need more than the %d left. Their reports are", room)
+		}
+		fmt.Fprintf(out, "\nYour %s plan in Zosia allows %s, %s refused until you remove a project in Zosia or change your plan.\n",
+			termSafe(answer.Plan, false), countOf(*answer.MaxProjects, "project"), full)
+		return 0
 	}
 	elsewhere := ""
 	switch others := answer.Projects - len(answer.Here); {
@@ -411,10 +453,6 @@ func (s setupRun) zosiaProjects(root string, o zosiaOpts, secret string, termina
 	if !terminal {
 		fmt.Fprintln(out, "Run `shearbolt zosia enable --projects <path>[,<path>...]` with the paths of the projects that send.")
 		return 3
-	}
-	if _, need := places(fixed); need > room {
-		fmt.Fprintln(out, "The projects that always send need more places than the plan has, so there is nothing to select.")
-		return 0
 	}
 	for {
 		fmt.Fprint(out, "Numbers of the projects that send, separated by commas (nothing: decide later): ")

@@ -306,6 +306,11 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 		}
 	}
 	notes = append(notes, zosiaNotes(o.Answers["zosia"], files, gates)...)
+	for i := range notes {
+		if notes[i].Code == "ZOSIA_SECRET" {
+			notes[i].Message += " Or run `shearbolt zosia enable` in a terminal once this is written: it has Zosia make the secret, and stores it where it can."
+		}
+	}
 	if m.sendsToZosia() {
 		for i := range notes {
 			if notes[i].Code == "ZOSIA_SECRET" {
