@@ -39,7 +39,7 @@ func TestReportToZosiaSendsWithASecret(t *testing.T) {
 		return zosia.Result{URL: "https://zosiasec.com/app/reports/1"}, nil
 	})
 	var stderr bytes.Buffer
-	reportToZosia(context.Background(), d, &stderr, &model.Run{RunID: "r1"}, "/w/apps/web/shearbolt.yaml", []string{"web", "source", "web"})
+	reportToZosia(context.Background(), d, &stderr, &model.Run{RunID: "r1"}, "/w/apps/web/shearbolt.yaml", []string{"web", "source", "web"}, true)
 	if stderr.String() != "Zosia: report sent: https://zosiasec.com/app/reports/1\n" {
 		t.Fatalf("stderr %q", stderr.String())
 	}
@@ -62,7 +62,7 @@ func TestReportToZosiaWithoutASecretSaysNothing(t *testing.T) {
 		return zosia.Result{}, nil
 	})
 	var stderr bytes.Buffer
-	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil)
+	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil, true)
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr %q", stderr.String())
 	}
@@ -73,7 +73,7 @@ func TestReportToZosiaFailureIsOneLineWithoutTheSecret(t *testing.T) {
 		return zosia.Result{}, &zosia.Error{Code: "PLAN_LIMIT", Message: "Your plan allows 5 repositories."}
 	})
 	var stderr bytes.Buffer
-	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil)
+	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil, true)
 	if stderr.String() != "Zosia: report not sent (PLAN_LIMIT): Your plan allows 5 repositories.\n" || strings.Contains(stderr.String(), "zosia_x") {
 		t.Fatalf("stderr %q", stderr.String())
 	}
@@ -82,8 +82,26 @@ func TestReportToZosiaFailureIsOneLineWithoutTheSecret(t *testing.T) {
 func TestReportToZosiaUnknownCI(t *testing.T) {
 	d := zosiaDeps(map[string]string{"CI": "true", "ZOSIA_SECRET": "zosia_x"}, nil)
 	var stderr bytes.Buffer
-	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil)
+	reportToZosia(context.Background(), d, &stderr, &model.Run{}, "shearbolt.yaml", nil, true)
 	if stderr.String() != "Zosia: report not sent: unknown CI, so the repository cannot be named\n" {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+}
+
+func TestReportToZosiaNotSentForAProjectThatSaysSo(t *testing.T) {
+	sent := func(context.Context, zosia.Request) (zosia.Result, error) {
+		t.Fatal("sent for a project with zosia: {send: false}")
+		return zosia.Result{}, nil
+	}
+	var stderr bytes.Buffer
+	reportToZosia(context.Background(), zosiaDeps(githubEnv(map[string]string{"ZOSIA_SECRET": "zosia_x"}), sent), &stderr, &model.Run{}, "shearbolt.yaml", nil, false)
+	if stderr.String() != "Zosia: not sent, shearbolt.yaml says zosia: {send: false}\n" {
+		t.Fatalf("stderr %q", stderr.String())
+	}
+	// Without a secret nothing would have been sent, so nothing is said.
+	stderr.Reset()
+	reportToZosia(context.Background(), zosiaDeps(githubEnv(nil), sent), &stderr, &model.Run{}, "shearbolt.yaml", nil, false)
+	if stderr.Len() != 0 {
 		t.Fatalf("stderr %q", stderr.String())
 	}
 }

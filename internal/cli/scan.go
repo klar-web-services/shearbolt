@@ -204,7 +204,7 @@ func runScan(args []string, stdout, stderr io.Writer, d deps) int {
 		fmt.Fprint(stdout, report.Text(result, d.color(stdout)))
 	}
 	if ciMode && !adHoc {
-		reportToZosia(ctx, d, stderr, result, cfgPath, only)
+		reportToZosia(ctx, d, stderr, result, cfgPath, only, cfg.Zosia.Sends())
 	}
 	return result.ExitCode
 }

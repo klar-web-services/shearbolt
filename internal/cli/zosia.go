@@ -87,11 +87,16 @@ func hostOf(raw string) string {
 	return "another address"
 }
 
-// reportToZosia sends a CI scan's result when ZOSIA_SECRET is set. It only ever writes one line
-// to stderr; the scan's exit code is decided before and never changes here.
-func reportToZosia(ctx context.Context, d deps, stderr io.Writer, result *model.Run, configPath string, only []string) {
+// reportToZosia sends a CI scan's result when ZOSIA_SECRET is set, unless the project's
+// shearbolt.yaml says it does not send (sends is false). It only ever writes one line to stderr;
+// the scan's exit code is decided before and never changes here.
+func reportToZosia(ctx context.Context, d deps, stderr io.Writer, result *model.Run, configPath string, only []string, sends bool) {
 	secret := strings.TrimSpace(d.getenv("ZOSIA_SECRET"))
 	if secret == "" {
+		return
+	}
+	if !sends {
+		fmt.Fprintln(stderr, "Zosia: not sent, shearbolt.yaml says zosia: {send: false}")
 		return
 	}
 	notSent := func(format string, a ...any) { fmt.Fprintf(stderr, "Zosia: report not sent"+format+"\n", a...) }

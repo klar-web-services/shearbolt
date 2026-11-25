@@ -573,3 +573,25 @@ func TestLoadComposeTargetValidation(t *testing.T) {
 		t.Errorf("exclude = %q", got)
 	}
 }
+
+func TestZosiaSendIsOnUnlessTheFileSaysNo(t *testing.T) {
+	const base = "version: 1\nproject: p\ntargets:\n  - name: repo\n    source: .\n"
+	for content, want := range map[string]bool{
+		base:                                             true,
+		base + "zosia:\n  policy: true\n":                true,
+		base + "zosia:\n  send: true\n":                  true,
+		base + "zosia:\n  send: false\n":                 false,
+		base + "zosia:\n  policy: true\n  send: false\n": false,
+	} {
+		cfg, err := Load(write(t, content), env(nil), now)
+		if err != nil {
+			t.Fatalf("%q: %v", content, err)
+		}
+		if cfg.Zosia.Sends() != want {
+			t.Errorf("%q: Zosia.Sends() = %v, want %v", content, cfg.Zosia.Sends(), want)
+		}
+	}
+	if _, err := Load(write(t, base+"zosia:\n  send: never\n"), env(nil), now); err == nil || !strings.Contains(err.Error(), "line 7: expected true or false") {
+		t.Errorf("error %v", err)
+	}
+}

@@ -26,12 +26,18 @@ type Config struct {
 	Dir        string      `yaml:"-"`
 }
 
-// Zosia is what the project lets Zosia (https://zosiasec.com) decide. With Policy, a CI scan asks
-// Zosia for the policy and uses it in place of the policy block; the block stays for every scan
-// that gets no policy from there.
+// Zosia is what the project has to do with Zosia (https://zosiasec.com). With Policy, a CI scan
+// asks Zosia for the policy and uses it in place of the policy block; the block stays for every
+// scan that gets no policy from there. Send set to false keeps the project's reports from Zosia,
+// whatever secret the scan has: an account's plan has room for so many projects, and this is how
+// a repository says which of its projects are not among them.
 type Zosia struct {
-	Policy bool `yaml:"policy"`
+	Policy bool  `yaml:"policy"`
+	Send   *bool `yaml:"send"`
 }
+
+// Sends reports whether the project's CI scans send their reports: yes, unless the file says no.
+func (z Zosia) Sends() bool { return z.Send == nil || *z.Send }
 
 type Target struct {
 	Name             string   `yaml:"name" json:"name"`
