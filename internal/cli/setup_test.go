@@ -20,6 +20,7 @@ import (
 	"github.com/klar-web-services/shearbolt/internal/setup"
 	"github.com/klar-web-services/shearbolt/internal/setup/plan"
 	"github.com/klar-web-services/shearbolt/internal/testutil"
+	"github.com/klar-web-services/shearbolt/internal/zosia"
 )
 
 const (
@@ -47,6 +48,14 @@ func setupDeps(tty bool, stdin string) deps {
 	d.gh = func(string, io.Reader, io.Writer, io.Writer, ...string) error {
 		return errors.New("setup tests must not run the GitHub CLI")
 	}
+	d.connectZosia = func(context.Context, string, string, zosia.ConnectAsk, func(zosia.ConnectRequest)) (string, string, error) {
+		return "", "", errors.New("setup tests must not reach Zosia")
+	}
+	d.zosiaPlan = func(context.Context, zosia.PlanRequest) (zosia.PlanAnswer, error) {
+		return zosia.PlanAnswer{}, errors.New("setup tests must not reach Zosia")
+	}
+	d.hostname = func() string { return "test-host" }
+	d.gitRemote = func(string) string { return "" }
 	return d
 }
 

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/klar-web-services/shearbolt/internal/buildinfo"
@@ -43,6 +44,13 @@ type deps struct {
 	fetchPolicy func(ctx context.Context, r zosia.PolicyRequest) (zosia.PolicyAnswer, error)
 	update      func(version string, stdout, stderr io.Writer) error
 	gh          func(dir string, stdin io.Reader, stdout, stderr io.Writer, args ...string) error
+	// connectZosia has Zosia make a secret for a repository: it starts a request, hands it to
+	// started for showing the link and the code, and waits until a signed-in person approves it.
+	connectZosia func(ctx context.Context, url, agent string, ask zosia.ConnectAsk, started func(zosia.ConnectRequest)) (secret, name string, err error)
+	zosiaPlan    func(ctx context.Context, r zosia.PlanRequest) (zosia.PlanAnswer, error)
+	hostname     func() string
+	// gitRemote is the URL of the repository's remote "origin", or "" when it has none.
+	gitRemote func(dir string) string
 }
 
 func defaultDeps() deps {
@@ -69,6 +77,31 @@ func defaultDeps() deps {
 		},
 		update: updateSelf,
 		gh:     runGH,
+		connectZosia: func(ctx context.Context, url, agent string, ask zosia.ConnectAsk, started func(zosia.ConnectRequest)) (string, string, error) {
+			hc := &http.Client{Timeout: 30 * time.Second, CheckRedirect: zosia.NoRedirect}
+			r, err := zosia.StartConnect(ctx, hc, url, agent, ask)
+			if err != nil {
+				return "", "", err
+			}
+			started(r)
+			return zosia.WaitConnect(ctx, hc, url, agent, r)
+		},
+		zosiaPlan: func(ctx context.Context, r zosia.PlanRequest) (zosia.PlanAnswer, error) {
+			return zosia.FetchPlan(ctx, &http.Client{Timeout: 30 * time.Second, CheckRedirect: zosia.NoRedirect}, r)
+		},
+		hostname: func() string {
+			h, _ := os.Hostname()
+			return h
+		},
+		gitRemote: func(dir string) string {
+			cmd := exec.Command("git", "remote", "get-url", "origin")
+			cmd.Dir = dir
+			out, err := cmd.Output()
+			if err != nil {
+				return ""
+			}
+			return string(out)
+		},
 	}
 }
 
