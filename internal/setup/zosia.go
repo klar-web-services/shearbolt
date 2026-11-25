@@ -130,8 +130,9 @@ func Zosia(root string, on, policy bool) *plan.Plan {
 		p.Changes = append(p.Changes, changes...)
 		for _, n := range notes {
 			// Plain disable says what it removed, and what it found and could not remove. What it could
-			// not look at is said only to who asked about the policy.
-			if policy || n.Code != "ZOSIA_POLICY_BY_HAND" {
+			// not look at is said only to who asked about the policy, and a line that keeps a project
+			// from sending only to who turned sending off.
+			if policy && n.Code != "ZOSIA_SEND_KEPT" || !policy && n.Code != "ZOSIA_POLICY_BY_HAND" {
 				p.Notes = append(p.Notes, n)
 			}
 		}
@@ -145,20 +146,22 @@ func Zosia(root string, on, policy bool) *plan.Plan {
 }
 
 const (
-	zosiaPolicyBlock = "zosia:\n  policy: true"
 	zosiaPolicySince = "1.11.0"
+	zosiaSendSince   = "1.12.0"
 )
 
-// zosiaPolicy adds the zosia block to (on), or removes it from, each shearbolt.yaml that one of
-// the gates reads. A file is left alone, with a note, when it is not certain that a gate reads
+// zosiaPolicy adds `policy: true` to the zosia block of (on), or removes it from, each
+// shearbolt.yaml that one of the gates reads. A `send: false` in the block stays. A file is left alone, with a note, when it is not certain that a gate reads
 // it, when it cannot be edited safely, or when a gate that reads it pins a Shearbolt release
 // that would fail on the block.
 func zosiaPolicy(r plan.Repo, abs string, gates []plan.GateCmd, on bool) ([]plan.FileChange, []plan.Note, error) {
 	var changes []plan.FileChange
 	var notes []plan.Note
 	byHand := "Add these two lines to the shearbolt.yaml it reads by hand: `zosia:` and, indented below it, `policy: true`."
+	value := "true"
 	if !on {
-		byHand = "Remove the zosia block from the shearbolt.yaml it reads by hand, if it has one."
+		value = ""
+		byHand = "Remove the policy line of the zosia block from the shearbolt.yaml it reads by hand, if it has one."
 	}
 	var configs []string
 	old := map[string]bool{}
@@ -193,7 +196,7 @@ func zosiaPolicy(r plan.Repo, abs string, gates []plan.GateCmd, on bool) ([]plan
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s cannot be read: %v", f, err)
 		}
-		out, state, err := setZosiaPolicy(src, on)
+		out, state, err := setZosiaKey(src, "policy", value)
 		switch {
 		case err != nil && !on && !bytes.Contains(src, []byte("zosia")):
 			// Nothing in it names Zosia, so there is no block to tell about.
@@ -208,8 +211,13 @@ func zosiaPolicy(r plan.Repo, abs string, gates []plan.GateCmd, on bool) ([]plan
 			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_ALREADY", File: f, Message: "this project already takes its policy from Zosia."})
 		case state == "added":
 			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_ADDED", File: f, Message: "added the zosia block: CI scans of this project now ask Zosia for the policy."})
+		case state == "removed" && readZosiaKeys(out).Send != nil:
+			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_REMOVED", File: f, Message: "removed `policy: true` from the zosia block: this project uses the policy in this file again."})
 		case state == "removed":
 			notes = append(notes, plan.Note{Code: "ZOSIA_POLICY_REMOVED", File: f, Message: "removed the zosia block: this project uses the policy in this file again."})
+		}
+		if send := readZosiaKeys(out).Send; !on && send != nil && !*send {
+			notes = append(notes, plan.Note{Code: "ZOSIA_SEND_KEPT", File: f, Message: "this file still says `zosia: {send: false}`, and that line stays: the project's reports are not sent, whatever secret a scan has. `shearbolt zosia enable --all-projects` removes it."})
 		}
 		added = added || (on && err == nil)
 		if !bytes.Equal(out, src) {
@@ -227,33 +235,54 @@ func zosiaPolicy(r plan.Repo, abs string, gates []plan.GateCmd, on bool) ([]plan
 	return changes, notes, nil
 }
 
-// setZosiaPolicy returns src with the zosia block added (on) or removed, and what it did:
-// "added", "removed", "already", or "" when there was nothing to remove.
-func setZosiaPolicy(src []byte, on bool) ([]byte, string, error) {
+// zosiaKeys is what the zosia block of a shearbolt.yaml says; a key that is not there is nil.
+type zosiaKeys struct {
+	Policy *bool `yaml:"policy"`
+	Send   *bool `yaml:"send"`
+}
+
+// readZosiaKeys reads the block; a file that cannot be read as one has no keys.
+func readZosiaKeys(src []byte) zosiaKeys {
+	var f struct {
+		Zosia zosiaKeys `yaml:"zosia"`
+	}
+	if yaml.Unmarshal(src, &f) != nil {
+		return zosiaKeys{}
+	}
+	return f.Zosia
+}
+
+// setZosiaKey returns src with key of the zosia block ("policy" or "send") set to value, or
+// removed when value is "", and what it did: "added", "removed", "already", or "" when there was
+// nothing to remove. The block is made for its first key and goes with its last; another key in
+// it is not touched.
+func setZosiaKey(src []byte, key, value string) ([]byte, string, error) {
 	doc, err := yamledit.Parse(src)
 	if err != nil {
 		return nil, "", err
 	}
 	root := doc.Root()
 	block := doc.Get(root, "zosia")
+	var line *yaml.Node
+	if block != nil {
+		line = doc.Get(block, key)
+	}
 	state := ""
 	switch {
-	case on && block == nil:
-		key, value, _ := strings.Cut(zosiaPolicyBlock, ":")
-		state, err = "added", doc.SetKey(root, key, value, "")
-	case on:
-		value := doc.Get(block, "policy")
-		switch {
-		case value == nil:
-			return nil, "", fmt.Errorf("its zosia block has no policy line")
-		case value.Value == "true":
-			return src, "already", nil
-		}
-		state, err = "added", doc.ReplaceScalar(value, "true")
-	case block != nil:
+	case value != "" && block == nil:
+		state, err = "added", doc.SetKey(root, "zosia", "\n  "+key+": "+value, "")
+	case value != "" && line == nil:
+		state, err = "added", doc.SetKey(block, key, value, "")
+	case value != "" && line.Value == value:
+		return src, "already", nil
+	case value != "":
+		state, err = "added", doc.ReplaceScalar(line, value)
+	case line == nil:
+		return src, "", nil
+	case len(block.Content) == 2:
 		state, err = "removed", doc.DeleteEntry(root, "zosia")
 	default:
-		return src, "", nil
+		state, err = "removed", doc.DeleteEntry(block, key)
 	}
 	if err != nil {
 		return nil, "", err
@@ -262,16 +291,192 @@ func setZosiaPolicy(src []byte, on bool) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	// The result must be a config that says what was asked, or the file is not touched.
-	var check struct {
-		Zosia struct {
-			Policy bool `yaml:"policy"`
-		} `yaml:"zosia"`
+	// The result must be a config that says what was asked and nothing else new, or the file is
+	// not touched.
+	before, after := readZosiaKeys(src), readZosiaKeys(out)
+	edited, other, was := after.Policy, after.Send, before.Send
+	if key == "send" {
+		edited, other, was = after.Send, after.Policy, before.Policy
 	}
-	if err := yaml.Unmarshal(out, &check); err != nil || check.Zosia.Policy != on {
+	same := func(a, b *bool) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+	if !same(other, was) || (value == "") != (edited == nil) || edited != nil && strconv.FormatBool(*edited) != value {
 		return nil, "", fmt.Errorf("the edit did not give the file that was meant")
 	}
 	return out, state, nil
+}
+
+// ZosiaProject is a shearbolt.yaml that a scan gate of the repository reads: a project, as an
+// account's plan in Zosia counts them.
+type ZosiaProject struct {
+	Config string // its path in the repository
+	Name   string // the project it names; "" when the file cannot be read
+	// A gate that reads it hands its report to Zosia, and the file does not say send: false.
+	Sends bool
+	Off   bool // the file says zosia: {send: false}
+	// Why `send: false` cannot be written here, so that the project sends whatever is chosen; ""
+	// when it can. FixedCode is the note's code for it.
+	Fixed, FixedCode string
+}
+
+// ZosiaProjects lists the repository's projects, sorted by path, for choosing which of them send
+// to Zosia. The notes name the gates whose shearbolt.yaml is not certain: they are in no project.
+func ZosiaProjects(root string) ([]ZosiaProject, []plan.Note, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, nil, err
+	}
+	r := plan.Repo{Root: abs}
+	classify := newClassifier(r, ecosystems)
+	by := map[string]*ZosiaProject{}
+	hands := map[string]bool{}
+	var notes []plan.Note
+	files := 0
+	for _, ci := range cis {
+		// Where a file can hand the secret to a step, a gate sends when its step is handed it; where
+		// it cannot, every gate sends once the CI variable is set.
+		_, perStep := ci.(plan.ZosiaEditor)
+		for _, f := range ci.Files(r) {
+			files++
+			src, err := r.Read(f)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s cannot be read: %v", f, err)
+			}
+			jobs, _, err := ci.Jobs(r, f, src, classify)
+			if err != nil {
+				return nil, nil, fmt.Errorf("%s is not valid YAML: %v", f, err)
+			}
+			pin, atCommit := installPin(src), actionAtCommit.Match(src)
+			for _, g := range allScanGates(jobs) {
+				if g.Version == "" {
+					g.Version = pin
+				}
+				if g.Config == "" {
+					notes = append(notes, plan.Note{Code: "ZOSIA_SEND_BY_HAND", File: g.Pos.File, Line: g.Pos.Line,
+						Message: "it is not certain which shearbolt.yaml this step reads, so its project is not among those to choose from. To keep it from sending, add `send: false` to the zosia block of that file by hand."})
+					continue
+				}
+				p := by[g.Config]
+				if p == nil {
+					p = &ZosiaProject{Config: g.Config}
+					by[g.Config] = p
+				}
+				if (g.Zosia || !perStep) && sendsToZosia(g.Version) {
+					hands[g.Config] = true
+				}
+				switch {
+				case !knowsZosiaSend(g.Version):
+					p.FixedCode = "ZOSIA_SEND_GATE_TOO_OLD"
+					p.Fixed = fmt.Sprintf("a gate that reads it runs Shearbolt %s, which fails on a shearbolt.yaml that says `send: false`: that came with %s", g.Version, zosiaSendSince)
+				case g.Version == "" && atCommit && p.Fixed == "":
+					p.FixedCode = "ZOSIA_SEND_GATE_UNKNOWN"
+					p.Fixed = "a gate that reads it uses the Shearbolt action at a commit, so its release cannot be told, and one before " + zosiaSendSince + " fails on a shearbolt.yaml that says `send: false`"
+				}
+			}
+		}
+	}
+	if files == 0 {
+		return nil, nil, fmt.Errorf("no CI configuration was found here")
+	}
+	var out []ZosiaProject
+	for _, p := range by {
+		src, err := r.Read(p.Config)
+		if err != nil {
+			if p.Fixed == "" {
+				p.Fixed, p.FixedCode = "the file cannot be read", "ZOSIA_SEND_BY_HAND"
+			}
+		} else {
+			var named struct {
+				Project string `yaml:"project"`
+			}
+			_ = yaml.Unmarshal(src, &named)
+			p.Name = named.Project
+			send := readZosiaKeys(src).Send
+			p.Off = send != nil && !*send
+			if _, _, err := setZosiaKey(src, "send", "false"); err != nil && p.Fixed == "" {
+				p.Fixed, p.FixedCode = "the file cannot be edited: "+cause(err), "ZOSIA_SEND_BY_HAND"
+			}
+		}
+		p.Sends = hands[p.Config] && !p.Off
+		out = append(out, *p)
+	}
+	slices.SortFunc(out, func(a, b ZosiaProject) int { return strings.Compare(a.Config, b.Config) })
+	return out, notes, nil
+}
+
+// ZosiaSend computes the second write of `shearbolt zosia enable`: the projects in sending (paths
+// of shearbolt.yaml files) send to Zosia, and every other project of the repository says
+// `zosia: {send: false}`. A project that cannot be switched off keeps sending, with a note.
+func ZosiaSend(root string, sending []string) *plan.Plan {
+	p := &plan.Plan{SchemaVersion: plan.SchemaVersion}
+	fail := func(code, msg string) *plan.Plan {
+		p.Error = &plan.Note{Code: code, Message: msg}
+		return p
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return fail("READ", err.Error())
+	}
+	projects, notes, err := ZosiaProjects(root)
+	if err != nil {
+		return fail("READ", err.Error())
+	}
+	var paths []string
+	for _, pr := range projects {
+		paths = append(paths, pr.Config)
+	}
+	for _, s := range sending {
+		if !slices.Contains(paths, s) {
+			return fail("NO_PROJECT", fmt.Sprintf("%s is not a shearbolt.yaml that a gate of this repository reads. Its projects are: %s.", s, strings.Join(paths, ", ")))
+		}
+	}
+	r := plan.Repo{Root: abs}
+	for _, pr := range projects {
+		off := !slices.Contains(sending, pr.Config)
+		note := func(code, msg string) {
+			p.Notes = append(p.Notes, plan.Note{Code: code, File: pr.Config, Message: msg})
+		}
+		if off == pr.Off {
+			continue
+		}
+		if off && pr.Fixed != "" {
+			// One that sends nothing anyway is neither switched off nor kept on: nothing to say.
+			if !pr.Sends {
+				continue
+			}
+			msg := "this project keeps sending its reports to Zosia: " + pr.Fixed + "."
+			if pr.FixedCode == "ZOSIA_SEND_GATE_TOO_OLD" {
+				msg += " Move the step's version (and its checksum, if it pins one), then run this again."
+			}
+			note(pr.FixedCode, msg)
+			continue
+		}
+		src, err := r.Read(pr.Config)
+		if err != nil {
+			return fail("READ", fmt.Sprintf("%s cannot be read: %v", pr.Config, err))
+		}
+		value := ""
+		if off {
+			value = "false"
+		}
+		out, _, err := setZosiaKey(src, "send", value)
+		if err != nil {
+			note("ZOSIA_SEND_BY_HAND", fmt.Sprintf("this file says `zosia: {send: false}` and cannot be edited: %s. Remove the line by hand for the project to send again.", cause(err)))
+			continue
+		}
+		c := plan.FileChange{Path: pr.Config, Action: "modify", Content: string(out), Base: src}
+		if err := describeChange(abs, &c); err != nil {
+			return fail("READ", err.Error())
+		}
+		p.Changes = append(p.Changes, c)
+		if off {
+			note("ZOSIA_SEND_OFF", "added `send: false` to the zosia block: this project's reports are not sent to Zosia.")
+		} else {
+			note("ZOSIA_SEND_ON", "removed `send: false`: this project sends its reports to Zosia again.")
+		}
+	}
+	p.Notes = append(p.Notes, notes...)
+	p.Complete = true
+	return p
 }
 
 // SHEARBOLT_VERSION=1.2.3 on the install line, or SHEARBOLT_VERSION: "1.2.3" among the variables.
@@ -304,6 +509,16 @@ func knowsZosiaPolicy(v string) bool {
 		return true
 	}
 	return major > 1 || major == 1 && minor >= 11
+}
+
+// knowsZosiaSend reports whether Shearbolt release v (X.Y.Z) reads `send` in the zosia block; ""
+// is a release that is not known, which is taken to.
+func knowsZosiaSend(v string) bool {
+	var major, minor int
+	if _, err := fmt.Sscanf(v, "%d.%d.", &major, &minor); err != nil {
+		return true
+	}
+	return major > 1 || major == 1 && minor >= 12
 }
 
 func allScanGates(jobs []plan.Job) []plan.GateCmd {
