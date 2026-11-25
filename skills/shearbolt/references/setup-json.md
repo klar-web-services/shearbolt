@@ -373,9 +373,10 @@ again.
 - `ZOSIA_SECRET`: the gates of this CI file send their reports to Zosia once the secret
   exists. The message says where to add it: a repository secret `ZOSIA_SECRET` on GitHub
   (setup added the `zosia-secret` input), a masked CI/CD variable on GitLab, a secured
-  repository variable on Bitbucket; its value is a secret the user makes at
-  https://zosiasec.com/app/secrets. Until then nothing is sent, and the gate works as
-  before. When other gates of the repository already send, the message says instead that
+  repository variable on Bitbucket. The user gets the secret by running
+  `shearbolt zosia enable` in their own terminal, which has Zosia make it and stores it
+  where it can, or makes one at https://zosiasec.com/app/secrets. Never ask the user for
+  the secret itself. Until it exists nothing is sent, and the gate works as before. When other gates of the repository already send, the message says instead that
   the new gates read the same secret, so there is nothing to add unless it is missing. On GitHub the note appears only when setup added a `zosia-secret` line; on
   GitLab and Bitbucket whenever `zosia` is answered `yes`.
 - `ZOSIA_NOT_ADDED` *(GitHub)*: `zosia` was answered `yes`, but this gate was there

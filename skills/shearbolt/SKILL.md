@@ -229,15 +229,33 @@ defaults, each one quoted. A `multi` value is comma-separated option values, for
   A block fails the job and the job summary explains it.
 - Repeat what the notes ask the user to add or change by hand. Until they do, those jobs
   or artifacts are not gated.
-- When the user answered `zosia` with `yes`, tell them where to add the `ZOSIA_SECRET`
-  secret, from the `ZOSIA_SECRET` note. The answer covers only the gates setup added in
-  this run; pass on every `ZOSIA_NOT_ADDED` note, which names a gate that was there
-  already and does not send. Reports are sent only once it exists; the gate's
-  result never depends on it. A user who decides later runs `shearbolt zosia enable`
-  (or `disable`) in the repository root; it changes only that input, or `ZOSIA_SECRET`
-  in the env of a `run:` step that runs the gate. When its last line says that no
-  reports are sent yet from a gate, pass that on: the gate pins a Shearbolt release from
-  before 1.4.0, or its step could not be edited.
+- When the user answered `zosia` with `yes`, the repository still needs its secret, and
+  Zosia makes it only once the user has approved a code in their browser. Ask the user
+  to run `shearbolt zosia enable` in the repository root, in their own terminal: it asks
+  for a name, shows a link and a code, stores the secret in the CI where it can, and
+  asks which projects send when their plan has no room for all. Only if you can run a
+  command in the background and read its output while it runs, you may instead run
+  `shearbolt zosia enable --connect` yourself and pass its link and code on to the user
+  at once; it waits up to 10 minutes and needs the GitHub CLI to store the secret.
+  Never ask the user for a secret, and never print one.
+- The answer covers only the gates setup added in this run; pass on every
+  `ZOSIA_NOT_ADDED` note, which names a gate that was there already and does not send.
+  Reports are sent only once the secret exists; the gate's result never depends on it.
+  `shearbolt zosia enable` (or `disable`) changes only the `zosia-secret` input, or
+  `ZOSIA_SECRET` in the env of a `run:` step that runs the gate. When its last line says
+  that no reports are sent yet from a gate, pass that on: the gate pins a Shearbolt
+  release from before 1.4.0, or its step could not be edited.
+- When `shearbolt zosia enable` ends with exit code 3, the user's plan in Zosia has no
+  room for all the projects of the repository that send (a project is one
+  `shearbolt.yaml`). Its output lists them. Show the user the list and ask which should
+  send, then run `shearbolt zosia enable --projects <path>,<path>` with the
+  `shearbolt.yaml` paths they name. Do not choose for them. The projects left out get
+  `zosia: {send: false}` in their `shearbolt.yaml`; `--all-projects` removes those lines
+  again. A project marked "(always sends: …)" in the list cannot be switched off, most
+  often because its gate runs a Shearbolt release before 1.12.0: it has to be among
+  `--projects`, and leaving it out is an error that says so. When the output says instead
+  that the plan is full and nothing can be selected, pass that on: the user removes a
+  project in Zosia or changes their plan.
 - An `EARLY_STOP` note whose gate still runs on early stops and fails when the image or
   its artifact was not built means those runs fail, although nothing ships.
   - When it asks to remove targets that do not ship, ask the user whether each target it
@@ -329,7 +347,9 @@ the user tells you to; it is reviewed like code.
 Never add an exception, change `policy`, or remove a target on your own. Never add or
 remove the `zosia` block of `shearbolt.yaml` either: with `zosia: {policy: true}` the project
 takes its policy for CI scans from Zosia, and the scan report's `Policy:` line says which
-policy a run used. A local scan of such a project uses the file's policy, so its result can
+policy a run used. With `zosia: {send: false}` the project's reports are not sent to Zosia,
+and a CI scan says so in one line; that is the user's choice of which projects their plan
+holds, made through `shearbolt zosia enable`. A local scan of such a project uses the file's policy, so its result can
 differ from CI's.
 
 ## 5. Exit codes and rules

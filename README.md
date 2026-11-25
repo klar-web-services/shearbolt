@@ -54,7 +54,7 @@ Run setup from your repository root: it treats the current directory as the root
 
 - In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
 - If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
-- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it adds get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. The answer is about the gates setup adds in that run: a gate that is there already keeps what it has, and [`shearbolt zosia enable` and `disable`](#zosia-optional) change those.
+- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it adds get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. On a terminal, setup then has Zosia make the secret, as `shearbolt zosia enable` does. The answer is about the gates setup adds in that run: a gate that is there already keeps what it has, and [`shearbolt zosia enable` and `disable`](#zosia-optional) change those.
 - What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (its image cannot be scanned, so the gate checks only the rest of the project, such as its lockfiles or compose images), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
 - A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
 - Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
@@ -182,22 +182,47 @@ The first scan downloads the pinned Grype release, verified by its SHA-256, and 
 
 When `ZOSIA_SECRET` is set in CI, every scan sends its result (`run.json` plus the repository, branch, commit and CI run link) to Zosia after the report is written. The report is encrypted to Zosia's public key and bound to your secret, so only Zosia can read it and only into your account. Sending never changes the exit code: a failed send prints one `Zosia: report not sent` line and the gate's result stands. Local scans and ad-hoc scans are never sent.
 
-To connect a repository, make a secret at https://zosiasec.com/app/secrets (sign-up is closed for now), then:
+To connect a repository, you need an account at https://zosiasec.com (sign-up is closed for now). Then:
 
 ```bash
 shearbolt zosia enable
 ```
 
-Run it in the repository root, in a repository `shearbolt setup` has already gated. It changes only what Zosia needs, shows the change as a diff, and says where the secret goes:
+Run it in the repository root, in a repository `shearbolt setup` has already gated. It does three things: it changes what the CI files need, it has Zosia make the secret, and it checks that your plan has room for the repository's projects.
 
-- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step, and `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to the `env:` of each `run:` step that runs `shearbolt scan` (a gate written by hand). Then add the repository secret `ZOSIA_SECRET` (Settings → Secrets and variables → Actions, or `gh secret set ZOSIA_SECRET`). On a terminal, in a repository with only GitHub workflows, `enable` does this for you when the GitHub CLI is logged in with access to the repository's secrets: it asks you to paste the secret and `gh` stores it. Shearbolt never reads the secret, and asks before it replaces an existing one. Without a terminal (in a script, or run by an agent) it cannot ask, but it still says when `gh` shows that `ZOSIA_SECRET` is already set, instead of telling you to add it.
-- GitLab CI, Bitbucket Pipelines: no file changes. Add a masked CI variable `ZOSIA_SECRET`.
+**The CI files.** It changes only what Zosia needs and shows the change as a diff:
+
+- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step, and `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to the `env:` of each `run:` step that runs `shearbolt scan` (a gate written by hand).
+- GitLab CI, Bitbucket Pipelines: no file changes. The gate reads the CI variable `ZOSIA_SECRET`.
+
+**The secret.** On a terminal, `enable` asks for a name for the secret, then shows a link and a code and waits up to 10 minutes. Open the link where you are logged in to Zosia, check what the page says is asking, and approve. Zosia then makes the secret and hands it to Shearbolt, once.
+
+- In a repository with only GitHub workflows, when the GitHub CLI is logged in with access to the repository's secrets, Shearbolt stores it as the repository secret `ZOSIA_SECRET` through `gh`. It is handed to `gh` on its standard input and never printed.
+- Everywhere else it is shown to you once, with where to put it: a masked CI/CD variable on GitLab, a secured repository variable on Bitbucket.
+- Where `gh` shows that `ZOSIA_SECRET` is there already, `enable` asks before it replaces it. Where it cannot tell, it asks before it makes a secret. A secret that was replaced stays valid until you revoke it at https://zosiasec.com/app/secrets.
+- With `ZOSIA_SECRET` set in the environment, it makes no secret and uses that one for the check below.
+- Without a terminal (in a script, or run by an agent) it makes none unless you pass `--connect`. With `--connect` it asks nothing, wherever it runs: it replaces a secret that is there, needs `gh` to store the new one, and never prints it. It still says when `gh` shows that `ZOSIA_SECRET` is already set. You can always make a secret yourself at https://zosiasec.com/app/secrets and add it by hand; the notes say where.
+- What Zosia is told about the repository is the host name and the path of its `origin` remote, your machine's host name and Shearbolt's version. They are shown on the page where you approve.
+
+**The plan's room.** A plan in Zosia allows a number of projects, and a project is one `shearbolt.yaml` that a gate reads: a monorepo has several. With a secret at hand, `enable` asks Zosia how many your plan allows and how many are in use.
+
+- When every project of the repository fits, nothing more happens.
+- When more send than fit, it lists them and asks which send. Each of the others gets these lines in its `shearbolt.yaml`, and its scans send nothing from then on:
+
+  ```yaml
+  zosia:
+    send: false
+  ```
+
+- `--projects apps/api/shearbolt.yaml,apps/web/shearbolt.yaml` names the projects that send without the question, and `--all-projects` removes every `send: false`. Without a terminal and without `--projects`, a repository that needs a selection ends with exit code 3 and the list.
+- A project whose gate runs a Shearbolt release before 1.12.0 cannot be switched off this way, because that release fails on the line. It goes on sending, and `enable` says so.
+- The check is a convenience. Zosia refuses the reports of a project it has no place for, which prints one `Zosia: report not sent` line and fails no build. Remove a project in Zosia (a repository's Settings tab) to free its place.
 
 Sending came with Shearbolt 1.4.0. When a gate pins an older release (a versioned download URL in its `run:` step, or the action at a full tag such as `@v1.3.0`), `enable` says so in a note and again in its last line: nothing is sent from that gate until you move it to a newer release.
 
 Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same for the gates setup adds in that run. Setup leaves gates that are there already as they are: with a yes it names the ones that do not send, and `shearbolt zosia enable` adds the secret to them.
 
-To disconnect, run `shearbolt zosia disable`, which removes those lines again (and the `zosia` block of [Policy from Zosia](#policy-from-zosia), if a project has it), and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only.
+To disconnect, run `shearbolt zosia disable`, which removes those lines from the CI files again (and the `policy` line of [Policy from Zosia](#policy-from-zosia), if a project has it), and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. A `send: false` stays, and `disable` says so. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only; with `ZOSIA_URL` set, `enable` connects and asks there and says so, and refuses an address that is not https unless it is this machine.
 
 ### Policy from Zosia
 
@@ -271,7 +296,7 @@ targets:
 | `targets` | yes | What to scan, at least one. Each target has a `name` (letters, digits, `.`, `_` and `-`) and exactly one of the kinds below. |
 | `policy` | no | See [What blocks by default](#what-blocks-by-default). |
 | `exceptions` | no | See [Accepting a risk](#accepting-a-risk). |
-| `zosia` | no | `policy: true` lets Zosia set the policy for CI scans. See [Policy from Zosia](#policy-from-zosia). Needs 1.11.0. |
+| `zosia` | no | `policy: true` lets Zosia set the policy for CI scans. See [Policy from Zosia](#policy-from-zosia). Needs 1.11.0. `send: false` keeps the project's reports from Zosia, whatever secret a scan has. See [Zosia](#zosia-optional). Needs 1.12.0. |
 
 | Target kind | Scans | When nothing is found |
 |---|---|---|
@@ -326,7 +351,7 @@ On GitLab and Bitbucket, running setup again on a job where an early stop (such 
 | `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
 | `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
 | `shearbolt skill install [--agent claude\|codex\|all] [--project]` | Installs the [agent skill](#agent-skill-claude-code-and-codex) for Claude Code, Codex or both. |
-| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. They change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` can also store the secret through the GitHub CLI. With `--policy`, `enable` also adds the `zosia` block of [Policy from Zosia](#policy-from-zosia) to the `shearbolt.yaml` files the gates read, and `disable` removes only that block. |
+| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. In the CI files they change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` also has Zosia make the secret and stores it through the GitHub CLI where it can, and asks which projects send when your plan has no room for all (`--projects`, `--all-projects`, `--connect`, `--secret-name`; exit code 3 when a selection is needed and cannot be asked). With `--policy`, `enable` also adds the `zosia` block of [Policy from Zosia](#policy-from-zosia) to the `shearbolt.yaml` files the gates read, and `disable` removes only that block. |
 | `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
 
 `setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.
@@ -461,7 +486,7 @@ build-image:
 | `GITHUB_STEP_SUMMARY` | `scan` | When set, as in GitHub Actions, the report is appended to this file (the job summary). |
 | `NO_COLOR` | `scan` | Turns off colors in the terminal report. |
 | `ZOSIA_SECRET` | `scan` | When set in CI, the scan result is sent to [Zosia](#zosia-optional), and a project that takes its [policy from Zosia](#policy-from-zosia) fetches it. Sending never changes the exit code. |
-| `ZOSIA_URL`, `ZOSIA_KEY` | `scan` | For tests: another Zosia to send to, and its public key (`<key id>:<base64url key>`). |
+| `ZOSIA_URL`, `ZOSIA_KEY` | `scan`, `zosia enable`, `setup` | For tests: another Zosia to send to and to connect at, and its public key (`<key id>:<base64url key>`). |
 | `SHEARBOLT_DB_ARCHIVE` | `scan` | For tests: imports this Grype database archive instead of updating the database. `maxDatabaseAgeHours` still applies to it, and `run.json` and `summary.md` record its use. |
 | `SHEARBOLT_VERSION`, `SHEARBOLT_INSTALL_DIR`, `SHEARBOLT_BASE_URL` | `install.sh` | See [Install options](#install-options). |
 
