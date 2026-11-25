@@ -22,31 +22,26 @@ var zosiaPolicy = zosia.Policy{Total: 30 * time.Second, Attempts: 2, Pause: 2 * 
 // zosiaFetch: fetching a policy holds up the scan, so it gets half the time a report's send has.
 var zosiaFetch = zosia.Policy{Total: 15 * time.Second, Attempts: 2, Pause: 2 * time.Second, MaxRetryAfter: 10 * time.Second}
 
-// policyFromZosia decides which policy a config scan uses. When shearbolt.yaml takes its policy
-// from Zosia (zosia.policy) and this is a CI scan that could also send its report, it asks Zosia
-// and, with an answer that holds a policy, puts that policy in place of the file's. In every
-// other case the file's policy stays, and a warning says why when the fetch was wanted and
-// brought nothing usable. It never fails the scan.
+// policyFromZosia decides which policy a config scan uses. A CI scan that has ZOSIA_SECRET is
+// connected to Zosia: it asks Zosia for the project's policy and, with an answer that holds
+// one, puts that policy in place of the file's. Since 1.13.0 nothing in shearbolt.yaml has to
+// say so. In every other case the file's policy stays: for a local scan and for a CI scan
+// without the secret (a pull request from a fork, a repository that does not send) silently,
+// and with a warning that says why when Zosia was asked and gave nothing usable. It never fails
+// the scan.
 func policyFromZosia(ctx context.Context, d deps, cfg *config.Config, configPath string, ciMode bool) (model.PolicySource, []model.Diagnostic) {
 	src := model.PolicySource{From: "file"}
-	if !cfg.Zosia.Policy {
+	secret := strings.TrimSpace(d.getenv("ZOSIA_SECRET"))
+	if !ciMode || secret == "" {
 		return src, nil
 	}
 	fellBack := func(state, code, message string) (model.PolicySource, []model.Diagnostic) {
 		src.Zosia = state
 		return src, []model.Diagnostic{{Code: code, Message: message + ", so this scan used the policy in shearbolt.yaml"}}
 	}
-	if !ciMode {
-		src.Zosia = "local"
-		return src, nil
-	}
-	secret := strings.TrimSpace(d.getenv("ZOSIA_SECRET"))
-	if secret == "" {
-		return fellBack("no-secret", "ZOSIA_POLICY_NO_SECRET", "shearbolt.yaml takes its policy from Zosia, but ZOSIA_SECRET is not set here (as in a pull request from a fork)")
-	}
 	ci, ok := zosia.DetectCI(d.getenv, os.ReadFile)
 	if !ok {
-		return fellBack("no-ci", "ZOSIA_POLICY_NO_CI", "shearbolt.yaml takes its policy from Zosia, but this is no CI whose repository Shearbolt can name")
+		return fellBack("no-ci", "ZOSIA_POLICY_NO_CI", "this scan has ZOSIA_SECRET, but this is no CI whose repository Shearbolt can name")
 	}
 	url := d.getenv("ZOSIA_URL")
 	if url == "" {

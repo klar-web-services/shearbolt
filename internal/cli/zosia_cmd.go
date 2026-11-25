@@ -40,16 +40,21 @@ Run it in the repository root, after "shearbolt setup" has added the gate.
            runs a Shearbolt release before 1.12.0 cannot be switched off this way and goes on
            sending; Zosia refuses the reports it has no place for, which fails no build.
 
+           From then on Zosia holds the repository's policy. It takes the policy of
+           shearbolt.yaml over with the repository's first report, and every CI scan that has
+           the secret uses Zosia's in place of the file's. You change it in the repository's
+           settings in Zosia. A scan that cannot reach Zosia uses the file's policy and says so.
+
            Its last line names the gates that still cannot send, such as one that pins a
            Shearbolt release from before 1.4.0.
-  disable  Removes what enable added to the CI files again, and the policy line. The secret
-           itself stays until you delete it, and so does a "send: false".
+  disable  Removes what enable added to the CI files again, and a "policy: true" line left by
+           an older release. The secret itself stays until you delete it, and so does a
+           "send: false".
 
-  --policy With enable: the projects also take their policy from Zosia. It adds "zosia:" with
-           "policy: true" below it to each shearbolt.yaml that a gate reads, so that a CI scan
-           asks Zosia for the policy and uses it in place of the file's policy block. The block
-           is not changed, and a scan that gets no policy from Zosia uses it. Needs Shearbolt
-           1.11.0 in the gate. With disable: removes only that line, and reports go on.
+  --policy With disable: removes only the "policy: true" line that releases before 1.13.0 wrote
+           into the zosia block of shearbolt.yaml, and reports go on. With enable it changes
+           nothing and says so: since 1.13.0 every CI scan that has ZOSIA_SECRET takes its
+           policy from Zosia, and no line in shearbolt.yaml is needed.
   --projects <path>[,<path>...]
            The shearbolt.yaml files whose projects send; every other project of the repository
            gets "send: false". With the plan's room known, a choice that does not fit is an

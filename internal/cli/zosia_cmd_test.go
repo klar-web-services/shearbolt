@@ -54,6 +54,8 @@ func TestZosiaEnableAndDisable(t *testing.T) {
 	}
 }
 
+// Since 1.13.0 `enable --policy` writes nothing: a scan with the secret takes its policy from Zosia
+// anyway. `disable` still removes the line that 1.11.0 and 1.12.0 wrote.
 func TestZosiaPolicyFlag(t *testing.T) {
 	dir := fixtureRepo(t, "nextjs-docker")
 	if code, out, errb := setupCmd(t, setupDeps(false, ""), "--yes"); code != 0 {
@@ -70,19 +72,22 @@ func TestZosiaPolicyFlag(t *testing.T) {
 	before := read("shearbolt.yaml")
 
 	code, out, errb := zosiaCmd(t, "enable", "--policy")
-	if code != 0 || errb != "" || read("shearbolt.yaml") != before+block || strings.Count(read(".github/workflows/release.yml"), secret) != 1 ||
-		!strings.Contains(out, "+zosia:\n+  policy: true") || !strings.Contains(out, "keep one there that you can live with") {
+	if code != 0 || errb != "" || read("shearbolt.yaml") != before || strings.Count(read(".github/workflows/release.yml"), secret) != 1 ||
+		!strings.Contains(out, "--policy changes nothing any more") || strings.Contains(out, "+zosia:") {
 		t.Fatalf("enable --policy: exit = %d\nstdout: %s\nstderr: %s\nshearbolt.yaml:\n%s", code, out, errb, read("shearbolt.yaml"))
 	}
-	// The policy goes, the reports stay.
+	// A line from an older release goes, the reports stay.
+	if err := os.WriteFile(filepath.Join(dir, "shearbolt.yaml"), []byte(before+block), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code, out, errb = zosiaCmd(t, "disable", "--policy")
 	if code != 0 || errb != "" || read("shearbolt.yaml") != before || strings.Count(read(".github/workflows/release.yml"), secret) != 1 ||
 		!strings.Contains(out, "-zosia:\n-  policy: true") || strings.Contains(out, "The secret itself stays") {
 		t.Fatalf("disable --policy: exit = %d\nstdout: %s\nstderr: %s", code, out, errb)
 	}
 	// Plain disable takes both away.
-	if code, _, _ := zosiaCmd(t, "enable", "--policy"); code != 0 {
-		t.Fatal("enable --policy again")
+	if err := os.WriteFile(filepath.Join(dir, "shearbolt.yaml"), []byte(before+block), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	code, out, errb = zosiaCmd(t, "disable")
 	if code != 0 || read("shearbolt.yaml") != before || strings.Contains(read(".github/workflows/release.yml"), secret) || !strings.Contains(out, "The secret itself stays") {
@@ -100,7 +105,7 @@ func TestZosiaUsage(t *testing.T) {
 		}
 	}
 	if code, out, _ := zosiaCmd(t, "-h"); code != 0 || !strings.Contains(out, "shearbolt zosia enable [--policy] [--projects <path>[,<path>...] | --all-projects] [--connect] [--secret-name <name>]") ||
-		!strings.Contains(out, "shearbolt zosia disable [--policy]") || !strings.Contains(out, "1.11.0") || !strings.Contains(out, "1.12.0") || !strings.Contains(out, "3 a selection is needed") {
+		!strings.Contains(out, "shearbolt zosia disable [--policy]") || !strings.Contains(out, "1.13.0") || !strings.Contains(out, "1.12.0") || !strings.Contains(out, "3 a selection is needed") {
 		t.Errorf("-h: exit = %d\nstdout: %s", code, out)
 	}
 	// No gate yet: nothing to enable.

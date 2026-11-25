@@ -26,9 +26,9 @@ type Config struct {
 	Dir        string      `yaml:"-"`
 }
 
-// Zosia is what the project has to do with Zosia (https://zosiasec.com). With Policy, a CI scan
-// asks Zosia for the policy and uses it in place of the policy block; the block stays for every
-// scan that gets no policy from there. Send set to false keeps the project's reports from Zosia,
+// Zosia is what the project has to do with Zosia (https://zosiasec.com). Policy is read for the
+// files that releases 1.11.0 and 1.12.0 wrote and means nothing any more: a CI scan that has the
+// secret takes its policy from Zosia. Send set to false keeps the project's reports from Zosia,
 // whatever secret the scan has: an account's plan has room for so many projects, and this is how
 // a repository says which of its projects are not among them.
 type Zosia struct {

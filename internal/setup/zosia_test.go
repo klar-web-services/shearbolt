@@ -81,34 +81,28 @@ func read(t *testing.T, root, rel string) string {
 	return string(data)
 }
 
-func TestZosiaPolicyAddsAndRemovesTheBlock(t *testing.T) {
-	root := pinned(t, "1.11.0")
+// Releases 1.11.0 and 1.12.0 needed `policy: true` in the zosia block. Since 1.13.0 a CI scan with
+// the secret takes its policy from Zosia anyway: enable writes no such line, and disable removes
+// the ones that are there.
+func TestZosiaPolicyLineIsNoLongerWrittenAndStillRemoved(t *testing.T) {
+	root := pinned(t, "1.13.0")
 	before := read(t, root, "shearbolt.yaml")
-
-	// Without --policy, enable leaves shearbolt.yaml alone.
-	if p := Zosia(root, true, false); p.Error != nil || len(p.Changes) != 0 {
-		t.Fatalf("enable: error %+v, %d changes", p.Error, len(p.Changes))
-	}
 	on := Zosia(root, true, true)
-	if on.Error != nil || len(on.Changes) != 1 || on.Changes[0].Path != "shearbolt.yaml" ||
-		!slices.Equal(codes(on.Notes), []string{"ZOSIA_SECRET", "ZOSIA_POLICY_ADDED", "ZOSIA_POLICY_FILE_COUNTS"}) {
+	if on.Error != nil || len(on.Changes) != 0 || !slices.Equal(codes(on.Notes), []string{"ZOSIA_SECRET", "ZOSIA_POLICY_NOT_NEEDED"}) {
 		t.Fatalf("enable --policy: error %+v, changes %+v, notes %+v", on.Error, on.Changes, on.Notes)
 	}
-	if got := on.Changes[0].Content; got != before+"zosia:\n  policy: true\n" || !strings.Contains(on.Changes[0].Diff, "+zosia:\n+  policy: true\n") {
-		t.Fatalf("shearbolt.yaml would become:\n%s\ndiff:\n%s", got, on.Changes[0].Diff)
+	if p := Zosia(root, true, false); p.Error != nil || len(p.Changes) != 0 || slices.Contains(codes(p.Notes), "ZOSIA_POLICY_NOT_NEEDED") {
+		t.Fatalf("enable: error %+v, %d changes, notes %+v", p.Error, len(p.Changes), p.Notes)
 	}
-	if err := Write(root, on); err != nil {
+
+	// A file from an older release: disable --policy removes the line and says nothing about the secret.
+	if err := os.WriteFile(filepath.Join(root, "shearbolt.yaml"), []byte(before+"zosia:\n  policy: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := config.Load(filepath.Join(root, "shearbolt.yaml"), func(string) (string, bool) { return "", false }, time.Now())
-	if err != nil || !cfg.Zosia.Policy || cfg.Policy != config.DefaultPolicy() {
-		t.Fatalf("the edited file: %v, %+v", err, cfg)
+	if err != nil || cfg.Policy != config.DefaultPolicy() {
+		t.Fatalf("a file with the old line: %v, %+v", err, cfg)
 	}
-	if again := Zosia(root, true, true); again.Error != nil || len(again.Changes) != 0 || !slices.Contains(codes(again.Notes), "ZOSIA_POLICY_ALREADY") {
-		t.Errorf("enable --policy again: error %+v, %d changes, notes %+v", again.Error, len(again.Changes), again.Notes)
-	}
-
-	// disable --policy removes the block and says nothing about the secret, which stays in use.
 	off := Zosia(root, false, true)
 	if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != before || !slices.Equal(codes(off.Notes), []string{"ZOSIA_POLICY_REMOVED"}) {
 		t.Fatalf("disable --policy: error %+v, changes %+v, notes %+v", off.Error, off.Changes, off.Notes)
@@ -127,54 +121,15 @@ func TestZosiaPolicyAddsAndRemovesTheBlock(t *testing.T) {
 	}
 }
 
-func TestZosiaPolicyLeavesAFileAloneThatAnOlderGateReads(t *testing.T) {
-	// The fixture pins 1.2.3, which would fail on the block.
-	root := gated(t, "gitlab")
-	p := Zosia(root, true, true)
-	if p.Error != nil || len(p.Changes) != 0 || !slices.Equal(codes(p.Notes), []string{"ZOSIA_SECRET", "ZOSIA_POLICY_GATE_TOO_OLD"}) {
-		t.Fatalf("error %+v, changes %+v, notes %+v", p.Error, p.Changes, p.Notes)
+// A gate whose shearbolt.yaml is not certain is named to who asked about the line, and only then.
+func TestZosiaPolicyLineWhenAGatesConfigIsNotCertain(t *testing.T) {
+	root := gated(t, "go-github")
+	rewrite(t, root, ".github/workflows/release.yml", "uses: klar-web-services/shearbolt@v1", "uses: klar-web-services/shearbolt@v1\n        with:\n          config: ${{ matrix.config }}")
+	if p := Zosia(root, false, true); p.Error != nil || len(p.Changes) != 0 || !slices.Contains(codes(p.Notes), "ZOSIA_POLICY_BY_HAND") {
+		t.Fatalf("disable --policy: error %+v, changes %+v, notes %+v", p.Error, p.Changes, p.Notes)
 	}
-	n := p.Notes[1]
-	if n.File != ".gitlab-ci.yml" || n.Line == 0 || !strings.Contains(n.Message, "1.2.3") || !strings.Contains(n.Message, "1.11.0") || !strings.Contains(n.Message, "shearbolt.yaml was left as it is") {
-		t.Errorf("note %+v", n)
-	}
-	// Removing is always safe: an older gate reads the file without the block.
-	if err := os.WriteFile(filepath.Join(root, "shearbolt.yaml"), []byte(read(t, root, "shearbolt.yaml")+"zosia:\n  policy: true\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if off := Zosia(root, false, true); off.Error != nil || len(off.Changes) != 1 || !slices.Equal(codes(off.Notes), []string{"ZOSIA_POLICY_REMOVED"}) {
-		t.Errorf("disable --policy: error %+v, changes %+v, notes %+v", off.Error, off.Changes, off.Notes)
-	}
-}
-
-func TestZosiaPolicyOnBitbucket(t *testing.T) {
-	root := gated(t, "bitbucket")
-	if p := Zosia(root, true, true); p.Error != nil || len(p.Changes) != 0 || !slices.Contains(codes(p.Notes), "ZOSIA_POLICY_GATE_TOO_OLD") {
-		t.Fatalf("pinned to 1.2.3: error %+v, changes %+v, notes %+v", p.Error, p.Changes, p.Notes)
-	}
-	rewrite(t, root, "bitbucket-pipelines.yml", "SHEARBOLT_VERSION=1.2.3", "SHEARBOLT_VERSION=1.11.0")
-	p := Zosia(root, true, true)
-	if p.Error != nil || len(p.Changes) != 1 || p.Changes[0].Path != "shearbolt.yaml" || !strings.HasSuffix(p.Changes[0].Content, "\nzosia:\n  policy: true\n") {
-		t.Fatalf("error %+v, changes %+v, notes %+v", p.Error, p.Changes, p.Notes)
-	}
-}
-
-func TestZosiaPolicyWhenAGatesConfigIsNotCertain(t *testing.T) {
-	root := pinned(t, "1.11.0")
-	rewrite(t, root, ".gitlab-ci.yml", `--config "$CI_PROJECT_DIR/shearbolt.yaml"`, `--config "$SOMEWHERE/shearbolt.yaml"`)
-	on := Zosia(root, true, true)
-	if on.Error != nil || len(on.Changes) != 0 || !slices.Equal(codes(on.Notes), []string{"ZOSIA_SECRET", "ZOSIA_POLICY_BY_HAND"}) {
-		t.Fatalf("enable --policy: error %+v, changes %+v, notes %+v", on.Error, on.Changes, on.Notes)
-	}
-	if n := on.Notes[1]; n.File != ".gitlab-ci.yml" || n.Line == 0 || !strings.Contains(n.Message, "not certain which shearbolt.yaml") || !strings.Contains(n.Message, "policy: true") {
-		t.Errorf("note %+v", n)
-	}
-	// Asked about the policy, disable says the same; plain disable is as quiet as it was before 1.11.0.
-	if off := Zosia(root, false, true); off.Error != nil || !slices.Equal(codes(off.Notes), []string{"ZOSIA_POLICY_BY_HAND"}) {
-		t.Errorf("disable --policy: error %+v, notes %+v", off.Error, off.Notes)
-	}
-	if off := Zosia(root, false, false); off.Error != nil || len(off.Changes) != 0 || !slices.Equal(codes(off.Notes), []string{"ZOSIA_VARIABLE", "ZOSIA_SECRET_STAYS"}) {
-		t.Errorf("disable: error %+v, changes %+v, notes %+v", off.Error, off.Changes, off.Notes)
+	if p := Zosia(root, false, false); slices.Contains(codes(p.Notes), "ZOSIA_POLICY_BY_HAND") {
+		t.Errorf("disable: notes %+v", p.Notes)
 	}
 }
 
@@ -193,39 +148,6 @@ func TestZosiaDisableSaysWhenABlockStays(t *testing.T) {
 	}
 }
 
-func TestZosiaPolicyWithTheActionAtACommit(t *testing.T) {
-	root := gated(t, "go-github")
-	rewrite(t, root, ".github/workflows/release.yml", "klar-web-services/shearbolt@v1", "klar-web-services/shearbolt@"+strings.Repeat("a1b2", 10))
-	p := Zosia(root, true, true)
-	if p.Error != nil || !slices.Contains(codes(p.Notes), "ZOSIA_POLICY_GATE_UNKNOWN") || !slices.Contains(codes(p.Notes), "ZOSIA_POLICY_ADDED") {
-		t.Fatalf("error %+v, notes %+v", p.Error, p.Notes)
-	}
-	// Without --policy nobody is told about a release that does not matter then.
-	if p := Zosia(root, true, false); slices.Contains(codes(p.Notes), "ZOSIA_POLICY_GATE_UNKNOWN") {
-		t.Errorf("enable: notes %+v", p.Notes)
-	}
-}
-
-func TestZosiaPolicyInAMonorepo(t *testing.T) {
-	root := gated(t, "monorepo")
-	p := Zosia(root, true, true)
-	if p.Error != nil {
-		t.Fatal(p.Error)
-	}
-	var files []string
-	for _, c := range p.Changes {
-		if strings.HasSuffix(c.Path, "shearbolt.yaml") {
-			files = append(files, c.Path)
-			if !strings.HasSuffix(c.Content, "\nzosia:\n  policy: true\n") {
-				t.Errorf("%s would become:\n%s", c.Path, c.Content)
-			}
-		}
-	}
-	if !slices.Equal(files, []string{"apps/api/shearbolt.yaml", "apps/web/shearbolt.yaml", "crates/cli/shearbolt.yaml"}) {
-		t.Fatalf("changed %v, notes %+v", files, p.Notes)
-	}
-}
-
 func TestInstallPinIsTheOldestPinnedRelease(t *testing.T) {
 	for src, want := range map[string]string{
 		"":                                "",
@@ -241,9 +163,9 @@ func TestInstallPinIsTheOldestPinnedRelease(t *testing.T) {
 			t.Errorf("%q: %q, want %q", src, got, want)
 		}
 	}
-	for v, want := range map[string]bool{"": true, "1.11.0": true, "1.12.3": true, "2.0.0": true, "1.10.0": false, "1.9.9": false, "0.9.0": false} {
-		if knowsZosiaPolicy(v) != want {
-			t.Errorf("knowsZosiaPolicy(%q) = %v", v, !want)
+	for v, want := range map[string]bool{"": true, "1.12.0": true, "1.13.3": true, "2.0.0": true, "1.11.0": false, "1.9.9": false, "0.9.0": false} {
+		if knowsZosiaSend(v) != want {
+			t.Errorf("knowsZosiaSend(%q) = %v", v, !want)
 		}
 	}
 }
@@ -404,22 +326,13 @@ func TestZosiaSendLeavesAProjectThatCannotBeSwitchedOff(t *testing.T) {
 	}
 }
 
-func TestZosiaDisableKeepsSendAndEnablePolicyAddsItsLine(t *testing.T) {
+func TestZosiaDisableKeepsSendAndRemovesAnOldPolicyLine(t *testing.T) {
 	root := sending(t)
 	if err := Write(root, ZosiaSend(root, []string{"apps/api/shearbolt.yaml", "apps/web/shearbolt.yaml"})); err != nil {
 		t.Fatal(err)
 	}
-	// enable --policy adds its line to a block that holds only send.
-	on := Zosia(root, true, true)
-	if on.Error != nil {
-		t.Fatal(on.Error)
-	}
-	if err := Write(root, on); err != nil {
-		t.Fatal(err)
-	}
-	if got := read(t, root, "crates/cli/shearbolt.yaml"); !strings.HasSuffix(got, "\nzosia:\n  send: false\n  policy: true\n") {
-		t.Fatalf("crates/cli/shearbolt.yaml:\n%s", got)
-	}
+	// As a release before 1.13.0 left it: both lines in one block.
+	rewrite(t, root, "crates/cli/shearbolt.yaml", "zosia:\n  send: false\n", "zosia:\n  send: false\n  policy: true\n")
 	for _, policy := range []bool{true, false} {
 		off := Zosia(root, false, policy)
 		if off.Error != nil {

@@ -219,8 +219,8 @@ func fixedText(f model.Finding) string {
 	return "no fix"
 }
 
-// PolicyLine names where the run's policy came from, for a project that takes its policy from
-// Zosia. Every other report stays as it was: the line is empty.
+// PolicyLine names where the run's policy came from, for a run that asked Zosia: a CI scan with
+// the secret. Every other report stays as it was: the line is empty.
 func PolicyLine(r *model.Run) string {
 	src := r.PolicySource
 	switch src.Zosia {
@@ -234,8 +234,6 @@ func PolicyLine(r *model.Run) string {
 		return fmt.Sprintf("Policy: from Zosia (%s policy, version %d)", clean(src.Scope), version)
 	case "none":
 		return "Policy: shearbolt.yaml (Zosia has no policy for this project)"
-	case "local":
-		return "Policy: shearbolt.yaml (in CI this project takes its policy from Zosia)"
 	}
 	return "Policy: shearbolt.yaml (Zosia's policy could not be fetched, see the warnings)"
 }

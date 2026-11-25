@@ -345,11 +345,12 @@ Suggest the shortest date that fits, at most `policy.maxExceptionDays` days from
 the user tells you to; it is reviewed like code.
 
 Never add an exception, change `policy`, or remove a target on your own. Never add or
-remove the `zosia` block of `shearbolt.yaml` either: with `zosia: {policy: true}` the project
-takes its policy for CI scans from Zosia, and the scan report's `Policy:` line says which
-policy a run used. With `zosia: {send: false}` the project's reports are not sent to Zosia,
+remove the `zosia` block of `shearbolt.yaml` either. A repository connected to Zosia takes its
+policy for CI scans from Zosia (since 1.13.0 without any line in the file), and the scan
+report's `Policy:` line says which policy a run used. Changing that policy is done in Zosia, by
+the user. With `zosia: {send: false}` the project's reports are not sent to Zosia,
 and a CI scan says so in one line; that is the user's choice of which projects their plan
-holds, made through `shearbolt zosia enable`. A local scan of such a project uses the file's policy, so its result can
+holds, made through `shearbolt zosia enable`. A local scan always uses the file's policy, so in a repository connected to Zosia its result can
 differ from CI's.
 
 ## 5. Exit codes and rules

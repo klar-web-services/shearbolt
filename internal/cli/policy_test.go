@@ -166,20 +166,21 @@ func TestScanUsesTheFilesPolicyWhenZosiaGivesNone(t *testing.T) {
 			`{"from":"file","zosia":"refused"}`, "ZOSIA_POLICY_REFUSED", fellBack},
 		"Zosia's answer cannot be used": {ci, &fetched{err: &zosia.PolicyError{Reason: zosia.PolicyInvalid, Message: "the policy does not have all five values"}}, []string{"--ci"},
 			`{"from":"file","zosia":"invalid"}`, "ZOSIA_POLICY_INVALID", fellBack},
+		// Without the secret the scan is not connected to Zosia: the file's policy, and nothing said.
 		"CI without a secret, as a fork's pull request": {githubEnv(nil), nil, []string{"--ci"},
-			`{"from":"file","zosia":"no-secret"}`, "ZOSIA_POLICY_NO_SECRET", fellBack},
+			`{"from":"file"}`, "", ""},
 		"a CI Shearbolt cannot name the repository of": {map[string]string{"ZOSIA_SECRET": "zosia_x"}, nil, []string{"--ci"},
 			`{"from":"file","zosia":"no-ci"}`, "ZOSIA_POLICY_NO_CI", fellBack},
 		"a local scan": {ci, nil, nil,
-			`{"from":"file","zosia":"local"}`, "", "Policy: shearbolt.yaml (in CI this project takes its policy from Zosia)\n"},
+			`{"from":"file"}`, "", ""},
 	} {
 		// The file's policy lets the build pass, the default would block: so the exit code shows whose policy it was.
 		code, r, text, _ := policyScan(t, c.vars, c.fetch, append(c.args, "--config", policyProject(t, optedIn+lenient))...)
 		if code != 0 || r.Policy.BlockFixable != "never" || sourceOf(r) != c.source || warningCodes(r) != c.warning {
 			t.Errorf("%s: exit %d, blockFixable %s, source %s, warnings %q; want 0, never, %s, %q", name, code, r.Policy.BlockFixable, sourceOf(r), warningCodes(r), c.source, c.warning)
 		}
-		if !strings.Contains(text, c.line) {
-			t.Errorf("%s: the report lacks %q:\n%s", name, c.line, text)
+		if !strings.Contains(text, c.line) || c.line == "" && strings.Contains(text, "Policy:") {
+			t.Errorf("%s: the report lacks %q, or names a policy's source where Zosia was not asked:\n%s", name, c.line, text)
 		}
 		if c.warning != "" && (!strings.Contains(r.Warnings[0].Message, "so this scan used the policy in shearbolt.yaml") || !strings.Contains(text, r.Warnings[0].Message)) {
 			t.Errorf("%s: warning %q, report:\n%s", name, r.Warnings[0].Message, text)
@@ -234,13 +235,23 @@ func TestStaleDataUnderZosiasPolicyNamesZosia(t *testing.T) {
 	}
 }
 
-func TestScanAsksZosiaOnlyWhenTheFileSaysSo(t *testing.T) {
+// Since 1.13.0 a CI scan that has the secret asks Zosia, whatever shearbolt.yaml says about it: the
+// `policy` line that 1.11.0 and 1.12.0 needed is read and means nothing.
+func TestScanAsksZosiaWheneverItHasTheSecret(t *testing.T) {
 	ci := githubEnv(map[string]string{"ZOSIA_SECRET": "zosia_x"})
 	plain := strings.Replace(optedIn, "zosia:\n  policy: true\n", "", 1)
-	for name, yaml := range map[string]string{"no zosia block": plain, "policy: false": plain + "zosia:\n  policy: false\n"} {
-		code, r, text, _ := policyScan(t, ci, nil, "--ci", "--config", policyProject(t, yaml))
+	never := config.DefaultPolicy()
+	never.BlockFixable = "never"
+	for name, yaml := range map[string]string{"no zosia block": plain, "policy: false": plain + "zosia:\n  policy: false\n", "policy: true": optedIn} {
+		// The file's policy (the default) would block; Zosia's lets the build pass.
+		code, r, text, asked := policyScan(t, ci, &fetched{answer: zosia.PolicyAnswer{Version: 2, Scope: "repository", Policy: &never}}, "--ci", "--config", policyProject(t, yaml))
+		if code != 0 || len(asked) != 1 || sourceOf(r) != `{"from":"zosia","zosia":"used","version":2,"scope":"repository"}` || !strings.Contains(text, "Policy: from Zosia (repository policy, version 2)") {
+			t.Errorf("%s: exit %d, asked %d times, source %s, report:\n%s", name, code, len(asked), sourceOf(r), text)
+		}
+		// Without the secret nothing is asked, and the file's policy blocks.
+		code, r, text, _ = policyScan(t, githubEnv(nil), nil, "--ci", "--config", policyProject(t, yaml))
 		if code != 1 || sourceOf(r) != `{"from":"file"}` || len(r.Warnings) != 0 || strings.Contains(text, "Policy:") {
-			t.Errorf("%s: exit %d, source %s, warnings %+v, report:\n%s", name, code, sourceOf(r), r.Warnings, text)
+			t.Errorf("%s, no secret: exit %d, source %s, warnings %+v, report:\n%s", name, code, sourceOf(r), r.Warnings, text)
 		}
 	}
 	// Ad-hoc flags read no shearbolt.yaml, so they never ask either.
