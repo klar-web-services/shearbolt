@@ -930,7 +930,8 @@ func setupIn(t *testing.T, fixture string, d deps, args ...string) (map[string]s
 	dir := copyFixture(t, fixture)
 	t.Chdir(dir)
 	code, out, errb := setupCmd(t, d, args...)
-	if code != 0 || !strings.HasSuffix(out, reviewLine) {
+	// An interactive setup that sends to Zosia goes on to the secret; here its question meets the end of the input.
+	if code != 0 || !strings.HasSuffix(out, reviewLine) && !strings.HasSuffix(out, reviewLine+"\nMake a secret for this repository in Zosia now? [Y/n] ") {
 		t.Fatalf("setup %q: exit = %d\nstdout: %s\nstderr: %s", args, code, out, errb)
 	}
 	return tree(t, dir), out

@@ -651,3 +651,42 @@ func TestZosiaEnableGateWrittenByHand(t *testing.T) {
 		t.Errorf("disable: exit = %d\nstdout: %s\nstderr: %s\nworkflow:\n%s", code, out, errb, off)
 	}
 }
+
+// Interactive setup that was told to send to Zosia goes on as `zosia enable` does once its files
+// are written: the secret, and the plan's room.
+func TestSetupWithZosiaConnectsOnceItHasWritten(t *testing.T) {
+	setupWith := func(stdin string, args ...string) (int, string, *fakeGH, *fakeZosia) {
+		t.Helper()
+		fixtureRepo(t, "nextjs-docker")
+		gh, z := &fakeGH{repo: ghRepo, secrets: "[]"}, &fakeZosia{}
+		d := setupDeps(true, stdin)
+		d.gh, d.connectZosia, d.zosiaPlan = gh.run, z.connect, z.room
+		d.getenv = func(string) string { return "" }
+		d.gitRemote = func(string) string { return "git@github.com:acme/web.git" }
+		code, out, errb := setupCmd(t, d, args...)
+		if errb != "" {
+			t.Errorf("stderr: %s", errb)
+		}
+		return code, out, gh, z
+	}
+	// Apply: y. Name of the secret: Enter.
+	code, out, gh, z := setupWith("y\n\n", "--answer", "zosia=yes")
+	if code != 0 || len(z.asks) != 1 || z.asks[0].Repository != "github.com/acme/web" || stdinOf(t, gh) != testSecret || len(z.plans) != 1 {
+		t.Fatalf("exit = %d, asked %+v, plans %+v, gh calls %q\nstdout: %s", code, z.asks, z.plans, gh.calls, out)
+	}
+	for _, s := range []string{"https://zosiasec.com/app/connect?code=BCDF-GHJK", "ZOSIA_SECRET is set for acme/web."} {
+		if !strings.Contains(out, s) {
+			t.Errorf("stdout lacks %q:\n%s", s, out)
+		}
+	}
+	if i, j := strings.Index(out, reviewLine), strings.Index(out, "Name of the secret"); i < 0 || j < i {
+		t.Errorf("the question comes before setup has finished:\n%s", out)
+	}
+	// Not asked for, or nothing written: Zosia is not reached.
+	if code, out, gh, z := setupWith("y\n", "--answer", "zosia=no"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
+		t.Errorf("zosia=no: exit = %d, asked %+v, gh calls %q\n%s", code, z.asks, gh.calls, out)
+	}
+	if code, out, gh, z := setupWith("n\n", "--answer", "zosia=yes"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
+		t.Errorf("not applied: exit = %d, asked %+v, gh calls %q\n%s", code, z.asks, gh.calls, out)
+	}
+}

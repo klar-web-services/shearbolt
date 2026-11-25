@@ -194,7 +194,10 @@ func (s setupRun) interactive(root string, o setup.Options) int {
 		fmt.Fprintln(s.stdout, "No changes written.")
 		return 0
 	}
-	return s.write(root, p, false)
+	if code := s.write(root, p, false); code != 0 || answers["zosia"] != "yes" {
+		return code
+	}
+	return s.zosiaAfterSetup(root, in)
 }
 
 func (s setupRun) ask(in *bufio.Reader, qs []plan.Question, answers map[string]string, q plan.Question) (string, error) {

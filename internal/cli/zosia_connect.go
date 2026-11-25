@@ -24,16 +24,11 @@ import (
 // them, puts a secret into the CI, asks Zosia how many projects the account's plan has room
 // for, and has the user say which projects send when they do not all fit.
 func (s setupRun) zosiaEnable(root string, p *plan.Plan, o zosiaOpts) int {
-	terminal := s.canPaste()
-	in := bufio.NewReaderSize(s.d.stdin, maxAnswer+2)
-	repo, has, known := s.secretRepo(root, p)
-	secret := strings.TrimSpace(s.d.getenv("ZOSIA_SECRET"))
-	// With a secret in the environment there is one to ask the plan with, and nothing is made.
-	connect := secret == "" && (terminal || o.connect)
+	c := s.zosiaCI(root, p, o)
 	// The note that says where to add the secret by hand goes when this run puts one there, or
 	// gh shows that it is there already.
 	var byHand []plan.Note
-	if connect || has {
+	if c.connect || c.has {
 		byHand = slices.DeleteFunc(slices.Clone(p.Notes), func(n plan.Note) bool { return n.Code != "ZOSIA_SECRET" })
 		p.Notes = slices.DeleteFunc(p.Notes, func(n plan.Note) bool { return n.Code == "ZOSIA_SECRET" })
 	}
@@ -42,21 +37,7 @@ func (s setupRun) zosiaEnable(root string, p *plan.Plan, o zosiaOpts) int {
 	if len(p.Changes) > 0 {
 		fmt.Fprintf(s.stdout, "\n%s\n", zosiaReview)
 	}
-	code := 0
-	switch {
-	case connect:
-		var placed bool
-		if secret, placed, code = s.zosiaSecret(root, p, repo, has, known, terminal, o, in); !placed {
-			for _, n := range byHand {
-				fmt.Fprintln(s.stdout, noteLine(n))
-			}
-		}
-	case has:
-		fmt.Fprintf(s.stdout, "\nZOSIA_SECRET is already set for %s, so there is no secret to add. Shearbolt cannot read it or check that Zosia still knows it: the scan log of the next CI run says whether the report was sent. `gh secret set ZOSIA_SECRET` replaces it.\n", termSafe(repo, false))
-	}
-	if code == 0 {
-		code = s.zosiaProjects(root, o, secret, terminal, in)
-	}
+	code := s.zosiaConnect(root, p, o, c, bufio.NewReaderSize(s.d.stdin, maxAnswer+2), byHand)
 	// The steps before end on their own lines, so what still blocks a gate is said after them.
 	var blocked []string
 	for _, n := range p.Notes {
@@ -68,6 +49,62 @@ func (s setupRun) zosiaEnable(root string, p *plan.Plan, o zosiaOpts) int {
 		fmt.Fprintf(s.stdout, "\nNo reports are sent yet from %s: see the notes above.\n", termSafe(strings.Join(blocked, ", "), false))
 	}
 	return code
+}
+
+// zosiaCI is what is known of the repository's CI and its secret when enable begins.
+type zosiaCI struct {
+	terminal bool
+	// The repository as gh names it, whether it has ZOSIA_SECRET, and whether gh could tell and
+	// can set it.
+	repo       string
+	has, known bool
+	// The secret of the environment. With one there is a secret to ask the plan with, and none
+	// is made.
+	secret  string
+	connect bool
+}
+
+func (s setupRun) zosiaCI(root string, p *plan.Plan, o zosiaOpts) zosiaCI {
+	c := zosiaCI{terminal: s.canPaste(), secret: strings.TrimSpace(s.d.getenv("ZOSIA_SECRET"))}
+	c.repo, c.has, c.known = s.secretRepo(root, p)
+	c.connect = c.secret == "" && (c.terminal || o.connect)
+	return c
+}
+
+// zosiaConnect puts a secret into the CI and settles which projects send. byHand are the notes
+// to show when no secret was put there.
+func (s setupRun) zosiaConnect(root string, p *plan.Plan, o zosiaOpts, c zosiaCI, in *bufio.Reader, byHand []plan.Note) int {
+	code, secret := 0, c.secret
+	switch {
+	case c.connect:
+		var placed bool
+		if secret, placed, code = s.zosiaSecret(root, p, c.repo, c.has, c.known, c.terminal, o, in); !placed {
+			for _, n := range byHand {
+				fmt.Fprintln(s.stdout, noteLine(n))
+			}
+		}
+	case c.has:
+		fmt.Fprintf(s.stdout, "\nZOSIA_SECRET is already set for %s, so there is no secret to add. Shearbolt cannot read it or check that Zosia still knows it: the scan log of the next CI run says whether the report was sent. `gh secret set ZOSIA_SECRET` replaces it.\n", termSafe(c.repo, false))
+	}
+	if code == 0 {
+		code = s.zosiaProjects(root, o, secret, c.terminal, in)
+	}
+	return code
+}
+
+// zosiaAfterSetup is that for an interactive setup that was told to send to Zosia and has
+// written its files. Setup has said where the secret goes by hand already.
+func (s setupRun) zosiaAfterSetup(root string, in *bufio.Reader) int {
+	p := setup.Zosia(root, true, false)
+	if p.Error != nil {
+		return 0
+	}
+	o := zosiaOpts{on: true}
+	c := s.zosiaCI(root, p, o)
+	if !c.connect && c.secret == "" {
+		return 0
+	}
+	return s.zosiaConnect(root, p, o, c, in, nil)
 }
 
 // zosiaTarget is where connect and the plan request go: where reports go.
@@ -109,7 +146,7 @@ func (s setupRun) zosiaSecret(root string, p *plan.Plan, repo string, has, known
 	case terminal && !known:
 		// Whether the CI has a secret already cannot be told here, and every yes makes a new one.
 		fmt.Fprint(out, "\nMake a secret for this repository in Zosia now? [Y/n] ")
-		if line, _ := readLine(in); line != "" && !yes(line) {
+		if line, err := readLine(in); err != nil || line != "" && !yes(line) {
 			return "", false, 0
 		}
 	}
