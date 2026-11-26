@@ -9,63 +9,31 @@ curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh
 cd your-project && shearbolt setup
 ```
 
-`shearbolt: command not found`? The installer put it in `~/.local/bin`, which may not be on your `PATH` yet (the installer says so). Run `export PATH="$HOME/.local/bin:$PATH"`, add that line to your shell profile, then run setup again.
+Setup finds your npm, Rust or Go project, your Docker Compose files, the images your CI builds, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, asks before it writes, and adds a scan after your build and before any push or deploy. It never commits: review with `git diff`, commit, and your next pipeline is gated.
 
-Setup finds your npm, Rust or Go project, your Docker Compose files and the images your CI builds from a Dockerfile, and your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI). It shows its changes as a diff, and adds a scan after your build and before any push or deploy. Review with `git status` and `git diff`, commit the new and changed files, and your next pipeline is gated.
-
-With Claude Code or Codex: `shearbolt skill install`, then type `/shearbolt setup` in Claude Code or `$shearbolt setup` in Codex.
+- `shearbolt: command not found`? The installer put it in `~/.local/bin`. Add that folder to your `PATH`.
+- With Claude Code or Codex: `shearbolt skill install`, then `/shearbolt setup` (in Codex `$shearbolt setup`). `/shearbolt fix` explains a blocked build and proposes the upgrade.
+- Without a terminal: `shearbolt setup --yes` accepts the defaults.
+- In a monorepo, run setup once from the repository root. Each project gets its own `shearbolt.yaml`.
+- What setup cannot change safely, it leaves alone and explains in a note, with the lines to add by hand.
+- Run setup again after you add a workflow or a build. It gates the new part and leaves the gates that are there as they are.
+- `shearbolt update` installs the latest release.
 
 Shearbolt runs on Linux and macOS (amd64 and arm64). Windows is not supported yet.
 
-### Install options
-
-The installer downloads the release for your platform with `curl` (or `wget` when curl is missing), checks it against the release's SHA-256 checksums, and installs nothing if the check fails. These environment variables change what it does:
-
-| Variable | Default | Use it to |
-|---|---|---|
-| `SHEARBOLT_VERSION` | the latest release | Pin a version, for example `1.0.0`. |
-| `SHEARBOLT_INSTALL_DIR` | `~/.local/bin` | Install somewhere else. The installer tells you when the folder is not on your `PATH`. |
-| `SHEARBOLT_BASE_URL` | `https://tools.klar.ws/shearbolt` | Download from a mirror with the same layout (`latest`, then `v<version>/checksums.txt` and the archives). |
-
-```bash
-curl -fsSL https://tools.klar.ws/shearbolt/install.sh | SHEARBOLT_VERSION=1.0.0 sh
-```
-
-### Update
-
-```bash
-shearbolt update
-```
-
-It replaces the binary, in the folder it is installed in, with the latest release, or says that it is already up to date. It runs the installer that came with your version, with the same checksum check, and `SHEARBOLT_BASE_URL` and `SHEARBOLT_VERSION` work as above. Releases before 1.6.0 have no `update`: run the installer again instead.
-
 ### What setup changes
-
-Run setup from your repository root: it treats the current directory as the root and looks for your CI files there. It shows every change as a diff and asks `Apply these changes? [y/N]` before it writes anything. It never commits; new files such as `shearbolt.yaml` show only in `git status`.
 
 | Where | What setup does |
 |---|---|
-| `shearbolt.yaml` | Creates one in each project: a `source` target for the lockfiles, if the project has any, plus a target for each image and each Rust or Go binary your CI builds and for each [Docker Compose file](#docker-compose) that pulls images. |
-| GitHub Actions | Adds a `shearbolt` step (`uses: klar-web-services/shearbolt@v1`) after the build. A `docker/build-push-action` step that pushes is split: it builds with `push: false` and `load: true`, `shearbolt` scans, then a new step runs `docker push` for the same tags, so you push exactly what was scanned. Other repositories can use the Action only while this repository is public ([note](#supported-projects-and-ci)). |
-| Bitbucket Pipelines, GitLab CI | Adds two commands to the step or job that builds, between the build and the push: install a pinned Shearbolt, then run `shearbolt scan --ci`. A combined `docker build … && docker push …` line is split around them. Adds a CI cache for the vulnerability database. |
-| Image builds | Adds a local tag, `<image>:shearbolt-<commit>`, and passes it to the gate. The gate scans that tag, and it is never pushed. |
-| Rust builds | Changes `cargo build --release` to `cargo auditable build --release`, also in the Makefiles, justfiles and scripts your CI calls, and adds a step that installs cargo-auditable. |
-| `.gitignore`, `.dockerignore` | Adds `.shearbolt/`, the folder for local scan reports (and the cache on GitLab), so it is never committed or copied into an image. |
-
-- In a monorepo, run setup once from the repository root. It asks which projects to protect, and each one gets its own `shearbolt.yaml`.
-- If your CI has no build step setup recognizes, it asks which job should run the gate, and gates the lockfiles there.
-- Setup asks whether to send reports to [Zosia](#zosia-optional); the default is no. With yes, the GitHub steps it adds get `zosia-secret: ${{ secrets.ZOSIA_SECRET }}`, and a note says where to add the secret. On Bitbucket and GitLab nothing changes in the file: the gate reads the CI variable `ZOSIA_SECRET`. On a terminal, setup then has Zosia make the secret, as `shearbolt zosia enable` does. The answer is about the gates setup adds in that run: a gate that is there already keeps what it has, and [`shearbolt zosia enable` and `disable`](#zosia-optional) change those.
-- What setup can't change safely, it leaves alone and explains in a note. Examples: a multi-platform image build (its image cannot be scanned, so the gate checks only the rest of the project, such as its lockfiles or compose images), a `cargo build` inside a Dockerfile, or a GitLab job that inherits its script through `extends`. When a job stays ungated, the note includes the exact lines to add by hand.
-- A step can stop before its build, for example with `exit 0` when nothing changed. On GitHub, setup makes the rest of that step, and the gate where that is safe, run only when the build ran. On GitLab and Bitbucket, setup leaves the job alone and explains why in a note when skipping the gate would leave something unchecked, such as the lockfiles.
-- Pushing with `docker push` drops BuildKit's provenance and SBOM attestations. Setup's notes say so when it applies.
-- Running setup again is safe. It never overwrites an existing `shearbolt.yaml` (it only adds missing targets), and a second run changes nothing.
-- When you add a workflow, job or build later (a scheduled build, say), run setup again: it gates the new part and leaves the gates that are there as they are. One thing can change in an old step: when the new build adds a target, a gate that scanned every target gets a `targets:` line, so that it keeps scanning what its own job builds. If gates already send to Zosia, setup asks whether the new gates should too.
-- A gate you wrote by hand counts. When a workflow or pipeline already runs `shearbolt scan` with a config of your own whose `source` target covers the project, setup adds nothing to that workflow and says so in a note. When that leaves nothing to gate, it reports that Shearbolt is already set up. On Bitbucket this holds per step.
-- Without a terminal, use `shearbolt setup --yes` to accept the defaults, or `--plan --json` and `--apply --answer` (see [CLI](#cli)).
+| `shearbolt.yaml` | Creates one in each project. It lists what to scan: the lockfiles, and each image, binary and Docker Compose file. |
+| GitHub Actions | Adds a `shearbolt` step (`uses: klar-web-services/shearbolt@v1`) after the build. A `docker/build-push-action` step that pushes is split into build, scan and push, so you push exactly what was scanned. |
+| Bitbucket Pipelines, GitLab CI | Adds two commands between the build and the push: install a pinned Shearbolt, then run `shearbolt scan --ci`. Adds a CI cache for the vulnerability database. |
+| Rust builds | Changes `cargo build --release` to `cargo auditable build --release`, so the binary carries its crate list. |
+| `.gitignore`, `.dockerignore` | Adds `.shearbolt/`, the folder for local scan reports. |
 
 ## What a blocked build looks like
 
-In GitHub Actions this report is the job summary. On every CI and on your machine, it is `summary.md` in the [evidence folder](#evidence-folder). This one is real: a project that pins lodash 4.17.20, scanned with the pinned vulnerability database that Shearbolt's own tests use.
+In GitHub Actions this report is the job summary. Everywhere, it is `summary.md` in the [evidence folder](#evidence-folder). This one is from a project that pins lodash 4.17.20:
 
 <!-- generated: see testdata/README.md "README excerpt" -->
 > ### ❌ Blocked: 4 vulnerabilities must be fixed before deploying
@@ -83,46 +51,29 @@ In GitHub Actions this report is the job summary. On every CI and on your machin
 > | lodash | 4.17.20 → 4.18.0 | [GHSA-r5fr-rjxr-66jc](https://github.com/lodash/lodash/security/advisories/GHSA-r5fr-rjxr-66jc) | fix available: upgrade to 4.18.0 | high | repo: /package-lock.json |
 > | lodash | 4.17.20 → 4.17.23 | [GHSA-xxjr-mmjv-4gpg](https://github.com/lodash/lodash/security/advisories/GHSA-xxjr-mmjv-4gpg) | fix available: upgrade to 4.17.23 | medium | repo: /package-lock.json |
 
-The bullet is the quickest way out: one upgrade clears all four. Each row says why it blocks. The job log shows the same report as plain text, including:
-
-```text
-To unblock:
-  upgrade lodash to 4.18.0 to clear all 4
-```
-
-That upgrade line appears for npm packages and Rust crates when one version clears every blocking finding of the package.
+Each row says why it blocks. The bullet is the quickest way out: one upgrade clears all four.
 
 ## What blocks by default
 
-| A finding that is | Default |
-|---|---|
-| On CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list (KEV) | Blocks, fix or not |
-| Likely to be exploited: an [EPSS](https://www.first.org/epss/) score of 10% or more | Blocks, fix or not |
-| Fixed in a newer version, at any severity | Blocks |
-| Anything else | Warning: listed in the report, doesn't block |
+| A finding that is | Default | Policy key |
+|---|---|---|
+| On CISA's [Known Exploited Vulnerabilities](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) list (KEV) | Blocks, fix or not | `blockKnownExploited: true` |
+| Likely to be exploited: an [EPSS](https://www.first.org/epss/) score of 10% or more | Blocks, fix or not | `blockEpssAtLeast: 0.10` |
+| Fixed in a newer version, at any severity | Blocks | `blockFixable: any` (or `low`, `medium`, `high`, `critical`, `never`) |
+| Anything else | Warning: listed in the report, doesn't block | |
 
-KEV and EPSS mark the vulnerabilities that attackers use or are likely to use, so they block even without a fix: you decide about them before you deploy, not after. A vulnerability that is already fixed upstream costs only an upgrade, so it blocks until you take it, while everything else stays visible as a warning without stopping your deploys.
+A scan that cannot complete exits `2` and is never a pass, for example when a target is missing in CI or the vulnerability data is older than 48 hours (`maxDatabaseAgeHours`).
 
-A blocking finding lists every reason that applies. Separately, a scan that cannot complete exits `2` and is never a pass: for example when Grype fails, a target is missing in CI, or the vulnerability data is older than 48 hours (`maxDatabaseAgeHours`).
-
-To change the policy, add a `policy:` block to `shearbolt.yaml` with just the keys you change. The others keep their defaults. A repository connected to Zosia takes its [policy from Zosia](#policy-from-zosia) in CI.
+To change the policy, add a `policy:` block to `shearbolt.yaml` with just the keys you change:
 
 ```yaml
 policy:
   blockFixable: high   # block fixable vulnerabilities only from high severity up
 ```
 
-| Key | Default | What it does |
-|---|---|---|
-| `blockKnownExploited` | `true` | Block findings on the KEV list (including through a related vulnerability), fix or not. |
-| `blockEpssAtLeast` | `0.10` | Block findings whose highest EPSS score is at least this, fix or not. Above 0, at most 1. |
-| `blockFixable` | `any` | Block findings that have a fix and at least this severity: `any`, `low`, `medium`, `high`, `critical` or `never`. An unknown severity counts as meeting any level. |
-| `maxDatabaseAgeHours` | `48` | Fail the scan (exit `2`) when the vulnerability data is older than this. |
-| `maxExceptionDays` | `90` | How far ahead an exception may expire, in days. |
-
 ## Accepting a risk
 
-When you accept a blocking vulnerability, for example because the package is only used by build tooling and never shipped, add an exception to `shearbolt.yaml`:
+When you accept a blocking vulnerability, add an exception to `shearbolt.yaml`:
 
 ```yaml
 exceptions:
@@ -131,138 +82,55 @@ exceptions:
     target: web                     # optional: only in this target
     reason: Only used by build tooling, never shipped
     approvedBy: alice
-    expires: 2027-01-31             # at most 90 days ahead; valid through the end of this day, UTC
+    expires: 2027-01-31             # at most 90 days ahead (maxExceptionDays)
 ```
 
-- `package` is an exact `name@version`, with no wildcards or ranges. Scoped npm names keep their `@`, as in `@babel/traverse@7.22.5`. After an upgrade the exception no longer matches.
-- `expires` is at most `maxExceptionDays` (90 by default) after the day of the scan. A later date makes the config invalid, and every scan exits `2`.
-- Every field is required except `target`, which must name a target in the config.
-- Exceptions are reviewed like code: commit them with the change. If exceptions and policy changes should need a security owner's approval, add `shearbolt.yaml` to your CODEOWNERS file. A project that takes its [policy from Zosia](#policy-from-zosia) has its policy changed there instead; the lines that allow this are in `shearbolt.yaml` and reviewed with it.
-
-In the report, an excepted finding does not block. It is listed under **Accepted by exceptions**, with who approved it, until when, and why. Once the exception expires, it is ignored: the policy judges the finding again, and a warning names the expired exception.
+The finding then stops blocking and is listed under **Accepted by exceptions** in the report. After an upgrade or the expiry date the exception no longer applies, and the policy judges the finding again. To require a security owner's approval, add `shearbolt.yaml` to your CODEOWNERS file.
 
 ## Run it locally
 
 ```bash
-shearbolt scan                                   # the targets in ./shearbolt.yaml
-shearbolt scan --config apps/web/shearbolt.yaml  # another project's config
-shearbolt scan --target source                   # only this target (repeatable)
-shearbolt scan --build                           # rebuild the <name>:local image first
+shearbolt scan                         # the targets in ./shearbolt.yaml
+shearbolt scan --target source         # only this target
+shearbolt scan --build                 # rebuild the <name>:local image first
+shearbolt scan --image node:22-alpine  # ad hoc, without shearbolt.yaml (also --source, --file, --dir)
 ```
 
-A local scan uses the same config and the same pinned Grype as CI, so you can find and fix most blocks before you pay for a pipeline run. The one difference: a repository connected to Zosia takes its [policy from Zosia](#policy-from-zosia) in CI, and a local scan uses the one in `shearbolt.yaml`.
+A local scan uses the same config and the same pinned Grype as CI. An image or binary you have not built yet is skipped with a hint; in CI a missing target is an error. The first scan downloads Grype and its vulnerability database into `~/.cache/shearbolt` (about 3.4 GB on disk).
 
-- Source lockfiles are always scanned.
-- An image, binary or directory you have not built yet is skipped, with a hint on how to build it, and the report lists it. Images are read from your local Docker when they are there, otherwise from the registry. Setup's configs look for `<name>:local` on your machine (`image: ${SHEARBOLT_IMAGE:-<name>:local}`), so `docker build -t <name>:local .` includes the image.
-- `--build` rebuilds that image before every scan, so you never scan a stale one. It runs `docker build` with the `Dockerfile` next to `shearbolt.yaml`, using that folder as the context. It only works when the config has exactly one image target and the image is tagged `:local`, and it never runs in CI. If the build fails, nothing is scanned.
-- If every target is skipped, the scan is an error. In CI, a missing target is always an error, never a skip.
-
-Ad-hoc flags scan just what they name, with the default policy, and ignore `shearbolt.yaml`:
-
-```bash
-shearbolt scan --source .                     # the lockfiles in this tree
-shearbolt scan --image node:22-alpine         # a container image
-shearbolt scan --file target/release/my-cli   # a binary
-shearbolt scan --dir dist/                    # everything in a folder
-```
-
-Each flag can be repeated. Combining them with `--config` is an error.
-
-The first scan downloads the pinned Grype release, verified by its SHA-256, and Grype's vulnerability database (about 200 MB, which takes about 3.4 GB once imported) into `~/.cache/shearbolt`. Scans need network access.
-
-| Exit code | Meaning |
-|---|---|
-| `0` | Passed. |
-| `1` | Blocked by policy. The report says what to upgrade. |
-| `2` | Error: an invalid config or usage, a scanner failure, or an incomplete scan. Nothing is approved. |
+Exit codes: `0` passed, `1` blocked by policy, `2` error or incomplete scan. `shearbolt -h` lists the commands, and each one prints its flags with `-h`.
 
 ## Zosia (optional)
 
-[Zosia](https://zosiasec.com) is a dashboard for every repository Shearbolt gates and every machine Tripcoil watches. Shearbolt works the same without it.
-
-When `ZOSIA_SECRET` is set in CI, every scan sends its result (`run.json` plus the repository, branch, commit and CI run link) to Zosia after the report is written. The report is encrypted to Zosia's public key and bound to your secret, so only Zosia can read it and only into your account. Sending never changes the exit code: a failed send prints one `Zosia: report not sent` line and the gate's result stands. Local scans and ad-hoc scans are never sent.
-
-To connect a repository, you need an account at https://zosiasec.com. Then:
+[Zosia](https://zosiasec.com) is a dashboard for every repository Shearbolt gates. Shearbolt works the same without it.
 
 ```bash
 shearbolt zosia enable
 ```
 
-Run it in the repository root, in a repository `shearbolt setup` has already gated. It does three things: it changes what the CI files need, it has Zosia make the secret, and it checks that your plan has room for the repository's projects.
+Run it in a repository that setup has gated. It shows a link and a code, and you approve the code where you are logged in to Zosia. Zosia then makes a secret. On GitHub, Shearbolt stores it as the repository secret `ZOSIA_SECRET` through the GitHub CLI and adds it to the gate steps in your workflows. On GitLab and Bitbucket it shows the secret once, for you to add as the CI variable `ZOSIA_SECRET`.
 
-**The CI files.** It changes only what Zosia needs and shows the change as a diff:
+From then on:
 
-- GitHub Actions: it adds `zosia-secret: ${{ secrets.ZOSIA_SECRET }}` under the `with:` of each `shearbolt` step, and `ZOSIA_SECRET: ${{ secrets.ZOSIA_SECRET }}` to the `env:` of each `run:` step that runs `shearbolt scan` (a gate written by hand).
-- GitLab CI, Bitbucket Pipelines: no file changes. The gate reads the CI variable `ZOSIA_SECRET`.
+- Every CI scan sends its result to Zosia, encrypted. Sending never changes the gate's result, and local scans are never sent.
+- Zosia holds the policy. It starts with the one in your `shearbolt.yaml`, and you change it in the repository's settings in Zosia, without a commit. A scan that cannot reach Zosia or has no secret (a local scan, a pull request from a fork) uses the file's `policy:` block.
+- Exceptions stay in `shearbolt.yaml`.
+- A project with `send: false` under `zosia:` in its `shearbolt.yaml` sends nothing. `enable` offers this when your plan has no room for every project.
 
-**The secret.** On a terminal, `enable` asks for a name for the secret, then shows a link and a code and waits up to 10 minutes. Open the link where you are logged in to Zosia, check what the page says is asking, and approve. Zosia then makes the secret and hands it to Shearbolt, once.
-
-- In a repository with only GitHub workflows, when the GitHub CLI is logged in with access to the repository's secrets, Shearbolt stores it as the repository secret `ZOSIA_SECRET` through `gh`. It is handed to `gh` on its standard input and never printed.
-- Everywhere else it is shown to you once, with where to put it: a masked CI/CD variable on GitLab, a secured repository variable on Bitbucket.
-- Where `gh` shows that `ZOSIA_SECRET` is there already, `enable` asks before it replaces it. Where it cannot tell, it asks before it makes a secret. A secret that was replaced stays valid until you revoke it at https://zosiasec.com/app/secrets.
-- With `ZOSIA_SECRET` set in the environment, it makes no secret and uses that one for the check below.
-- Without a terminal (in a script, or run by an agent) it makes none unless you pass `--connect`. With `--connect` it asks nothing, wherever it runs: it replaces a secret that is there, needs `gh` to store the new one, and never prints it. It still says when `gh` shows that `ZOSIA_SECRET` is already set. You can always make a secret yourself at https://zosiasec.com/app/secrets and add it by hand; the notes say where.
-- What Zosia is told about the repository is the host name and the path of its `origin` remote, your machine's host name and Shearbolt's version. They are shown on the page where you approve.
-
-**The plan's room.** A plan in Zosia allows a number of projects, and a project is one `shearbolt.yaml` that a gate reads: a monorepo has several. With a secret at hand, `enable` asks Zosia how many your plan allows and how many are in use.
-
-- When every project of the repository fits, nothing more happens.
-- When more send than fit, it lists them and asks which send. Each of the others gets these lines in its `shearbolt.yaml`, and its scans send nothing from then on:
-
-  ```yaml
-  zosia:
-    send: false
-  ```
-
-- `--projects apps/api/shearbolt.yaml,apps/web/shearbolt.yaml` names the projects that send without the question, and `--all-projects` removes every `send: false`. Without a terminal and without `--projects`, a repository that needs a selection ends with exit code 3 and the list.
-- A project whose gate runs a Shearbolt release before 1.12.0 cannot be switched off this way, because that release fails on the line. It goes on sending, and `enable` says so.
-- The check is a convenience. Zosia refuses the reports of a project it has no place for, which prints one `Zosia: report not sent` line and fails no build. Remove a project in Zosia (a repository's Settings tab) to free its place.
-
-Sending came with Shearbolt 1.4.0. When a gate pins an older release (a versioned download URL in its `run:` step, or the action at a full tag such as `@v1.3.0`), `enable` says so in a note and again in its last line: nothing is sent from that gate until you move it to a newer release.
-
-Answering `yes` to "Send reports to Zosia?" in `shearbolt setup` does the same for the gates setup adds in that run. Setup leaves gates that are there already as they are: with a yes it names the ones that do not send, and `shearbolt zosia enable` adds the secret to them.
-
-To disconnect, run `shearbolt zosia disable`, which removes those lines from the CI files again (and a `policy: true` line that a release before 1.13.0 left in `shearbolt.yaml`), and delete the secret or variable in your CI (or revoke it in Zosia): the command cannot do that for you. A `send: false` stays, and `disable` says so. `ZOSIA_URL` and `ZOSIA_KEY` point Shearbolt at another Zosia for testing only; with `ZOSIA_URL` set, `enable` connects and asks there and says so, and refuses an address that is not https unless it is this machine.
-
-### Policy from Zosia
-
-A repository that is connected to Zosia takes its policy from there: you change what blocks in the repository's settings in Zosia, without a commit. Nothing in `shearbolt.yaml` has to say so. (Releases 1.11.0 and 1.12.0 needed `zosia: {policy: true}` in the file; since 1.13.0 that line means nothing, and `shearbolt zosia disable --policy` removes it.)
-
-- **The start is your file's policy.** With a repository's first report, Zosia takes over the policy that run used from its `shearbolt.yaml` and mails you that it did. Connecting changes nothing about what blocks.
-- **From then on Zosia's policy applies.** Every CI scan that has `ZOSIA_SECRET` asks Zosia before it scans and uses that policy, all five values, in place of the file's `policy:` block. It wins whether it is stricter or looser than the file's.
-- **Zosia cannot be asked, or does not answer.** That is an outage or a revoked secret. The scan uses the `policy:` block, and a warning says why. Asking Zosia never fails a scan.
-- **No secret, no Zosia.** A pull request from a fork gets no secret, and neither does a local scan: both use the `policy:` block, without a warning. A repository you disconnect (`shearbolt zosia disable`, or removing the secret) is back on its file.
-
-So the `policy:` block still counts: keep one there that you can live with on a day when Zosia does not answer. Nothing Zosia does changes the file.
-
-You set the policy in the repository's settings in Zosia: one for the repository and, where it has several projects, one for each project that needs its own. The report names the source in a line such as `Policy: from Zosia (repository policy, version 7)`, and `run.json` has it as `policySource`.
-
-- Exceptions stay in `shearbolt.yaml` and have to fit the file's own `maxExceptionDays`. A shorter `maxExceptionDays` in Zosia's policy sets an exception that expires later aside for that run: the finding is judged by the policy again, and a warning names the exception. A longer one in Zosia does not lengthen the file's.
-- Zosia's policy applies with all its values, `maxDatabaseAgeHours` included: with a smaller number there than in the file, a scan fails on vulnerability data that the file would still accept, and the error names Zosia.
-- Zosia knows a repository by its host and path. A renamed repository is a new one there, and its policy has to be set again.
-- The policy is fetched from https://zosiasec.com, and an answer that points elsewhere is not followed. `ZOSIA_URL` changes the address for tests; a scan that used a policy from there says so in a warning.
-- Whoever can log in to your Zosia account can change the policy of every repository connected to it. Zosia mails you every such change.
-- A gate has to run 1.13.0 or newer to ask without the old line. One that pins 1.11.0 or 1.12.0 asks only where `shearbolt.yaml` still has `zosia: {policy: true}`, and one that pins an older release never asks.
+`shearbolt zosia disable` removes the secret from the CI files again; delete the secret itself in your CI. `shearbolt zosia -h` has the details.
 
 ## Supported projects and CI
 
 | | Supported |
 |---|---|
-| npm | npm, pnpm, Yarn and Bun lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, text `bun.lock`); Next.js apps |
+| npm | npm, pnpm, Yarn and Bun lockfiles (`bun.lock` as text, not `bun.lockb`) |
 | Rust | Cargo projects with a `Cargo.lock`; release binaries built with cargo-auditable |
-| Go | Go modules whose `go.mod` requires at least one module; binaries built with `go build -o <file>` |
-| Docker images | Images that CI builds from a Dockerfile (`docker build`, `docker image build`, `docker buildx build`, `docker/build-push-action`, `railpack build --name`), in any repository, including one with no npm, Rust or Go project. The gate runs between the build and the push. |
-| Docker Compose | Repositories that deploy with Docker Compose: the images their compose files pull |
+| Go | Go modules; binaries built with `go build -o <file>` |
+| Docker images | Images that CI builds from a Dockerfile (`docker build`, `docker buildx build`, `docker/build-push-action`, `railpack build`) |
+| Docker Compose | The images your compose files pull |
 | CI | GitHub Actions, Bitbucket Pipelines, GitLab CI |
-| Targets | Container images (local Docker or registry), images pulled by Docker Compose files, binaries and other single files, directories, source trees |
 
-Scanning works for anything Grype understands; supported means setup support and tests.
-
-- Grype cannot read Bun's binary `bun.lockb`. Run `bun install --save-text-lockfile` and commit `bun.lock`; setup tells you when this applies.
-- A Go binary gets a target when `go build` names it with `-o <file>`. Without `-o`, with a variable in the path, or inside a shell loop or conditional, setup cannot know where the binary is: the gate then checks `go.mod` only, and a note says so. A `go.mod` that requires no modules holds nothing to check, so setup skips that module.
-- A Rust binary built without cargo-auditable carries no crate list. With `lockfileFallback: Cargo.lock` (setup adds it), Shearbolt checks that lockfile instead and warns: "binary is not auditable; rebuild with cargo-auditable".
-
-The GitHub Action (`uses: klar-web-services/shearbolt@v1`) can be used by other repositories only while this repository is public.
+Scanning works for anything Grype understands; supported means that setup handles it and tests cover it.
 
 ## Reference
 
@@ -273,114 +141,27 @@ version: 1
 project: my-app
 targets:
   - name: web
-    image: ${SHEARBOLT_IMAGE:-my-app:local}  # local Docker image, or a registry reference or digest
+    image: ${SHEARBOLT_IMAGE:-my-app:local}  # CI sets SHEARBOLT_IMAGE to the tag it just built
   - name: cli
     file: target/release/my-cli
     lockfileFallback: Cargo.lock             # used only if the binary has no embedded crate list
+  - name: stack
+    compose: docker-compose.yml
+    exclude: [app]                           # optional: services to leave out
   - name: source
-    source: .                                # the lockfiles in this tree
+    source: .
     exclude: [examples/]                     # optional: folders to leave out
 ```
 
-| Field | Required | Meaning |
-|---|---|---|
-| `version` | yes | Always `1`. |
-| `project` | yes | The project's name in reports. |
-| `targets` | yes | What to scan, at least one. Each target has a `name` (letters, digits, `.`, `_` and `-`) and exactly one of the kinds below. |
-| `policy` | no | See [What blocks by default](#what-blocks-by-default). |
-| `exceptions` | no | See [Accepting a risk](#accepting-a-risk). |
-| `zosia` | no | `send: false` keeps the project's reports from Zosia, whatever secret a scan has. See [Zosia](#zosia-optional). Needs 1.12.0. A `policy` key from releases 1.11.0 and 1.12.0 is still read and means nothing. |
-
-| Target kind | Scans | When nothing is found |
-|---|---|---|
-| `image` | A container image: from the local Docker daemon when it is there, otherwise from the registry. | Error |
-| `dir` | Everything in a directory, such as a built application bundle. | Error |
-| `file` | One file: a binary or an archive. | Error, unless `lockfileFallback` applies |
-| `compose` | Each image a Docker Compose file pulls (services that build their image are not scanned). `exclude` lists service names to leave out. See [Docker Compose](#docker-compose). | Error |
-| `source` | The lockfiles and manifests in a source tree, always without `node_modules/`, `.git/`, `target/` and `.shearbolt/`. `exclude` lists more folders to leave out, as paths relative to the tree (not globs). | Error when the tree has no lockfile, or Grype cannot read one |
-
-- `${VAR}` and `${VAR:-default}` in target fields come from the environment. A `${VAR}` without a default that is unset or empty is an error. Setup's image targets use this: the CI sets `SHEARBOLT_IMAGE` to the tag it just built.
-- After expansion, an `image` reference may contain only letters, digits and `._/:@-`, and must start with a letter or digit.
-- Paths are relative to the config file.
-- Unknown fields, duplicate target names and invalid values are errors. The message names the file and, for YAML mistakes, the line.
-
-### Docker Compose
-
-A `compose` target scans every image a compose file pulls, each like an `image` target. Setup writes one for each compose file that pulls images, so a repository that deploys with Docker Compose is gated even without an npm or Rust project.
-
-```yaml
-targets:
-  - name: docker-compose
-    compose: docker-compose.yml   # path relative to shearbolt.yaml
-    exclude: [app]                # optional: services not to scan, by name
-  - name: test-compose
-    compose: test/compose.yml
-```
-
-- A service that builds its image (`build:`) is not scanned: a warning says so. If CI builds and gates that image with an `image` target, add its service to `exclude`. A name the file does not define is an error.
-- `image:` and `platform:` may use `${VAR}`, `${VAR:-default}` and the other Compose forms. Values come only from the environment, never from `.env` files, so set them where `shearbolt scan` runs. An unset variable without a default fails that service; the others are still scanned.
-- Set `platform:` on a service when production runs another architecture than CI. Without it, the image for the machine that runs the scan is checked.
-- `extends`, `include` and a second YAML document in one file are not supported yet: the scan fails (`COMPOSE_UNSUPPORTED`) instead of skipping what it cannot read. Exclude an `extends` service to scan the rest. Profiles are ignored, so every service is read.
-- A blocked image gets a "Re-pin" line in the report with the file, line and services. Move the pin to a newer build of the tag, or a newer tag, then scan again. A digest pin stays a digest pin.
-- Setup finds compose files named `compose.yaml`, `compose.yml`, `docker-compose.yaml` and `docker-compose.yml`, and variants such as `docker-compose.prod.yml`, `docker-compose-prod.yml` and `compose-dev.yaml`. A compose file under any other name must be added as a target by hand.
-- Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests. After you add or remove a compose target by hand, run `shearbolt setup` again, so every gate scans it (or stops naming it).
-- Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`. In a repository with only compose files and no image build in CI, it places the gate at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
-
-### CLI
-
-| Command | What it does |
+| Target kind | Scans |
 |---|---|
-| `shearbolt setup` | Adds the gate to this repository's CI. Run it from the repository root. |
-| `shearbolt scan` | Scans the targets in `./shearbolt.yaml`, or ad-hoc targets. |
-| `shearbolt skill install [--agent claude\|codex\|all] [--project]` | Installs the [agent skill](#agent-skill-claude-code-and-codex) for Claude Code, Codex or both. |
-| `shearbolt zosia enable`, `shearbolt zosia disable` | Makes the gates in this repository's CI send their reports to [Zosia](#zosia-optional), or stops that. In the CI files they change only the `zosia-secret` input of existing `shearbolt` steps, and `ZOSIA_SECRET` in the `env:` of `run:` steps that run `shearbolt scan`, and write directly. On a terminal, `enable` also has Zosia make the secret and stores it through the GitHub CLI where it can, and asks which projects send when your plan has no room for all (`--projects`, `--all-projects`, `--connect`, `--secret-name`; exit code 3 when a selection is needed and cannot be asked). `disable --policy` removes only the `policy: true` line that releases before 1.13.0 wrote; `enable --policy` changes nothing any more. |
-| `shearbolt version` | Prints the Shearbolt version and the pinned Grype version. |
+| `image` | A container image, from the local Docker daemon or the registry. |
+| `file` | One file: a binary or an archive. |
+| `dir` | Everything in a directory, such as a built application bundle. |
+| `compose` | Each image a Docker Compose file pulls. Services that build their image are not scanned. |
+| `source` | The lockfiles in a source tree. |
 
-`setup`, `scan` and `skill install` print their flags with `-h`. `scan` exits `0`, `1` or `2` as above; the other commands exit `0` on success and `2` on failure.
-
-`shearbolt setup` flags:
-
-| Flag | Effect |
-|---|---|
-| none | Asks the open questions on the terminal, shows the diffs and notes, then asks before writing. Needs a terminal. |
-| `--yes` | Accepts the defaults of unanswered questions and writes without asking. |
-| `--plan` | Prints the plan and writes nothing. |
-| `--apply` | Writes the plan. Every open question needs an `--answer`, unless `--yes` is given. |
-| `--answer id=value` | Answers a question (repeatable). `--plan --json` lists the questions and their options. |
-| `--json` | With `--plan` or `--apply`: prints the plan, or the error, as JSON. |
-
-`shearbolt scan` flags:
-
-| Flag | Effect |
-|---|---|
-| `--config PATH` | The config file (default `./shearbolt.yaml`). |
-| `--target NAME` | Scans only this target from the config (repeatable). |
-| `--output-dir DIR` | The evidence folder (default `.shearbolt/runs/<run-id>`). It must be new or empty. |
-| `--json` | Prints only `run.json` to stdout; logs go to stderr. If the config cannot be used, stdout stays empty, the message goes to stderr, and the exit code is `2`. |
-| `--ci` | Turns on [CI mode](#ci-mode). |
-| `--build` | Builds the image target first: `docker build --tag=<ref> --file=Dockerfile .`, run in the folder of `shearbolt.yaml`, with Docker's output on stderr. It needs exactly one image target, a ref tagged `:local` and a `Dockerfile` next to the config. Otherwise, or in CI mode, with ad-hoc flags or when the build fails, the scan stops with exit `2` and checks nothing. |
-| `--image REF`, `--dir PATH`, `--file PATH`, `--source PATH` | Ad-hoc targets (repeatable). They use the default policy and do not read `shearbolt.yaml`. |
-
-Each Shearbolt release pins one Grype version (`shearbolt version` shows it) and downloads it, checked against its SHA-256, into the cache. A `grype` on your `PATH` is never used, and a project's `.grype.yaml` or `GRYPE_*` environment variables cannot suppress findings.
-
-### CI mode
-
-`scan` runs in CI mode when the `CI` environment variable is set to anything but `false` or `0`, or when `--ci` is given. GitHub Actions, Bitbucket Pipelines and GitLab CI all set `CI`, and the steps setup adds pass `--ci` as well. In CI mode a missing target is an error instead of a skip: an image that cannot be found, or a binary or directory that does not exist. A scan that did not see your artifact never passes.
-
-When `GITHUB_STEP_SUMMARY` is set, as in GitHub Actions, `scan` appends its report to the job summary, configuration errors included.
-
-### Evidence folder
-
-Every scan writes an evidence folder, `.shearbolt/runs/<run-id>/` in the current directory unless you pass `--output-dir`:
-
-| File | Contents |
-|---|---|
-| `run.json` | The full result: versions, the database build time, each target with its identity (image ID and digests, or file SHA-256) or why it was skipped, every finding with severity, CVSS, EPSS, KEV, fix versions, locations and the decision with its reasons, the exceptions, warnings, errors, verdict and exit code. |
-| `summary.md` | The report shown [above](#what-a-blocked-build-looks-like). |
-| `raw/<target>.grype.json` | Grype's unmodified output. |
-| `raw/<target>.cdx.json` | A CycloneDX SBOM from the same Grype run. |
-
-An error never hides findings: everything collected before it is still written. The GitHub Action uploads the folder as an artifact, even when the scan fails.
+Paths are relative to the config file. `${VAR}` and `${VAR:-default}` come from the environment. Unknown fields and invalid values are errors that name the file and line. `policy`, `exceptions` and `zosia` are optional and described above.
 
 ### GitHub Action
 
@@ -394,111 +175,35 @@ An error never hides findings: everything collected before it is still written. 
 | Input | Default | Meaning |
 |---|---|---|
 | `config` | `shearbolt.yaml` | Path to the config, relative to `working-directory`. |
-| `working-directory` | `.` | Where to run, relative to the repository root. A job's `defaults.run.working-directory` does not apply to the Action. |
-| `targets` | every target | Space-separated target names, for a job that builds only some of the config's artifacts. Setup sets it only when it is needed. |
+| `working-directory` | `.` | Where to run, relative to the repository root. |
+| `targets` | every target | Space-separated target names, for a job that builds only some of them. |
 | `artifact-name` | unique per step | Name of the uploaded evidence artifact. |
-| `zosia-secret` | empty | A [Zosia](#zosia-optional) secret, usually `${{ secrets.ZOSIA_SECRET }}`. When set, the scan takes its [policy from Zosia](#policy-from-zosia) and sends its result there, encrypted. Sending never changes the job's result. A `ZOSIA_SECRET` in the job's `env` works too. |
+| `zosia-secret` | empty | The [Zosia](#zosia-optional) secret, usually `${{ secrets.ZOSIA_SECRET }}`. |
 
-| Output | Meaning |
-|---|---|
-| `exit-code` | `0` passed, `1` blocked by policy, `2` error or incomplete scan. |
-| `artifact-name` | Name of the uploaded evidence artifact. |
-| `evidence-dir` | Folder with `run.json`, `summary.md` and the raw Grype output. |
-
-The Action installs the Shearbolt release named in its `VERSION` file with the same `install.sh`, checksum included, and checks that the binary reports exactly that version. It restores a cache of Grype and its database (a new one each day), runs `shearbolt scan --ci`, which writes the job summary, and uploads the evidence folder even on failure. The job fails on exit `1` or `2`. It runs on Linux and macOS runners.
-
-Versions:
-
-- `@v1` follows the newest 1.x release.
-- `@v1.2.3` runs exactly that release.
-- Any other ref, such as `@main` or a commit SHA, runs the checksum-verified release binary named in that commit's `VERSION` file, never unreleased code.
+The job fails when the scan blocks or cannot complete. `@v1` follows the newest 1.x release, and `@v1.2.3` runs exactly that release.
 
 ### Bitbucket Pipelines and GitLab CI
 
-Setup adds two items to the Bitbucket step or GitLab job that builds, after the build and before the push. These are the lines it generates for its test fixtures (`testdata/setup/bitbucket` and `testdata/setup/gitlab`).
-
-Bitbucket Pipelines:
+Two commands in the step or job that builds, after the build and before the push:
 
 ```yaml
-- (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
-- SHEARBOLT_IMAGE=$IMAGE:shearbolt-$BITBUCKET_COMMIT "$HOME/.local/bin/shearbolt" scan --ci --config "$BITBUCKET_CLONE_DIR/shearbolt.yaml"
+- (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.13.0 sh
+- SHEARBOLT_IMAGE="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA" "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"
 ```
 
-GitLab CI:
+On Bitbucket the clone directory is `$BITBUCKET_CLONE_DIR`. Cache `~/.cache/shearbolt` so the vulnerability database is not downloaded on every run. GitLab only caches paths inside the project: set `SHEARBOLT_CACHE_DIR` to one.
 
-```yaml
-- (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
-- SHEARBOLT_IMAGE="$CI_REGISTRY_IMAGE:shearbolt-$CI_COMMIT_SHA" "$HOME/.local/bin/shearbolt" scan --ci --config "$CI_PROJECT_DIR/shearbolt.yaml"
+### Evidence folder
+
+Every scan writes `.shearbolt/runs/<run-id>/` (or `--output-dir`): `run.json` with the full result, `summary.md` with the report, and for each target Grype's raw output and a CycloneDX SBOM under `raw/`. The GitHub Action uploads the folder as an artifact, also when the scan fails.
+
+### Install options
+
+The installer checks the download against the release's SHA-256 checksums. `SHEARBOLT_VERSION` pins a version and `SHEARBOLT_INSTALL_DIR` installs somewhere other than `~/.local/bin`:
+
+```bash
+curl -fsSL https://tools.klar.ws/shearbolt/install.sh | SHEARBOLT_VERSION=1.13.0 sh
 ```
-
-- The install falls back to `wget`, because Alpine-based images such as `docker:` have no curl.
-- `SHEARBOLT_VERSION` is the version of shearbolt that ran setup (`1.2.3` in the fixtures). Run setup again with a newer release to move the pin.
-- `--config` always names the config through the clone directory: `"$BITBUCKET_CLONE_DIR/<dir>/shearbolt.yaml"` or `"$CI_PROJECT_DIR/<dir>/shearbolt.yaml"` for a project in a subfolder. An earlier `cd` cannot change which config is used.
-- The `SHEARBOLT_IMAGE=` prefix passes the tag the job just built. `--target` flags appear when the job builds only some of the config's targets.
-- The scan runs in the same step or job as the build, so it sees the same Docker daemon.
-
-On Bitbucket, setup also defines a cache and lists `- shearbolt` in the step's `caches`:
-
-```yaml
-definitions:
-  caches:
-    shearbolt: ~/.cache/shearbolt
-```
-
-GitLab only caches paths inside the project, so the job gets its own cache folder:
-
-```yaml
-build-image:
-  variables:
-    SHEARBOLT_CACHE_DIR: $CI_PROJECT_DIR/.shearbolt/cache
-  cache:
-    - key: shearbolt
-      paths:
-        - .shearbolt/cache
-```
-
-### Environment variables
-
-| Variable | Read by | Effect |
-|---|---|---|
-| `SHEARBOLT_CACHE_DIR` | `scan` | Where Grype and its vulnerability database live. Default: `$XDG_CACHE_HOME/shearbolt`, else `~/.cache/shearbolt`. Scans that share a cache run one at a time. |
-| `XDG_CACHE_HOME` | `scan` | When `SHEARBOLT_CACHE_DIR` is not set, the cache is `$XDG_CACHE_HOME/shearbolt`. |
-| `SHEARBOLT_IMAGE`, `SHEARBOLT_IMAGE_<NAME>` | setup's `shearbolt.yaml` | The image tag to scan. Setup writes `image: ${SHEARBOLT_IMAGE:-<name>:local}` for a project's first image (and `SHEARBOLT_IMAGE_<NAME>` for further images built in the same job). The CI step sets it to the tag the job just built; when it is unset, as on your machine, `<name>:local` is scanned. |
-| `CI` | `scan` | Turns on [CI mode](#ci-mode). |
-| `GITHUB_STEP_SUMMARY` | `scan` | When set, as in GitHub Actions, the report is appended to this file (the job summary). |
-| `NO_COLOR` | `scan` | Turns off colors in the terminal report. |
-| `ZOSIA_SECRET` | `scan` | When set in CI, the scan takes its [policy from Zosia](#policy-from-zosia) and sends its result to [Zosia](#zosia-optional). Sending never changes the exit code. |
-| `ZOSIA_URL`, `ZOSIA_KEY` | `scan`, `zosia enable`, `setup` | For tests: another Zosia to send to and to connect at, and its public key (`<key id>:<base64url key>`). |
-| `SHEARBOLT_DB_ARCHIVE` | `scan` | For tests: imports this Grype database archive instead of updating the database. `maxDatabaseAgeHours` still applies to it, and `run.json` and `summary.md` record its use. |
-| `SHEARBOLT_VERSION`, `SHEARBOLT_INSTALL_DIR`, `SHEARBOLT_BASE_URL` | `install.sh` | See [Install options](#install-options). |
-
-### Agent skill (Claude Code and Codex)
-
-`shearbolt skill install` asks which agent to install for: Claude Code, Codex or all (Enter means all). `--agent claude`, `--agent codex` or `--agent all` answers that up front; use it in scripts. Without `--agent`, and with its input or output not a terminal, the command installs for Claude Code, as every version before 1.10.0 did.
-
-| Agent | For all your projects | With `--project` |
-|---|---|---|
-| Claude Code | `~/.claude/skills/shearbolt/` | `.claude/skills/shearbolt/` |
-| Codex | `~/.agents/skills/shearbolt/` | `.agents/skills/shearbolt/` |
-
-`--project` writes into the current directory; commit that folder to share it with your team. Running the command again updates a skill that shearbolt installed, and leaves a different skill named `shearbolt` alone. (`--global` from 1.0.0 still works and means the default.)
-
-| In Claude Code | In Codex | What the agent does |
-|---|---|---|
-| `/shearbolt setup` | `$shearbolt setup` | Runs `shearbolt setup --plan --json`, asks you only the open questions, asks before applying, shows the diff and tells you what to commit. It never commits. |
-| `/shearbolt fix` | `$shearbolt fix` | Runs `shearbolt scan --json`, explains each block, proposes the upgrade (a dependency bump, a lockfile update or override, a newer base image), applies it only when you agree, and scans again to confirm. It never adds an exception or changes the policy on its own. |
-
-The skill needs `shearbolt` on your `PATH`. Before either command, it compares `shearbolt version` with the latest release. If yours is older, the skill updates the CLI where it is installed, runs `shearbolt skill install` for its own agent and folder, and goes on with the updated skill. The agent asks you before the installer runs, unless your permission settings already allow it. A missing CLI is never installed for you: the skill shows the install command.
-
-### How Shearbolt is released
-
-A release candidate is published only after these checks pass:
-
-1. **Gate:** the previous Shearbolt release scans the candidate binaries and the repository. The first release was gated by the pinned Grype instead.
-2. **Behaviour tests:** the candidate binary must give the expected exit codes against the pinned vulnerability database: vulnerable `1`, clean `0`, broken config `2`, KEV-listed `1`, expired exception `1`, in-date exception `0`. A stand-in that always exits `0` must fail them.
-3. **Install:** `install.sh` installs the candidate with curl on Linux and macOS, and with BusyBox wget on Alpine.
-
-Then the binaries go to tools.klar.ws and GitHub Releases with a `checksums.txt`, which `install.sh` and the Action verify. `v1` moves to a release only after a live install and the Action have been checked against it. The Linux binaries are static, so they run on glibc and musl (Alpine) alike.
 
 ### Uninstall
 
@@ -507,7 +212,7 @@ rm ~/.local/bin/shearbolt
 rm -rf ~/.cache/shearbolt
 ```
 
-If you set `SHEARBOLT_INSTALL_DIR` or `SHEARBOLT_CACHE_DIR`, remove those paths instead; with `XDG_CACHE_HOME` set, the cache is `$XDG_CACHE_HOME/shearbolt`. Also delete `.claude/skills/shearbolt/` or `~/.claude/skills/shearbolt/` (Codex: `.agents/skills/shearbolt/` or `~/.agents/skills/shearbolt/`) if you installed the skill, and the `.shearbolt/` folder in each project. To remove the gate from a project, delete its `shearbolt.yaml` and the steps setup added.
+To remove the gate from a project, delete its `shearbolt.yaml`, its `.shearbolt/` folder and the steps setup added.
 
 ## License
 
