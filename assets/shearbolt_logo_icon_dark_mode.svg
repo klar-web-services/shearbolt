@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="64.699455mm"
+   height="60.819027mm"
+   viewBox="0 0 64.699455 60.819027"
+   version="1.1"
+   id="svg1"
+   inkscape:export-filename="shearbolt_logo_icon_dark_mode.svg"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="mm"
+     showguides="true">
+    <inkscape:page
+       x="0"
+       y="0"
+       width="64.699455"
+       height="60.819027"
+       id="page2"
+       margin="0"
+       bleed="0" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1">
+    <symbol
+       id="svg1-optb-mark"
+       viewBox="0 0 600 600"
+       alignment-baseline="baseline"
+       color="#f5f5f5"
+       fill="#000000"
+       stroke="none">
+      <clipPath
+         id="svg1-optb-top">
+        <rect
+           x="-200"
+           y="-200"
+           width="1000"
+           height="490"
+           alignment-baseline="baseline"
+           color="#f5f5f5"
+           fill="#000000"
+           stroke="none"
+           id="rect15" />
+      </clipPath>
+      <clipPath
+         id="svg1-optb-bot">
+        <rect
+           x="-200"
+           y="310"
+           width="1000"
+           height="490"
+           alignment-baseline="baseline"
+           color="#f5f5f5"
+           fill="#000000"
+           stroke="none"
+           id="rect16" />
+      </clipPath>
+      <g
+         fill="#f5f5f5"
+         fill-rule="evenodd"
+         alignment-baseline="baseline"
+         color="#f5f5f5"
+         stroke="none"
+         id="g18">
+        <g
+           transform="translate(39)"
+           alignment-baseline="baseline"
+           color="#f5f5f5"
+           fill="#f5f5f5"
+           fill-rule="evenodd"
+           stroke="none"
+           id="g16">
+          <path
+             clip-path="url(#svg1-optb-top)"
+             d="M 300,100 473.2,200 V 400 L 300,500 126.8,400 V 200 Z m 0,90 95.3,55 V 355 L 300,410 204.7,355 V 245 Z"
+             alignment-baseline="baseline"
+             color="#f5f5f5"
+             fill="#f5f5f5"
+             fill-rule="evenodd"
+             stroke="none"
+             id="path16" />
+        </g>
+        <g
+           transform="translate(-39)"
+           alignment-baseline="baseline"
+           color="#f5f5f5"
+           fill="#f5f5f5"
+           fill-rule="evenodd"
+           stroke="none"
+           id="g17">
+          <path
+             clip-path="url(#svg1-optb-bot)"
+             d="M 300,100 473.2,200 V 400 L 300,500 126.8,400 V 200 Z m 0,90 95.3,55 V 355 L 300,410 204.7,355 V 245 Z"
+             alignment-baseline="baseline"
+             color="#f5f5f5"
+             fill="#f5f5f5"
+             fill-rule="evenodd"
+             stroke="none"
+             id="path17" />
+        </g>
+      </g>
+    </symbol>
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-60.029928,-90.023962)">
+    <path
+       id="path21"
+       style="fill:#f0ead6;stroke:none;stroke-width:11;stroke-linecap:round;stroke-linejoin:round"
+       inkscape:transform-center-x="1.9338566"
+       inkscape:transform-center-y="-1.0024831"
+       d="m 112.73369,120.37663 h -11.9631 l -0.0181,8.28063 -14.360367,8.24963 -14.324707,-8.31164 0.01757,-8.21862 H 60.062484 l -0.03256,15.20476 26.30227,15.2616 26.368416,-15.14791 z" />
+    <path
+       id="path22"
+       style="fill:#f0ead6;fill-opacity:1;stroke:none;stroke-width:11;stroke-linecap:round;stroke-linejoin:round"
+       inkscape:transform-center-x="1.9338566"
+       inkscape:transform-center-y="-1.0024831"
+       d="m 98.427073,90.023962 -26.368416,15.147908 -0.03307,15.20476 h 12.022522 l 0.01809,-8.34264 14.360881,-8.25014 14.32471,8.31215 -0.0181,8.28063 h 11.9631 l 0.0326,-15.09055 z" />
+  </g>
+</svg>

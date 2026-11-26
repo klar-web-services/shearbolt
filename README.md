@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/shearbolt_logo_icon_dark_mode.svg">
+  <img src="assets/shearbolt_logo_icon_bright_mode.svg" alt="Shearbolt logo" height="72">
+</picture>
+
 # Shearbolt
 
 Shearbolt stops a deployment when what you are about to ship contains a vulnerability that is exploited in the wild, likely to be exploited, or already fixed upstream.
