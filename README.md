@@ -6,6 +6,9 @@ Shearbolt stops a deployment when what you are about to ship contains a vulnerab
 
 ```bash
 curl -fsSL https://tools.klar.ws/shearbolt/install.sh | sh
+```
+
+```bash
 cd your-project && shearbolt setup
 ```
 
