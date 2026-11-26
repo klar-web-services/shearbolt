@@ -93,13 +93,20 @@ Exit codes: `0` passed, `1` blocked, `2` error. `shearbolt -h` lists every comma
 
 ## Supported
 
+### Projects
+
 | | |
 |---|---|
 | npm | npm, pnpm, Yarn and Bun lockfiles |
 | Rust | Cargo projects; binaries built with cargo-auditable |
 | Go | Go modules; binaries built with `go build -o <file>` |
 | Docker | Images your CI builds from a Dockerfile, and images your Docker Compose files pull |
-| CI | GitHub Actions, Bitbucket Pipelines, GitLab CI |
+
+### CI providers
+
+- GitHub Actions
+- Bitbucket Pipelines
+- GitLab CI
 
 ## Writing the gate by hand
 
