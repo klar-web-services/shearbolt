@@ -326,17 +326,6 @@ targets:
 - Setup adds compose targets only when it creates `shearbolt.yaml`. Later runs never add them back: a compose file without a target gets a note with the lines to add. Remove the target of a file that only runs locally or in tests. After you add or remove a compose target by hand, run `shearbolt setup` again, so every gate scans it (or stops naming it).
 - Setup places the gate before `docker compose push`, `docker-compose push` and `docker stack deploy`. In a repository with only compose files and no image build in CI, it places the gate at the start of the job you choose. If the platform deploys by itself, for example on every push, a failed check cannot stop it: require the `shearbolt` check before merging to the deployed branch, or trigger the deploy from CI after the gate.
 
-### Upgrading from 1.1
-
-Setup 1.1 gated a repository with only Docker Compose files at the start of a job. Running setup again keeps that gate where it is, but since 1.2 setup also gates the images your CI builds there, right after the build:
-
-- If a build follows the old gate in its job, the build gets `BUILD_AFTER_GATE`, because the old gate does not scan its image.
-- If the old gate sits in a job that builds nothing, such as a deploy job, it now also scans the new image target, which that job never built, so it fails on every run.
-
-Either way, remove the old gate step and run `shearbolt setup` again; the new gate then goes between the build and the push.
-
-On GitLab and Bitbucket, running setup again on a job where an early stop (such as `exit 0`) comes before a gate that checks the lockfiles or compose files now gives `UNSUPPORTED_EDIT`. That job is left as it is, so its install pin is no longer updated. Move the early stop into the job's rules or condition, as the note says, and run setup again.
-
 ### CLI
 
 | Command | What it does |
