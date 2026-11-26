@@ -182,7 +182,7 @@ The first scan downloads the pinned Grype release, verified by its SHA-256, and 
 
 When `ZOSIA_SECRET` is set in CI, every scan sends its result (`run.json` plus the repository, branch, commit and CI run link) to Zosia after the report is written. The report is encrypted to Zosia's public key and bound to your secret, so only Zosia can read it and only into your account. Sending never changes the exit code: a failed send prints one `Zosia: report not sent` line and the gate's result stands. Local scans and ad-hoc scans are never sent.
 
-To connect a repository, you need an account at https://zosiasec.com (sign-up is closed for now). Then:
+To connect a repository, you need an account at https://zosiasec.com. Then:
 
 ```bash
 shearbolt zosia enable
