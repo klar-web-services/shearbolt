@@ -91,6 +91,22 @@
         }
       ],
       "default": "no"
+    },
+    {
+      "id": "daily",
+      "prompt": "Add a daily scheduled run? It builds and scans once a day and pushes or deploys nothing, so a dependency that becomes vulnerable is found even when nobody pushes.",
+      "kind": "choice",
+      "options": [
+        {
+          "value": "yes",
+          "label": "yes (recommended)"
+        },
+        {
+          "value": "no",
+          "label": "no"
+        }
+      ],
+      "default": "yes"
     }
   ],
   "complete": false,
@@ -100,6 +116,12 @@
       "action": "modify",
       "diff": "--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -5,6 +5,10 @@\n     runs-on: ubuntu-latest\n     steps:\n       - uses: actions/checkout@v5\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: apps/api\n       - run: npm ci && npm test\n         working-directory: apps/api\n   web:\n@@ -12,7 +16,16 @@\n     steps:\n       - uses: actions/checkout@v5\n       - name: Build web image\n-        run: docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} apps/web\n+        id: shearbolt-build\n+        run: |\n+          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n+          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        env:\n+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n+        with:\n+          working-directory: apps/web\n       - name: Push web image\n         run: docker push ghcr.io/acme/web:${{ github.sha }}\n   cli:\n@@ -22,4 +35,12 @@\n         working-directory: crates/cli\n     steps:\n       - uses: actions/checkout@v5\n-      - run: cargo build --release --locked\n+      - name: Install cargo-auditable\n+        uses: taiki-e/install-action@v2\n+        with:\n+          tool: cargo-auditable\n+      - run: cargo auditable build --release --locked\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: crates/cli\n",
       "content": "name: ci\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: apps/api\n      - run: npm ci && npm test\n        working-directory: apps/api\n  web:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: Build web image\n        id: shearbolt-build\n        run: |\n          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        env:\n          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n        with:\n          working-directory: apps/web\n      - name: Push web image\n        run: docker push ghcr.io/acme/web:${{ github.sha }}\n  cli:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        working-directory: crates/cli\n    steps:\n      - uses: actions/checkout@v5\n      - name: Install cargo-auditable\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-auditable\n      - run: cargo auditable build --release --locked\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: crates/cli\n"
+    },
+    {
+      "path": ".github/workflows/shearbolt-daily-ci.yml",
+      "action": "create",
+      "diff": "--- /dev/null\n+++ b/.github/workflows/shearbolt-daily-ci.yml\n@@ -0,0 +1,47 @@\n+# Shearbolt's daily run of ci.yml: its build and its scan, without the steps after the scan.\n+# `shearbolt setup` writes this file. Run it again after you change ci.yml.\n+name: Shearbolt daily (ci)\n+on:\n+  schedule:\n+    - cron: '23 4 * * *'\n+  workflow_dispatch:\n+jobs:\n+  test:\n+    runs-on: ubuntu-latest\n+    steps:\n+      - uses: actions/checkout@v5\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: apps/api\n+  web:\n+    runs-on: ubuntu-latest\n+    steps:\n+      - uses: actions/checkout@v5\n+      - name: Build web image\n+        id: shearbolt-build\n+        run: |\n+          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n+          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        env:\n+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n+        with:\n+          working-directory: apps/web\n+  cli:\n+    runs-on: ubuntu-latest\n+    defaults:\n+      run:\n+        working-directory: crates/cli\n+    steps:\n+      - uses: actions/checkout@v5\n+      - name: Install cargo-auditable\n+        uses: taiki-e/install-action@v2\n+        with:\n+          tool: cargo-auditable\n+      - run: cargo auditable build --release --locked\n+      - name: shearbolt\n+        uses: klar-web-services/shearbolt@v1\n+        with:\n+          working-directory: crates/cli\n",
+      "content": "# Shearbolt's daily run of ci.yml: its build and its scan, without the steps after the scan.\n# `shearbolt setup` writes this file. Run it again after you change ci.yml.\nname: Shearbolt daily (ci)\non:\n  schedule:\n    - cron: '23 4 * * *'\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: apps/api\n  web:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v5\n      - name: Build web image\n        id: shearbolt-build\n        run: |\n          docker build -f apps/web/Dockerfile -t ghcr.io/acme/web:${{ github.sha }} -t ghcr.io/acme/web:shearbolt-${{ github.sha }} apps/web\n          echo shearbolt-image=ghcr.io/acme/web:shearbolt-${{ github.sha }} >> \"$GITHUB_OUTPUT\"\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        env:\n          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}\n        with:\n          working-directory: apps/web\n  cli:\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        working-directory: crates/cli\n    steps:\n      - uses: actions/checkout@v5\n      - name: Install cargo-auditable\n        uses: taiki-e/install-action@v2\n        with:\n          tool: cargo-auditable\n      - run: cargo auditable build --release --locked\n      - name: shearbolt\n        uses: klar-web-services/shearbolt@v1\n        with:\n          working-directory: crates/cli\n"
     },
     {
       "path": ".gitignore",
@@ -142,6 +164,11 @@
       "code": "TAG_ADDED",
       "message": "setup adds the local tag ghcr.io/acme/web:shearbolt-${{ github.sha }} to the gated image builds and the gate scans it; it is never pushed, so a scan that falls back to the registry fails instead of reading an older image",
       "file": ".github/workflows/ci.yml"
+    },
+    {
+      "code": "DAILY_RUN",
+      "message": "runs the build and the scan of ci.yml once a day (04:23 UTC) on the default branch, without the steps after the scan; it runs once this file is on the default branch. GitHub turns scheduled workflows off in a public repository after 60 days without activity (Actions → the workflow → Enable workflow turns it on again).",
+      "file": ".github/workflows/shearbolt-daily-ci.yml"
     }
   ]
 }

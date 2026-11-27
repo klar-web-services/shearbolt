@@ -1,9 +1,11 @@
 {
   "questions": [
-    "zosia"
+    "zosia",
+    "daily"
   ],
   "notes": [
     "COMPOSE_ADDED",
+    "DAILY_RUN",
     "TAG_ADDED"
   ]
 }

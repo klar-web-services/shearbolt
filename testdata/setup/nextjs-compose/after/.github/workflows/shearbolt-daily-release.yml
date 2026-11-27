@@ -1,0 +1,28 @@
+# Shearbolt's daily run of release.yml: its build and its scan, without the steps after the scan.
+# `shearbolt setup` writes this file. Run it again after you change release.yml.
+name: Shearbolt daily (release)
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+env:
+  IMAGE: ghcr.io/acme/shop
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The Dockerfile runs `next build` with output: "standalone".
+      - name: Build image
+        id: shearbolt-build
+        run: |
+          docker build \
+            --build-arg NEXT_TELEMETRY_DISABLED=1 \
+            -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:shearbolt-${{ github.sha }}" \
+            -t "$IMAGE:latest" \
+            .
+          echo shearbolt-image="$IMAGE:shearbolt-${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1
+        env:
+          SHEARBOLT_IMAGE: ${{ steps.shearbolt-build.outputs.shearbolt-image }}

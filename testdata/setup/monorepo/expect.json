@@ -2,9 +2,11 @@
   "questions": [
     "projects",
     "gate-job:apps/api",
-    "zosia"
+    "zosia",
+    "daily"
   ],
   "notes": [
+    "DAILY_RUN",
     "NO_BUILD_FOUND",
     "TAG_ADDED"
   ]

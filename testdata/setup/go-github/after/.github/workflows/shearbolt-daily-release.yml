@@ -1,0 +1,22 @@
+# Shearbolt's daily run of release.yml: its build and its scan, without the steps after the scan.
+# `shearbolt setup` writes this file. Run it again after you change release.yml.
+name: Shearbolt daily (release)
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o dist/tool ./cmd/tool
+      - name: shearbolt
+        uses: klar-web-services/shearbolt@v1

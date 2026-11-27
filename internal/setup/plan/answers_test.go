@@ -107,3 +107,22 @@ func TestResolveIgnoresInapplicableUnlessChosen(t *testing.T) {
 		t.Fatalf("values = %v, missing = %v, err = %v", values, missing, err)
 	}
 }
+
+func TestResolveOnlyIf(t *testing.T) {
+	qs := []Question{
+		{ID: "daily", Kind: "choice", Options: []Option{{Value: "yes"}, {Value: "no"}}, Default: "yes"},
+		{ID: "daily-branch", Kind: "choice", Options: []Option{{Value: "main"}, {Value: "dev"}}, Default: "main", OnlyIf: "daily=yes"},
+	}
+	values, missing, err := Resolve(qs, nil, false)
+	if err != nil || values["daily-branch"] != "main" || !slices.Equal(missing, []string{"daily", "daily-branch"}) {
+		t.Fatalf("unanswered: %v, %v, %v", values, missing, err)
+	}
+	values, missing, err = Resolve(qs, map[string]string{"daily": "no"}, false)
+	if _, has := values["daily-branch"]; err != nil || has || len(missing) != 0 {
+		t.Fatalf("daily=no: %v, %v, %v", values, missing, err)
+	}
+	values, _, err = Resolve(qs, map[string]string{"daily": "yes", "daily-branch": "dev"}, false)
+	if err != nil || values["daily-branch"] != "dev" {
+		t.Fatalf("daily=yes: %v, %v", values, err)
+	}
+}

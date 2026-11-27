@@ -252,7 +252,7 @@ func writeAfter(t *testing.T, afterDir string, got, orig map[string]treeFile) {
 func TestMonorepoAnswers(t *testing.T) {
 	root := t.TempDir()
 	copyTree(t, filepath.Join(goldenDir, "monorepo", "before"), root)
-	answers := map[string]string{"projects": "apps/web,crates/cli", "gate-job:apps/api": ".github/workflows/ci.yml#web", "zosia": "no"}
+	answers := map[string]string{"projects": "apps/web,crates/cli", "gate-job:apps/api": ".github/workflows/ci.yml#web", "zosia": "no", "daily": "no"}
 	p := Compute(Options{Root: root, Answers: answers, Version: "1.2.3"})
 	if p.Error != nil {
 		t.Fatal(p.Error)

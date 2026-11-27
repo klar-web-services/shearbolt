@@ -41,3 +41,20 @@ pipelines:
               variables:
                 IMAGE_NAME: api
                 TAGS: $BITBUCKET_TAG
+  custom:
+    # Shearbolt's daily run for main: the build and the scan of branches/main, without the push or deploy.
+    # Schedule it under Pipelines > Schedules.
+    shearbolt-daily:
+      - step:
+          name: Build and push
+          services:
+            - docker
+          caches:
+            - docker
+            - shearbolt
+          script:
+            - export IMAGE=registry.example.com/acme/api
+            - echo "$REGISTRY_PASSWORD" | docker login registry.example.com -u "$REGISTRY_USER" --password-stdin
+            - docker build -t $IMAGE:$BITBUCKET_COMMIT -t $IMAGE:shearbolt-$BITBUCKET_COMMIT .
+            - (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.2.3 sh
+            - SHEARBOLT_IMAGE=$IMAGE:shearbolt-$BITBUCKET_COMMIT "$HOME/.local/bin/shearbolt" scan --ci --config "$BITBUCKET_CLONE_DIR/shearbolt.yaml"

@@ -1,8 +1,11 @@
 {
   "questions": [
-    "zosia"
+    "zosia",
+    "daily",
+    "daily-branch"
   ],
   "notes": [
+    "DAILY_SCHEDULE",
     "TAG_ADDED",
     "ZOSIA_SECRET"
   ]

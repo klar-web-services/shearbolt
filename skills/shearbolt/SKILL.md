@@ -149,11 +149,12 @@ say so and stop. If the user only asked what setup would do, stop here.
 ### 3.3 Ask only the questions that apply
 
 Go through `questions` in their order (`projects`, then `build-project:*`, then
-`gate-job:*`, then `zosia`), one at a time. Before you ask a question, skip it if any of these holds:
+`gate-job:*`, then `zosia`, then `daily` and `daily-branch`), one at a time. Before you ask a question, skip it if any of these holds:
 
 - it already has an `answer`;
 - its `project` is set and that project is not among the chosen `projects` values;
-- any question ID in its `unlessChosen` list has a chosen value equal to its `project`.
+- any question ID in its `unlessChosen` list has a chosen value equal to its `project`;
+- its `onlyIf` is set (`id=value`) and that question was skipped or has another chosen value.
 
 "Chosen" means the user's answer, or the default when the user accepts it. Because of the
 order, the `projects` and `build-project:*` values are known before any `gate-job:*`

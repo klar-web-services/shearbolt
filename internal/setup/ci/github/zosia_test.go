@@ -134,7 +134,7 @@ func TestGitHubZosiaNewGateBesideExisting(t *testing.T) {
 			if !slices.Equal(notes, tc.notes) {
 				t.Errorf("notes = %v, want %v", notes, tc.notes)
 			}
-			q := p.Questions[len(p.Questions)-1]
+			q := p.Questions[slices.IndexFunc(p.Questions, func(q plan.Question) bool { return q.ID == "zosia" })]
 			wantDefault := "no"
 			if tc.existing != nil {
 				wantDefault = "yes"
@@ -352,8 +352,9 @@ func TestZosiaEnableAgreesWithSetup(t *testing.T) {
 	if err := setup.Write(root, first); err != nil {
 		t.Fatal(err)
 	}
+	// The workflow and its daily run.
 	on := setup.Zosia(root, true, false)
-	if on.Error != nil || len(on.Changes) != 1 {
+	if on.Error != nil || len(on.Changes) != 2 {
 		t.Fatalf("enable: %+v, %d changes", on.Error, len(on.Changes))
 	}
 	if err := setup.Write(root, on); err != nil {
@@ -364,8 +365,13 @@ func TestZosiaEnableAgreesWithSetup(t *testing.T) {
 		t.Errorf("setup after enable: %+v, %d changes, notes %v", again.Error, len(again.Changes), zosiaNotes(again))
 	}
 	off := setup.Zosia(root, false, false)
-	if off.Error != nil || len(off.Changes) != 1 || off.Changes[0].Content != first.Changes[slices.IndexFunc(first.Changes, func(c plan.FileChange) bool { return c.Path == wf })].Content {
-		t.Errorf("disable does not restore the workflow setup wrote: %+v", off.Changes)
+	if off.Error != nil || len(off.Changes) != 2 {
+		t.Fatalf("disable: %+v, %d changes", off.Error, len(off.Changes))
+	}
+	for _, c := range off.Changes {
+		if c.Content != first.Changes[slices.IndexFunc(first.Changes, func(f plan.FileChange) bool { return f.Path == c.Path })].Content {
+			t.Errorf("disable does not restore %s as setup wrote it:\n%s", c.Path, c.Content)
+		}
 	}
 }
 

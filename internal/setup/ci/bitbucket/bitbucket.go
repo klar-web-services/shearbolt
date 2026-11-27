@@ -124,6 +124,9 @@ func parse(file string, src []byte) (*pipelines, error) {
 		if m := resolve(v); m != nil && m.Kind == yaml.MappingNode {
 			for k := 0; k+1 < len(m.Content); k += 2 {
 				p := section + "/" + m.Content[k].Value
+				if p == dailyPath {
+					continue // setup's own copy of a pipeline: nothing to gate there
+				}
 				pl.imported(m.Content[k+1], p)
 				pl.list(m.Content[k+1], p, seen)
 			}

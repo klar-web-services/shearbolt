@@ -25,8 +25,9 @@ const setupUsage = `Usage: shearbolt setup [--yes] [--plan] [--apply] [--json] [
 Adds the Shearbolt gate to this repository's CI. Setup treats the current directory as the
 repository root. It finds the npm, Rust and Go projects there, the Docker images the CI builds and
 the Docker Compose files that pull images, writes a shearbolt.yaml for each project, and edits
-the CI so the gate runs after each build and before any push or deploy. It shows every change
-as a diff and never commits.
+the CI so the gate runs after each build and before any push or deploy. It can also add a daily
+run of the build and the scan that pushes nothing (GitHub Actions, Bitbucket Pipelines). It shows
+every change as a diff and never commits.
 
 Without flags it asks its questions on the terminal, then asks before writing.
 
@@ -99,6 +100,7 @@ func runSetup(args []string, stdout, stderr io.Writer, d deps) int {
 		return s.fail(nil, "READ", err.Error())
 	}
 	o := setup.Options{Root: root, Answers: answers, Yes: *yes, Version: d.version}
+	o.DefaultBranch, o.Branches = d.gitBranches(root)
 	if interactive {
 		return s.interactive(root, o)
 	}

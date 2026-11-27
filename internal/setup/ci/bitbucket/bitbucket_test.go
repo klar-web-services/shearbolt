@@ -45,12 +45,25 @@ func npmRepo(pipelines string) map[string]string {
 	}
 }
 
-// result runs setup on files and returns the plan and bitbucket-pipelines.yml afterwards (""
-// when unchanged). The result must be valid YAML, and a second run on it must change nothing.
+// result runs setup on files, without the daily pipeline, and returns the plan and
+// bitbucket-pipelines.yml afterwards ("" when unchanged). The result must be valid YAML, and a
+// second run on it must change nothing; the same holds with the daily pipeline.
 func result(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	t.Helper()
+	p, out := run(t, files, false)
+	run(t, files, true)
+	return p, out
+}
+
+func run(t *testing.T, files map[string]string, daily bool) (*plan.Plan, string) {
+	t.Helper()
 	root := tree(t, files)
-	p := setup.Compute(setup.Options{Root: root, Yes: true, Version: "1.2.3"})
+	o := setup.Options{Root: root, Yes: true, Version: "1.2.3"}
+	asked := slices.ContainsFunc(setup.Compute(o).Questions, func(q plan.Question) bool { return q.ID == "daily" })
+	if asked && !daily {
+		o.Answers = map[string]string{"daily": "no"}
+	}
+	p := setup.Compute(o)
 	if p.Error != nil {
 		t.Fatalf("plan error: %+v", p.Error)
 	}
@@ -66,7 +79,7 @@ func result(t *testing.T, files map[string]string) (*plan.Plan, string) {
 	if err := setup.Write(root, p); err != nil {
 		t.Fatal(err)
 	}
-	again := setup.Compute(setup.Options{Root: root, Yes: true, Version: "1.2.3"})
+	again := setup.Compute(o)
 	if again.Error != nil {
 		t.Fatalf("second plan error: %+v", again.Error)
 	}

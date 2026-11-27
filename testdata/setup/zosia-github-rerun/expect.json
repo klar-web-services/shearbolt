@@ -1,6 +1,9 @@
 {
   "questions": [
-    "zosia"
+    "zosia",
+    "daily"
   ],
-  "notes": []
+  "notes": [
+    "DAILY_RUN"
+  ]
 }

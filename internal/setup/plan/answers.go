@@ -23,10 +23,10 @@ func ParseAnswers(args []string) (map[string]string, error) {
 	return out, nil
 }
 
-// A question applies when its Project (if set) is selected and none of its UnlessChosen
-// questions resolves to that Project. The selected projects come from the "projects" question,
-// or are all projects when there is none. Inapplicable questions get no value; answers to them
-// are checked but otherwise ignored.
+// A question applies when its Project (if set) is selected, none of its UnlessChosen questions
+// resolves to that Project, and its OnlyIf question (if set) applies and resolves to that value.
+// The selected projects come from the "projects" question, or are all projects when there is
+// none. Inapplicable questions get no value; answers to them are checked but otherwise ignored.
 func Resolve(qs []Question, answers map[string]string, yes bool) (values map[string]string, missing []string, err error) {
 	byID := map[string]int{}
 	for i, q := range qs {
@@ -79,6 +79,10 @@ func Resolve(qs []Question, answers map[string]string, yes bool) (values map[str
 			if ok && found && applies(j) && resolvesTo(qs[j], value(qs[j]), q.Project) {
 				ok = false
 			}
+		}
+		if id, want, found := strings.Cut(q.OnlyIf, "="); ok && found {
+			j, known := byID[id]
+			ok = known && applies(j) && value(qs[j]) == want
 		}
 		delete(visiting, q.ID)
 		memo[q.ID] = ok

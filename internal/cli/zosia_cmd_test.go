@@ -806,8 +806,8 @@ func TestSetupWithZosiaConnectsOnceItHasWritten(t *testing.T) {
 		}
 		return code, out, gh, z
 	}
-	// Apply: y. Name of the secret: Enter.
-	code, out, gh, z := setupWith("y\n\n", "--answer", "zosia=yes")
+	// Daily run: Enter. Apply: y. Name of the secret: Enter.
+	code, out, gh, z := setupWith("\ny\n\n", "--answer", "zosia=yes")
 	if code != 0 || len(z.asks) != 1 || z.asks[0].Repository != "github.com/acme/web" || stdinOf(t, gh) != testSecret || len(z.plans) != 1 {
 		t.Fatalf("exit = %d, asked %+v, plans %+v, gh calls %q\nstdout: %s", code, z.asks, z.plans, gh.calls, out)
 	}
@@ -820,10 +820,10 @@ func TestSetupWithZosiaConnectsOnceItHasWritten(t *testing.T) {
 		t.Errorf("the question comes before setup has finished:\n%s", out)
 	}
 	// Not asked for, or nothing written: Zosia is not reached.
-	if code, out, gh, z := setupWith("y\n", "--answer", "zosia=no"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
+	if code, out, gh, z := setupWith("\ny\n", "--answer", "zosia=no"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
 		t.Errorf("zosia=no: exit = %d, asked %+v, gh calls %q\n%s", code, z.asks, gh.calls, out)
 	}
-	if code, out, gh, z := setupWith("n\n", "--answer", "zosia=yes"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
+	if code, out, gh, z := setupWith("\nn\n", "--answer", "zosia=yes"); code != 0 || len(z.asks) != 0 || len(gh.calls) != 0 {
 		t.Errorf("not applied: exit = %d, asked %+v, gh calls %q\n%s", code, z.asks, gh.calls, out)
 	}
 }

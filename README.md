@@ -21,6 +21,7 @@ Setup adds a scan to your CI (GitHub Actions, Bitbucket Pipelines, GitLab CI), a
 
 - `shearbolt: command not found`? Add `~/.local/bin` to your `PATH`.
 - Added a workflow or a build later? Run setup again.
+- Nobody pushes for weeks? Say yes to the daily run: setup adds a scheduled pipeline that builds and scans once a day and deploys nothing (GitHub Actions, Bitbucket Pipelines).
 - With Claude Code or Codex: `shearbolt skill install`, then `/shearbolt setup` (in Codex `$shearbolt setup`).
 - `shearbolt update` installs the latest release.
 

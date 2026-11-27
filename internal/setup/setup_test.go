@@ -669,7 +669,7 @@ func TestComputeRootProjectFromImageBuild(t *testing.T) {
 	if want := []plan.Project{rootProject(root)}; !reflect.DeepEqual(p.Projects, want) {
 		t.Fatalf("projects = %+v, want %+v", p.Projects, want)
 	}
-	if !p.Complete || !slices.Equal(questionIDs(p.Questions), []string{"zosia"}) || hasCode(p.Notes, "BUILD_NOT_GATED") {
+	if !p.Complete || !slices.Equal(questionIDs(p.Questions), []string{"zosia", "daily"}) || hasCode(p.Notes, "BUILD_NOT_GATED") {
 		t.Fatalf("complete = %v, questions = %v, notes = %v", p.Complete, questionIDs(p.Questions), codes(p.Notes))
 	}
 	cfg := change(p, "shearbolt.yaml")

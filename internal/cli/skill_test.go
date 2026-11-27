@@ -426,7 +426,8 @@ const (
 var skillRule = []string{
 	"- it already has an `answer`;",
 	"- its `project` is set and that project is not among the chosen `projects` values;",
-	"- any question ID in its `unlessChosen` list has a chosen value equal to its `project`.",
+	"- any question ID in its `unlessChosen` list has a chosen value equal to its `project`;",
+	"- its `onlyIf` is set (`id=value`) and that question was skipped or has another chosen value.",
 }
 
 func documented(line string) []string {
@@ -447,6 +448,9 @@ func applicable(q plan.Question, chosen map[string]string) bool {
 		if v, ok := chosen[id]; ok && v == q.Project {
 			return false
 		}
+	}
+	if id, want, ok := strings.Cut(q.OnlyIf, "="); ok && chosen[id] != want {
+		return false
 	}
 	return true
 }
@@ -566,7 +570,7 @@ func TestSkillSetupFlowFollowsTheSkill(t *testing.T) {
 		}
 		return q.Default
 	})
-	if !slices.Equal(asked, []string{"projects", "gate-job:apps/api", "zosia"}) {
+	if !slices.Equal(asked, []string{"projects", "gate-job:apps/api", "zosia", "daily"}) {
 		t.Errorf("asked %v", asked)
 	}
 	answers := answerArgs(p, chosen)
@@ -640,7 +644,7 @@ jobs:
 			bp = q.ID
 		}
 	}
-	if bp == "" || !slices.Equal(ids, []string{"projects", bp, "gate-job:apps/a", "gate-job:apps/b", "zosia"}) {
+	if bp == "" || !slices.Equal(ids, []string{"projects", bp, "gate-job:apps/a", "gate-job:apps/b", "zosia", "daily"}) {
 		t.Fatalf("questions = %v", ids)
 	}
 	for _, q := range p.Questions[2:4] {
@@ -658,7 +662,7 @@ jobs:
 		}
 		return q.Default
 	})
-	if !slices.Equal(asked, []string{"projects", bp, "gate-job:apps/a", "zosia"}) {
+	if !slices.Equal(asked, []string{"projects", bp, "gate-job:apps/a", "zosia", "daily"}) {
 		t.Fatalf("asked %v, want gate-job:apps/b skipped", asked)
 	}
 	if chosen["gate-job:apps/a"] != ".github/workflows/ci.yml#test" {

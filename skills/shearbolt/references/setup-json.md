@@ -49,6 +49,7 @@ by path, notes in the order setup produced them. Empty lists are `[]`.
 | `answer` | The value given with `--answer`, if any. |
 | `project` | If set, the question applies only when this project is selected. |
 | `unlessChosen` | Question IDs. The question does not apply if any of them resolves to `project`. |
+| `onlyIf` | `id=value`. If set, the question applies only when that question applies and resolves to that value. |
 
 The questions come in this order:
 
@@ -86,14 +87,33 @@ The questions come in this order:
    `shearbolt zosia enable` and `shearbolt zosia disable` change only this input, and
    `ZOSIA_SECRET` in the env of a `run:` step that runs the gate, in a repository that is
    already gated (they write directly and have no JSON mode).
+5. `daily` (`choice`, options `yes` and `no`, default `yes`), on GitHub Actions and
+   Bitbucket Pipelines, while the repository has no daily run yet: whether to add one. A
+   daily run builds and scans once a day and pushes or deploys nothing, so a dependency
+   that becomes vulnerable is found even when nobody pushes. Recommend `yes`. With `yes`,
+   setup writes `.github/workflows/shearbolt-daily-<workflow file>` for each GitHub
+   workflow that holds a Shearbolt scan: every job with a scan, up to its last scan,
+   without steps that only push or deploy, on a schedule (04:23 UTC, default branch) and
+   on `workflow_dispatch`. On Bitbucket it adds the pipeline `custom: shearbolt-daily` to
+   `bitbucket-pipelines.yml`: the pipeline of the chosen branch up to its last scan. Once
+   a daily run exists, the question is gone: setup rewrites the GitHub files from their
+   workflows on every run, so a changed build reaches them, and keeps the Bitbucket
+   pipeline as it is (the user deletes it and runs setup again to renew it). GitLab gets
+   no daily run: a GitLab schedule always runs the whole `.gitlab-ci.yml`.
+6. `daily-branch` (`choice`, with `onlyIf` `daily=yes`), only with Bitbucket Pipelines:
+   which branch the daily run builds. The options are the repository's branches, and the
+   default is its default branch. Setup copies the pipeline Bitbucket runs for that
+   branch (its `branches` entry, by name or pattern, else `default`). GitHub runs a
+   schedule on the default branch only, so it has no such question.
 
 ## Which questions apply
 
-A question applies when both of these hold:
+A question applies when all of these hold:
 
 1. its `project`, if set, is selected: it is in the chosen `projects` value, or there is
    no `projects` question;
-2. none of the questions in its `unlessChosen` list resolves to that `project`.
+2. none of the questions in its `unlessChosen` list resolves to that `project`;
+3. the question its `onlyIf` names, if set, applies and resolves to the value named there.
 
 A question's chosen value is the user's answer, or its default when the user accepts it.
 Asked in plan order, every value a question depends on is known before it comes up. Skip
@@ -383,6 +403,19 @@ again.
   already and does not send. Setup leaves existing gates as they are; the user runs
   `shearbolt zosia enable`, which adds the secret to them (the `zosia-secret` input, or
   `ZOSIA_SECRET` in the env of a `run:` step).
+- `DAILY_RUN` *(GitHub)*: setup wrote or rewrote this daily workflow. It runs once the
+  file is on the default branch; the user can start it by hand under Actions to try it.
+  GitHub turns scheduled workflows off in a public repository after 60 days without
+  activity, and the user turns it on again under Actions. Tell the user both.
+- `DAILY_SCHEDULE` *(Bitbucket)*: setup added the pipeline `custom: shearbolt-daily`.
+  Bitbucket keeps schedules outside the file, so nothing runs daily until the user
+  creates the schedule: Pipelines → Schedules → New schedule, with the branch and the
+  pipeline the message names. Say so plainly; setup cannot do it.
+- `DAILY_SKIPPED`: a job (GitHub) or the whole pipeline (Bitbucket) is not in the daily
+  run, and the message says why: it needs what another job built, it pushes inside the
+  step that builds or scans, or it cannot be copied line by line. Its scan runs only
+  when the pipeline itself does. Pass the reason on; the user can split the push into
+  a step of its own and run setup again.
 
 - `TAG_ADDED`: setup adds a local tag `<repository>:shearbolt-<commit>` to each gated image
   build, and the gate scans that tag. It is never pushed. This makes the gate scan exactly

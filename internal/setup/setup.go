@@ -33,6 +33,10 @@ type Options struct {
 	Answers map[string]string
 	Yes     bool   // accept the defaults of unanswered questions (the plan is then complete)
 	Version string // shearbolt's version, for install pins; "dev" leaves them out
+	// The repository's default branch and its branches, for the daily run's branch question;
+	// without them the question offers main.
+	DefaultBranch string
+	Branches      []string
 }
 
 const noCIMessage = "Shearbolt is a CI gate: it runs in GitHub Actions, Bitbucket Pipelines or GitLab CI after your build and before you push or deploy. No CI configuration was found here (.github/workflows/*.yml or *.yaml, bitbucket-pipelines.yml, .gitlab-ci.yml), so there is nothing to add it to. Run setup from the repository root, or add a pipeline that builds your project, then run setup again. Meanwhile `shearbolt scan --source .` checks your lockfiles locally."
@@ -85,8 +89,14 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	var files []*ciSource
 	var ciNotes []plan.Note
 	var parseErr *plan.Note
+	hasDaily := false
 	for _, ci := range cis {
+		daily, _ := ci.(plan.DailyCI)
 		for _, f := range ci.Files(r) {
+			if daily != nil && daily.IsDaily(f) {
+				hasDaily = true
+				continue
+			}
 			p.CI = append(p.CI, plan.CIFile{System: ci.Name(), File: f})
 			src, err := r.Read(f)
 			if err != nil {
@@ -102,6 +112,7 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 				}
 				continue
 			}
+			hasDaily = hasDaily || daily != nil && daily.HasDaily(f, src)
 			files = append(files, &ciSource{ci: ci, path: f, src: src, jobs: jobs})
 			ciNotes = append(ciNotes, pinSnippets(r, ci, f, o.Version, jn)...)
 		}
@@ -147,6 +158,9 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	m.compose = keptCompose(r, projects)
 	m.hand = handGates(r, projects, files)
 	p.Questions = m.questions()
+	if !hasDaily {
+		p.Questions = append(p.Questions, dailyQuestions(files, o)...)
+	}
 	for i := range p.Questions {
 		p.Questions[i].Answer = o.Answers[p.Questions[i].ID]
 	}
@@ -321,6 +335,11 @@ func compute(o Options, ecos []plan.Ecosystem, cis []plan.CI) *plan.Plan {
 	vc, vn := viaChanges(r, via, failed)
 	changes = append(changes, vc...)
 	notes = append(notes, vn...)
+	if hasDaily || values["daily"] == "yes" {
+		var dn []plan.Note
+		changes, dn = dailyChanges(r, files, changes, values["daily-branch"], classify)
+		notes = append(notes, dn...)
+	}
 	var gated []plan.Build
 	for _, g := range gates {
 		gated = append(gated, g.Builds...)

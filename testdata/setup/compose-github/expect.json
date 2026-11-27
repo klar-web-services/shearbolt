@@ -1,11 +1,13 @@
 {
   "questions": [
     "gate-job:.",
-    "zosia"
+    "zosia",
+    "daily"
   ],
   "notes": [
     "COMPOSE_ADDED",
     "COMPOSE_NO_IMAGES",
+    "DAILY_RUN",
     "NO_BUILD_FOUND",
     "NO_DEPLOY_SEEN"
   ]

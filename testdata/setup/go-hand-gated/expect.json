@@ -1,6 +1,9 @@
 {
-  "questions": [],
+  "questions": [
+    "daily"
+  ],
   "notes": [
-    "ALREADY_GATED"
+    "ALREADY_GATED",
+    "DAILY_SKIPPED"
   ]
 }

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/klar-web-services/shearbolt/internal/buildinfo"
@@ -51,6 +53,8 @@ type deps struct {
 	hostname     func() string
 	// gitRemote is the URL of the repository's remote "origin", or "" when it has none.
 	gitRemote func(dir string) string
+	// gitBranches is the repository's default branch ("" when unknown) and its branches.
+	gitBranches func(dir string) (def string, all []string)
 }
 
 func defaultDeps() deps {
@@ -102,7 +106,33 @@ func defaultDeps() deps {
 			}
 			return string(out)
 		},
+		gitBranches: gitBranches,
 	}
+}
+
+// The default branch is the one origin's HEAD names, else the branch checked out.
+func gitBranches(dir string) (string, []string) {
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.Output()
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(out))
+	}
+	var all []string
+	for _, ref := range strings.Fields(git("for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes/origin")) {
+		b := strings.TrimPrefix(strings.TrimPrefix(ref, "refs/heads/"), "refs/remotes/origin/")
+		if b != "HEAD" && !slices.Contains(all, b) {
+			all = append(all, b)
+		}
+	}
+	def := strings.TrimPrefix(git("symbolic-ref", "--short", "-q", "refs/remotes/origin/HEAD"), "origin/")
+	if def == "" {
+		def = git("branch", "--show-current")
+	}
+	return def, all
 }
 
 func Run(args []string, stdout, stderr io.Writer) int {

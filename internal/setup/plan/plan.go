@@ -76,6 +76,22 @@ type ZosiaEditor interface {
 	SetZosia(file string, src []byte, gates []GateCmd, on bool) (edited []byte, failed map[int]error, err error)
 }
 
+// DailyCI is a CI that can hold a daily run beside its pipelines: the gated jobs up to their scan,
+// on a schedule, without what follows the scan.
+type DailyCI interface {
+	// IsDaily reports whether file is a daily run setup wrote, for a CI that keeps each in a file of
+	// its own. Setup reads no jobs from such a file.
+	IsDaily(file string) bool
+	// HasDaily reports whether src, the content of file, holds a daily run, for a CI that keeps it
+	// in the pipeline file.
+	HasDaily(file string, src []byte) bool
+	// NeedsBranch reports whether the daily run is made for one branch.
+	NeedsBranch() bool
+	// Daily returns the file that holds the daily run of file, and that file's content. src is file
+	// after setup's edits. path is "" when there is nothing to write.
+	Daily(r Repo, file string, src []byte, branch string, classify Classifier) (path string, content []byte, notes []Note)
+}
+
 type Edited struct {
 	Src    []byte // the edited file; src itself when nothing changes
 	Notes  []Note // notes about the edits, UNSUPPORTED_EDIT for each failed job included
@@ -274,6 +290,7 @@ type Question struct {
 	Answer       string   `json:"answer,omitempty"`       // as given with --answer
 	Project      string   `json:"project,omitempty"`      // applies only if this project is selected
 	UnlessChosen []string `json:"unlessChosen,omitempty"` // does not apply if any of these questions resolves to Project
+	OnlyIf       string   `json:"onlyIf,omitempty"`       // "id=value": applies only if that question applies and resolves to that value
 }
 
 type Option struct {

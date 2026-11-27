@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -277,9 +278,10 @@ func TestGitHubEarlyStopReformattedTerm(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(root, wf), []byte(edited), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// The daily workflow follows the reformatted condition; the workflow itself stays.
 		p := compute(t, root)
-		if len(p.Changes) > 0 || len(earlyStops(p)) > 0 {
-			t.Errorf("%s: a re-run changes %d files, notes %+v", term, len(p.Changes), earlyStops(p))
+		if slices.ContainsFunc(p.Changes, func(c plan.FileChange) bool { return c.Path == wf }) || len(earlyStops(p)) > 0 {
+			t.Errorf("%s: a re-run changes the workflow, notes %+v", term, earlyStops(p))
 		}
 	}
 }
