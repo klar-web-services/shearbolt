@@ -146,7 +146,7 @@ GitHub Actions, after the build:
 Bitbucket Pipelines and GitLab CI, between the build and the push:
 
 ```yaml
-- (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.13.0 sh
+- (curl -fsSL https://tools.klar.ws/shearbolt/install.sh || wget -qO- https://tools.klar.ws/shearbolt/install.sh) | SHEARBOLT_VERSION=1.14.0 sh
 - SHEARBOLT_IMAGE="$IMAGE" "$HOME/.local/bin/shearbolt" scan --ci
 ```
 
